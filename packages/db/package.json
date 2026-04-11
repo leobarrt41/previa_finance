@@ -1,0 +1,33 @@
+{
+  "name": "@previa/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Drizzle ORM schema, migrations and database client for Previa Finance",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.41.0",
+    "mysql2": "^3.22.0"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.30.0",
+    "typescript": "^5.7.0"
+  },
+  "peerDependencies": {
+    "@previa/core": "workspace:*"
+  }
+}
