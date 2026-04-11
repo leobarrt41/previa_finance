@@ -1,8 +1,21 @@
 /**
- * schema.ts — Previa Finance database schema (v3)
+ * schema.ts — Previa Finance database schema (v4)
  *
- * This file is the single source of truth for the database structure.
- * It maps 1:1 to the SQL migrations in packages/db/migrations/v3/.
+ * v4 changes from v3:
+ *   1. Currency fields: `currency` → `currency_code` across all tables.
+ *      `original_currency_code` and `exchange_rate` kept only where meaningful
+ *      (card_transactions, investment_transactions).
+ *   2. Date fields: `date` → `occurred_at` in transactions and card_transactions;
+ *      `dateOccurredAt` kept as-is in investment_transactions (already correct).
+ *      All SQL column names are now semantically explicit.
+ *   3. accounts: `display_name` kept as the single name field. `name` (canonical)
+ *      is NOT added — see comment in the table definition for rationale.
+ *   4. FK strategy: `user_id` and `category_id` remain untyped `int` references.
+ *      A `// @external-fk` comment marks every such field so they are easy to
+ *      find when the auth/categories modules are integrated.
+ *   5. bigint consistency: all monetary fields use `bigint` with `mode: "bigint"`.
+ *      A `// @serialize-to-string` comment marks every bigint field that will
+ *      require JSON serialization care in the API layer.
  *
  * Tables defined here:
  *   financial_connections, financial_connection_consents, accounts,
@@ -10,8 +23,8 @@
  *   investments, investment_transactions, provider_webhook_events, sync_runs
  *
  * External dependencies (not redefined here):
- *   users      — managed by the auth module
- *   categories — managed by the categories module
+ *   users      — managed by the auth module      (@external-fk: user_id)
+ *   categories — managed by the categories module (@external-fk: category_id)
  */
 
 import {
@@ -34,7 +47,7 @@ import { sql } from "drizzle-orm";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Standard audit timestamps present on every table. */
+/** Standard audit timestamps present on every mutable table. */
 const timestamps = {
   createdAt: timestamp("created_at")
     .notNull()
@@ -54,7 +67,7 @@ export const financialConnections = mysqlTable(
   "financial_connections",
   {
     id: int("id").autoincrement().primaryKey(),
-    userId: int("user_id").notNull(),
+    userId: int("user_id").notNull(), // @external-fk: users.id
 
     provider: varchar("provider", { length: 50 }).notNull().default("pluggy"),
     providerItemId: varchar("provider_item_id", { length: 255 }),
@@ -132,34 +145,46 @@ export type NewFinancialConnectionConsent =
 // Unified table for all financial instruments: bank accounts, credit cards,
 // and investment accounts — both manual and connected via Open Finance.
 // financial_connection_id = NULL means a manually managed account.
+//
+// v4 note — display_name vs name:
+//   A separate `name` (canonical) field was considered and deliberately NOT
+//   added. For accounts, the display_name IS the canonical name: the user
+//   sets it once (or it is populated from the provider) and it is the single
+//   reference used everywhere in the UI and in reports. Adding a second
+//   `name` field would create a synchronisation problem with no clear owner.
+//   If a canonical slug is needed in the future (e.g. for deduplication),
+//   it should be derived programmatically, not stored.
 // ---------------------------------------------------------------------------
 export const accounts = mysqlTable(
   "accounts",
   {
     id: int("id").autoincrement().primaryKey(),
-    userId: int("user_id").notNull(),
+    userId: int("user_id").notNull(), // @external-fk: users.id
     financialConnectionId: int("financial_connection_id"),
 
     // Type and channel
-    type: varchar("type", { length: 50 }).notNull(),           // AccountType
+    type: varchar("type", { length: 50 }).notNull(),              // AccountType
     subtype: varchar("subtype", { length: 50 }),
     financialChannel: varchar("financial_channel", { length: 50 }).notNull(), // FinancialChannel
 
-    // Display identity
+    // Identity
+    // display_name: the single human-readable name for this account.
+    // Set by the user or populated from the provider. Used in UI and reports.
     displayName: varchar("display_name", { length: 200 }).notNull(),
     institutionName: varchar("institution_name", { length: 200 }),
     ownerName: varchar("owner_name", { length: 200 }),
 
     // Card identity (nullable — only for credit cards)
-    cardBrand: varchar("card_brand", { length: 50 }),          // CardBrand
+    cardBrand: varchar("card_brand", { length: 50 }),             // CardBrand
     cardLast4: varchar("card_last4", { length: 4 }),
     maskedNumber: varchar("masked_number", { length: 30 }),
 
     // Balances and limits (all in minor units / centavos)
-    currency: varchar("currency", { length: 3 }).notNull().default("BRL"),
-    balanceMinor: bigint("balance_minor", { mode: "bigint" }).notNull().default(0n),
-    creditLimitMinor: bigint("credit_limit_minor", { mode: "bigint" }),
-    availableCreditLimitMinor: bigint("available_credit_limit_minor", { mode: "bigint" }),
+    // @serialize-to-string: balanceMinor, creditLimitMinor, availableCreditLimitMinor
+    currencyCode: varchar("currency_code", { length: 3 }).notNull().default("BRL"), // v4: was `currency`
+    balanceMinor: bigint("balance_minor", { mode: "bigint" }).notNull().default(0n), // @serialize-to-string
+    creditLimitMinor: bigint("credit_limit_minor", { mode: "bigint" }),              // @serialize-to-string
+    availableCreditLimitMinor: bigint("available_credit_limit_minor", { mode: "bigint" }), // @serialize-to-string
 
     // Invoice configuration (credit cards only)
     closingDay: int("closing_day"),
@@ -179,7 +204,7 @@ export const accounts = mysqlTable(
     uniqueIndex("uq_accounts_provider_account").on(t.providerAccountId),
     index("idx_accounts_user").on(t.userId),
     index("idx_accounts_provider_item").on(t.providerItemId),
-    // Composite index for parser-based card matching
+    // Composite index for parser-based card matching (institution + brand + last4)
     index("idx_accounts_card_identity").on(
       t.institutionName,
       t.cardBrand,
@@ -202,30 +227,32 @@ export const transactions = mysqlTable(
   "transactions",
   {
     id: int("id").autoincrement().primaryKey(),
-    userId: int("user_id").notNull(),
+    userId: int("user_id").notNull(),   // @external-fk: users.id
     accountId: int("account_id").notNull(),
 
     // -----------------------------------------------------------------------
     // Data hierarchy and classification (core business rules)
     // -----------------------------------------------------------------------
-    source: varchar("source", { length: 50 }).notNull(),           // Source
-    dataState: varchar("data_state", { length: 50 }).notNull(),    // DataState
+    source: varchar("source", { length: 50 }).notNull(),              // Source
+    dataState: varchar("data_state", { length: 50 }).notNull(),       // DataState
     movementType: varchar("movement_type", { length: 50 }).notNull(), // MovementType
-    movementSubtype: varchar("movement_subtype", { length: 50 }),  // MovementSubtype
+    movementSubtype: varchar("movement_subtype", { length: 50 }),     // MovementSubtype
     financialChannel: varchar("financial_channel", { length: 50 }).notNull(), // FinancialChannel
 
     // -----------------------------------------------------------------------
     // Financial values (all in minor units / centavos)
     // Negative = outflow, Positive = inflow
+    // @serialize-to-string: amountMinor, balanceAfterMinor
     // -----------------------------------------------------------------------
-    amountMinor: bigint("amount_minor", { mode: "bigint" }).notNull(),
-    currency: varchar("currency", { length: 3 }).notNull().default("BRL"),
-    balanceAfterMinor: bigint("balance_after_minor", { mode: "bigint" }),
+    amountMinor: bigint("amount_minor", { mode: "bigint" }).notNull(),          // @serialize-to-string
+    currencyCode: varchar("currency_code", { length: 3 }).notNull().default("BRL"), // v4: was `currency`
+    balanceAfterMinor: bigint("balance_after_minor", { mode: "bigint" }),       // @serialize-to-string
 
     // -----------------------------------------------------------------------
     // Dates and competency
+    // v4: `date` → `occurred_at` for semantic clarity
     // -----------------------------------------------------------------------
-    date: timestamp("date").notNull(),
+    occurredAt: timestamp("occurred_at").notNull(),                   // v4: was `date`
     competencyMonth: varchar("competency_month", { length: 7 }).notNull(), // YYYY-MM
 
     // -----------------------------------------------------------------------
@@ -233,7 +260,7 @@ export const transactions = mysqlTable(
     // -----------------------------------------------------------------------
     description: text("description").notNull(),
     normalizedDescription: varchar("normalized_description", { length: 500 }),
-    categoryId: int("category_id"),
+    categoryId: int("category_id"),  // @external-fk: categories.id
 
     // -----------------------------------------------------------------------
     // Installments
@@ -250,10 +277,10 @@ export const transactions = mysqlTable(
 
     // -----------------------------------------------------------------------
     // Reconciliation between sources
-    // fingerprint: deterministic hash of (date + amountMinor + normalizedDescription)
-    // Generated by @previa/core generateFingerprint()
+    // fingerprint: SHA-256 of (competencyMonth | amountMinor | normalizedDescription)
+    // Generated by @previa/core buildFingerprintFromRaw()
     // -----------------------------------------------------------------------
-    fingerprint: varchar("fingerprint", { length: 255 }),
+    fingerprint: varchar("fingerprint", { length: 64 }),  // v4: 255 → 64 (SHA-256 hex = 64 chars)
     isReconciled: boolean("is_reconciled").notNull().default(false),
     reconciledGroupId: varchar("reconciled_group_id", { length: 255 }),
 
@@ -267,7 +294,7 @@ export const transactions = mysqlTable(
   },
   (t) => [
     uniqueIndex("uq_trans_provider_id").on(t.providerTransactionId),
-    index("idx_trans_user_date").on(t.userId, t.date),
+    index("idx_trans_user_occurred").on(t.userId, t.occurredAt),      // v4: was idx_trans_user_date
     index("idx_trans_competency").on(t.competencyMonth),
     index("idx_trans_fingerprint").on(t.fingerprint),
     index("idx_trans_reconciled_group").on(t.reconciledGroupId),
@@ -288,7 +315,7 @@ export const cardInvoices = mysqlTable(
   "card_invoices",
   {
     id: int("id").autoincrement().primaryKey(),
-    userId: int("user_id").notNull(),
+    userId: int("user_id").notNull(),   // @external-fk: users.id
     accountId: int("account_id").notNull(), // FK to credit card in accounts
 
     // Period
@@ -297,11 +324,12 @@ export const cardInvoices = mysqlTable(
     dueDate: timestamp("due_date").notNull(),
 
     // Values (minor units / centavos)
-    totalAmountMinor: bigint("total_amount_minor", { mode: "bigint" }).notNull().default(0n),
-    minimumPaymentMinor: bigint("minimum_payment_minor", { mode: "bigint" }),
-    previousBalanceMinor: bigint("previous_balance_minor", { mode: "bigint" }).notNull().default(0n),
-    paidAmountMinor: bigint("paid_amount_minor", { mode: "bigint" }).notNull().default(0n),
-    openAmountMinor: bigint("open_amount_minor", { mode: "bigint" }).notNull().default(0n),
+    // @serialize-to-string: all bigint fields below
+    totalAmountMinor: bigint("total_amount_minor", { mode: "bigint" }).notNull().default(0n),       // @serialize-to-string
+    minimumPaymentMinor: bigint("minimum_payment_minor", { mode: "bigint" }),                       // @serialize-to-string
+    previousBalanceMinor: bigint("previous_balance_minor", { mode: "bigint" }).notNull().default(0n), // @serialize-to-string
+    paidAmountMinor: bigint("paid_amount_minor", { mode: "bigint" }).notNull().default(0n),         // @serialize-to-string
+    openAmountMinor: bigint("open_amount_minor", { mode: "bigint" }).notNull().default(0n),         // @serialize-to-string
 
     // State and origin
     status: varchar("status", { length: 50 }).notNull().default("OPEN"), // InvoiceStatus
@@ -347,7 +375,7 @@ export const cardTransactions = mysqlTable(
   "card_transactions",
   {
     id: int("id").autoincrement().primaryKey(),
-    userId: int("user_id").notNull(),
+    userId: int("user_id").notNull(),   // @external-fk: users.id
     cardInvoiceId: int("card_invoice_id").notNull(),
 
     // Hierarchy and classification
@@ -356,22 +384,30 @@ export const cardTransactions = mysqlTable(
     movementType: varchar("movement_type", { length: 50 }).notNull().default("card_purchase"),
     movementSubtype: varchar("movement_subtype", { length: 50 }),
 
-    // Values (minor units / centavos)
-    amountMinor: bigint("amount_minor", { mode: "bigint" }).notNull(),
-    currency: varchar("currency", { length: 3 }).notNull().default("BRL"),
-    // International purchases
-    originalAmountMinor: bigint("original_amount_minor", { mode: "bigint" }),
+    // -----------------------------------------------------------------------
+    // Financial values
+    // amount_minor + currency_code: the value used in cash flow analysis (BRL)
+    // original_amount_minor + original_currency_code: source value for international purchases
+    // exchange_rate: only present when a conversion was applied
+    // @serialize-to-string: amountMinor, originalAmountMinor
+    // -----------------------------------------------------------------------
+    amountMinor: bigint("amount_minor", { mode: "bigint" }).notNull(),              // @serialize-to-string
+    currencyCode: varchar("currency_code", { length: 3 }).notNull().default("BRL"), // v4: was `currency`
+    originalAmountMinor: bigint("original_amount_minor", { mode: "bigint" }),       // @serialize-to-string
     originalCurrencyCode: varchar("original_currency_code", { length: 3 }),
     exchangeRate: decimal("exchange_rate", { precision: 12, scale: 6 }),
 
+    // -----------------------------------------------------------------------
     // Dates and competency
-    date: timestamp("date").notNull(),
+    // v4: `date` → `occurred_at` for semantic clarity
+    // -----------------------------------------------------------------------
+    occurredAt: timestamp("occurred_at").notNull(),                    // v4: was `date`
     competencyMonth: varchar("competency_month", { length: 7 }).notNull(),
 
     // Description and category
     description: text("description").notNull(),
     normalizedDescription: varchar("normalized_description", { length: 500 }),
-    categoryId: int("category_id"),
+    categoryId: int("category_id"),  // @external-fk: categories.id
 
     // Merchant
     merchantName: varchar("merchant_name", { length: 255 }),
@@ -383,7 +419,7 @@ export const cardTransactions = mysqlTable(
     installmentGroupId: varchar("installment_group_id", { length: 255 }),
 
     // Reconciliation
-    fingerprint: varchar("fingerprint", { length: 255 }),
+    fingerprint: varchar("fingerprint", { length: 64 }), // v4: 255 → 64 (SHA-256 hex = 64 chars)
     isReconciled: boolean("is_reconciled").notNull().default(false),
     reconciledGroupId: varchar("reconciled_group_id", { length: 255 }),
 
@@ -396,7 +432,7 @@ export const cardTransactions = mysqlTable(
   },
   (t) => [
     uniqueIndex("uq_card_trans_provider_id").on(t.providerTransactionId),
-    index("idx_card_trans_user_date").on(t.userId, t.date),
+    index("idx_card_trans_user_occurred").on(t.userId, t.occurredAt), // v4: was idx_card_trans_user_date
     index("idx_card_trans_competency").on(t.competencyMonth),
     index("idx_card_trans_fingerprint").on(t.fingerprint),
     index("idx_card_trans_reconciled_group").on(t.reconciledGroupId),
@@ -411,17 +447,16 @@ export type NewCardTransaction = typeof cardTransactions.$inferInsert;
 // Links the cash outflow (transaction in bank account) to the liability
 // settlement (card_invoice). Supports partial payments and split payments
 // across multiple invoices.
-// Replaces the legacy card_invoice_allocations table.
 // ---------------------------------------------------------------------------
 export const cardInvoicePayments = mysqlTable(
   "card_invoice_payments",
   {
     id: int("id").autoincrement().primaryKey(),
-    userId: int("user_id").notNull(),
+    userId: int("user_id").notNull(),   // @external-fk: users.id
     cardInvoiceId: int("card_invoice_id").notNull(),
     transactionId: int("transaction_id").notNull(),
 
-    allocatedAmountMinor: bigint("allocated_amount_minor", { mode: "bigint" }).notNull(),
+    allocatedAmountMinor: bigint("allocated_amount_minor", { mode: "bigint" }).notNull(), // @serialize-to-string
     currencyCode: varchar("currency_code", { length: 3 }).notNull().default("BRL"),
     paymentDate: timestamp("payment_date").notNull(),
 
@@ -445,7 +480,7 @@ export const investments = mysqlTable(
   "investments",
   {
     id: int("id").autoincrement().primaryKey(),
-    userId: int("user_id").notNull(),
+    userId: int("user_id").notNull(),   // @external-fk: users.id
     accountId: int("account_id").notNull(),
     financialConnectionId: int("financial_connection_id"),
 
@@ -456,7 +491,7 @@ export const investments = mysqlTable(
 
     // Identity
     name: varchar("name", { length: 200 }).notNull(),
-    type: varchar("type", { length: 50 }).notNull(),           // InvestmentType
+    type: varchar("type", { length: 50 }).notNull(),              // InvestmentType
     investmentSubtype: varchar("investment_subtype", { length: 50 }),
     status: varchar("status", { length: 50 }).notNull().default("ACTIVE"), // InvestmentStatus
 
@@ -469,8 +504,8 @@ export const investments = mysqlTable(
     maturityDate: date("maturity_date"),
 
     // Current value
-    balanceMinor: bigint("balance_minor", { mode: "bigint" }).notNull().default(0n),
-    currency: varchar("currency", { length: 3 }).notNull().default("BRL"),
+    balanceMinor: bigint("balance_minor", { mode: "bigint" }).notNull().default(0n), // @serialize-to-string
+    currencyCode: varchar("currency_code", { length: 3 }).notNull().default("BRL"),  // v4: was `currency`
 
     // Open Finance
     providerInvestmentId: varchar("provider_investment_id", { length: 255 }),
@@ -500,7 +535,7 @@ export const investmentTransactions = mysqlTable(
   "investment_transactions",
   {
     id: int("id").autoincrement().primaryKey(),
-    userId: int("user_id").notNull(),
+    userId: int("user_id").notNull(),   // @external-fk: users.id
     investmentId: int("investment_id").notNull(),
     financialConnectionId: int("financial_connection_id"),
 
@@ -511,9 +546,15 @@ export const investmentTransactions = mysqlTable(
 
     // Type and values
     type: varchar("type", { length: 50 }).notNull(), // InvestmentTransactionType
-    amountMinor: bigint("amount_minor", { mode: "bigint" }).notNull(),
-    currency: varchar("currency", { length: 3 }).notNull().default("BRL"),
-    dateOccurredAt: timestamp("date_occurred_at").notNull(),
+    amountMinor: bigint("amount_minor", { mode: "bigint" }).notNull(), // @serialize-to-string
+    currencyCode: varchar("currency_code", { length: 3 }).notNull().default("BRL"), // v4: was `currency`
+
+    // For foreign-currency investment transactions (e.g. BDRs, ETFs in USD)
+    originalAmountMinor: bigint("original_amount_minor", { mode: "bigint" }),       // @serialize-to-string
+    originalCurrencyCode: varchar("original_currency_code", { length: 3 }),
+    exchangeRate: decimal("exchange_rate", { precision: 12, scale: 6 }),
+
+    dateOccurredAt: timestamp("date_occurred_at").notNull(), // already correct in v3
 
     // Open Finance
     providerTransactionId: varchar("provider_transaction_id", { length: 255 }),
