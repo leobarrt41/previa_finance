@@ -88,14 +88,68 @@ elif echo "$lowerDesc" | grep -Eiq "\b(todo|task|implement|add|create|setup|buil
   CATEGORY="Tarefa"
 fi
 
-# Title inference: first line or first sentence, truncated
-if [ -z "$TITLE" ]; then
-  firstLine="$(echo "$DESCRIPTION" | head -n1)"
-  titleCandidate="$(echo "$firstLine" | awk -F'.' '{print $1}')"
-  TITLE="$(echo "$titleCandidate" | sed -E 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-  if [ -z "$TITLE" ]; then
-    TITLE="$(echo "$DESCRIPTION" | tr '\n' ' ' | awk '{for(i=1;i<=6 && i<=NF;i++) printf $i" "; print ""}')"
+# Title inference: prefer a meaningful short title. Never use the timestamp as title.
+# Rule: if user provided -T, keep it. Otherwise attempt, in order:
+# 1) first non-empty line (first sentence) that is not date-like
+# 2) first 6 words from description
+# 3) fallback to a generic 'Nota' (shouldn't happen)
+
+is_date_like() {
+  local s="$1"
+  # common date/time patterns: YYYY-MM-DD, DD/MM/YYYY, HH:MM, full timestamp
+  if echo "$s" | grep -Eiq "^[[:space:]]*[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}"; then
+    return 0
   fi
+  if echo "$s" | grep -Eiq "^[[:space:]]*[0-9]{1,2}[:][0-9]{2}"; then
+    return 0
+  fi
+  if echo "$s" | grep -Eiq "^[[:space:]]*[0-9]{8,}$"; then
+    return 0
+  fi
+  # if the string contains mostly digits, separators and spaces, treat as date-like
+  if echo "$s" | sed 's/[0-9][: \-\/\.]*//g' | grep -q '^$'; then
+    return 0
+  fi
+  return 1
+}
+
+if [ -z "$TITLE" ]; then
+  # candidate: first line, then first sentence
+  firstLine="$(echo "$DESCRIPTION" | sed -n '1p' | sed -e 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  # choose the first sentence from the first line
+  titleCandidate="$(echo "$firstLine" | awk -F'[\.\n]' '{print $1}')"
+  titleCandidate="$(echo "$titleCandidate" | sed -E 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+  if [ -n "$titleCandidate" ] && ! is_date_like "$titleCandidate"; then
+    TITLE="$titleCandidate"
+  else
+    # try to find the first non-date-like line in the description
+    TITLE=""
+    while IFS= read -r line; do
+      lineTrim="$(echo "$line" | sed -e 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+      if [ -n "$lineTrim" ] && ! is_date_like "$lineTrim"; then
+        # take first sentence from this line
+        t="$(echo "$lineTrim" | awk -F'[\.\n]' '{print $1}')"
+        TITLE="$(echo "$t" | sed -E 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        break
+      fi
+    done <<EOF
+$DESCRIPTION
+EOF
+
+    # if still empty, take first 6 words as fallback (not a timestamp)
+    if [ -z "$TITLE" ]; then
+      TITLE="$(echo "$DESCRIPTION" | tr '\n' ' ' | awk '{for(i=1;i<=6 && i<=NF;i++) printf $i" "; print ""}')"
+      TITLE="$(echo "$TITLE" | sed -E 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    fi
+  fi
+
+  # final safety: if title is empty or date-like, use a safe generic label
+  if [ -z "$TITLE" ] || is_date_like "$TITLE"; then
+    TITLE="Nota"  # minimal fallback (in Portuguese to match file)
+  fi
+
+  # truncate to a reasonable length
   TITLE="$(echo "$TITLE" | cut -c1-80)"
 fi
 

@@ -167,3 +167,42 @@ PRIORIDADE: Média
 STATUS: Pendente
 
 ---
+
+## [2026-04-12 18:19]
+
+ID: 20260412181900-25137
+SOURCE: previa_finance/copilot
+CATEGORIA: Insight
+TÍTULO: Nota
+DESCRIÇÃO: 2026-04-12
+TAGS: 
+PRIORIDADE: Média
+STATUS: Pendente
+
+---
+
+## [2026-04-12 18:19]
+
+ID: 20260412181917-24359
+SOURCE: previa_finance/copilot
+CATEGORIA: Arquitetura
+TÍTULO: Refactor categories schema to coalesce external_owner_id and document uniqueness
+DESCRIÇÃO: Refactor categories schema to coalesce external_owner_id and document uniqueness
+TAGS: categories
+PRIORIDADE: Média
+STATUS: Pendente
+
+---
+
+## [2026-04-12 19:59]
+
+ID: 20260412195936-26374
+SOURCE: previa_finance/copilot
+CATEGORIA: Insight
+TÍTULO: Implemented CashFlowEngine initial version with 6 tests passing
+DESCRIÇÃO: Implemented CashFlowEngine initial version with 6 tests passing
+TAGS: 
+PRIORIDADE: Média
+STATUS: Concluído
+
+---

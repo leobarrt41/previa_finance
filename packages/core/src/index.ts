@@ -18,3 +18,14 @@ export type {
   FingerprintInput,
   RawFingerprintInput,
 } from "./fingerprint";
+
+// Cashflow engine exports
+export {
+  CashFlowEngine,
+} from "./cashflow";
+
+export type {
+  CashFlowInput,
+  CashFlowOutput,
+  MonthlyCashFlow,
+} from "./cashflow";
