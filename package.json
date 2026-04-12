@@ -7,5 +7,7 @@
     "apps/*",
     "packages/*"
   ],
-  "scripts": {}
+  "scripts": {
+    "append:note": "./appendSynapseNote.sh"
+  }
 }

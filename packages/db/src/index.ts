@@ -13,6 +13,7 @@ export {
   financialConnections,
   financialConnectionConsents,
   accounts,
+  categories,
   transactions,
   cardInvoices,
   cardTransactions,
@@ -32,6 +33,8 @@ export type {
   NewAccount,
   Transaction,
   NewTransaction,
+  Category,
+  NewCategory,
   CardInvoice,
   NewCardInvoice,
   CardTransaction,
@@ -100,3 +103,4 @@ export type {
   SyncStatus,
   ProcessingStatus,
 } from "./enums";
+

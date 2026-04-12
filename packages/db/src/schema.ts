@@ -647,3 +647,7 @@ export const syncRuns = mysqlTable(
 
 export type SyncRun = typeof syncRuns.$inferSelect;
 export type NewSyncRun = typeof syncRuns.$inferInsert;
+
+// Re-export categories table defined in ./schema/categories.ts
+export { categories } from "./schema/categories";
+export type { Category, NewCategory } from "./schema/categories";
