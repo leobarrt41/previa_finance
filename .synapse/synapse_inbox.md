@@ -242,4 +242,16 @@ PRIORIDADE: Alta
 STATUS: Concluído
 
 
+## [2026-04-17 22:13]
+
+ID: 20260417-2213-004
+SOURCE: previa_finance/copilot
+CATEGORIA: Operação
+TÍTULO: Registrar branch padrão para notas Synapse
+DESCRIÇÃO: Decidido e aplicado: a branch local atual `feat/db-redesign` será utilizada como destino para commits de notas no arquivo `.synapse/synapse_inbox.md`. As próximas notas serão commitadas e pushadas para esta branch por padrão, a menos que indicado o contrário. Esta nota serve como registro da decisão operacional e do branch associado.  
+TAGS: synapse,branches,process
+PRIORIDADE: Média
+STATUS: Concluído
+
+
 ---
