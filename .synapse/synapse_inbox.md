@@ -254,4 +254,16 @@ PRIORIDADE: Média
 STATUS: Concluído
 
 
+## [2026-04-17 22:15]
+
+ID: 20260417-2215-005
+SOURCE: previa_finance/copilot
+CATEGORIA: Operação
+TÍTULO: Correção — branch usada para notas é a branch atual no momento da atualização
+DESCRIÇÃO: Correção da nota anterior (ID 20260417-2213-004). A política operacional correta é: para cada nota adicionada ao arquivo `.synapse/synapse_inbox.md`, a nota será committada e pushada para a branch em que o usuário/operador estiver no momento da atualização. Ou seja, não há uma "branch fixa" por padrão — usamos a branch atual no momento do commit. Esta nota registra a correção e esclarece o comportamento que será aplicado a partir de agora.  
+TAGS: synapse,process,correction
+PRIORIDADE: Alta
+STATUS: Concluído
+
+
 ---
