@@ -229,4 +229,17 @@ TAGS: reorg,packages,monorepo
 PRIORIDADE: Alta  
 STATUS: Pendente
 
+
+## [2026-04-17 10:32]
+
+ID: 20260417-1032-003
+SOURCE: previa_finance/copilot
+CATEGORIA: Arquitetura
+TÍTULO: Atualizar workspaces para suportar `packages/domains/*` e `packages/libs/*`
+DESCRIÇÃO: Atualizado o `package.json` raiz para incluir explicitamente os workspaces `packages/domains/*` e `packages/libs/*`. Essa mudança permite mover pacotes para `packages/domains/*` sem que saiam do conjunto de workspaces do monorepo. A modificação foi commitada e pushada no branch `feat/db-redesign`. Não houve alterações de código além do `package.json` raiz e desta nota de registro.  
+TAGS: workspaces,monorepo,architecture
+PRIORIDADE: Alta
+STATUS: Concluído
+
+
 ---

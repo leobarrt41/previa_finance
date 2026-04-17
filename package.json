@@ -5,7 +5,9 @@
   "description": "Previa Finance monorepo",
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "packages/domains/*",
+    "packages/libs/*"
   ],
   "scripts": {
     "append:note": "./appendSynapseNote.sh"
