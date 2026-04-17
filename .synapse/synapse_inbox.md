@@ -205,4 +205,28 @@ TAGS:
 PRIORIDADE: Média
 STATUS: Concluído
 
+
+## [2026-04-17 10:00]
+
+ID: 20260417-1000-001  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Tarefa  
+TÍTULO: Implementar CashFlowEngine em `packages/core`  
+DESCRIÇÃO: Revisar e finalizar a implementação do `CashFlowEngine` em `packages/core/src/cashflow/CashFlowEngine.ts`. Garantir consistência com as interfaces em `packages/core/src/cashflow/types.ts`, ajustar/acomodar os testes existentes em `packages/core/src/cashflow/__tests__/*` e adicionar casos faltantes (entradas/saídas, períodos, agrupamentos, valores zero/negativos). Validar que `pnpm --filter @previa/core test` e `pnpm -w test` rodem com sucesso e que `tsc` passe sem erros.  
+TAGS: cashflow,core,tests  
+PRIORIDADE: Alta  
+STATUS: Pendente
+
+
+## [2026-04-17 10:01]
+
+ID: 20260417-1001-002  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Tarefa  
+TÍTULO: Reorganizar estrutura de `packages` (mover domain-specific)  
+DESCRIÇÃO: Planejar e executar a reorganização de packages domain-specific para `packages/domains/*` (ex.: mover `packages/db` para `packages/domains/db`) e organizar libs em `packages/libs/*` conforme aplicável. Incluir inventário de pacotes, mapa de dependências cruzadas, atualização de `workspaces` no `package.json` raiz, ajustes em `tsconfig.json` `paths`/aliases, e checklist de PR com validações (build, typecheck, tests). Priorizar migração incremental e PRs pequenos para reduzir risco.  
+TAGS: reorg,packages,monorepo  
+PRIORIDADE: Alta  
+STATUS: Pendente
+
 ---
