@@ -266,4 +266,64 @@ PRIORIDADE: Alta
 STATUS: Concluído
 
 
+## [2026-04-19 15:49]
+
+ID: 20260419-1549-006
+SOURCE: previa_finance/copilot
+CATEGORIA: Tarefa
+TÍTULO: Inventário — funções pendentes para implementar antes do front
+DESCRIÇÃO: Com base no `docs/ETP.md` (Visão, Regras de Negócio, Motor de CashFlow e Parsers) e no código presente, segue inventário das funções / módulos que ainda faltam implementar ou completar antes de começar o front-end funcional. Para cada item incluí o papel (por que é necessário) e o local sugerido para a implementação.
+
+Pendências críticas (prioridade Alta / necessárias para MVP front):
+
+1) CashFlowEngine — completar e estabilizar API pública
+	- Por que: motor central para projeções de fluxo (ETP §7.1, §6.2). Front dependerá de uma API estável.  
+	- Local sugerido: `packages/core/src/cashflow/CashFlowEngine.ts`  
+	- Funções pendentes/validações: `project()` adequar casos de borda, suportar coerção consistente de `Minor` (number|bigint), cobertura de casos: parcelas de cartão, devoluções, estornos, ajustes de fatura, regras de data (competency vs due).  
+
+2) Reconciliation / Fingerprint utilities — revisão e testes extras
+	- Por que: reconciliação entre fontes (ETP §7.3) exige fingerprint determinístico e regras de normalização.  
+	- Local sugerido: `packages/core/src/fingerprint.ts`  
+	- Funções pendentes: robustecer `normalizeDescription` para edgecases (acentos raros, abreviações), adicionar utilitário para comparar fingerprints com tolerância (fuzzy match) e testes de colisão.  
+
+3) Card invoice processing helpers
+	- Por que: ETP trata cartão como dívida futura com faturas e parcelas; necessário transformar card_transactions → card_invoices e calcular `paidMinor`/`outstanding` (ETP §6.2).  
+	- Local sugerido: `packages/core/src/cashflow/card.ts` ou `packages/core/src/cashflow/CashFlowEngine` extras.  
+	- Funções: `groupCardTransactionsToInvoices(transactions): CardInvoice[]`, `calculateOutstanding(invoice): Minor`, `applyPaymentsToInvoice(invoice, payments)`.  
+
+4) Obligations / Commitments utilities
+	- Por que: obrigations recorrentes (subscriptions, rent) impactam projeções (ETP §6.4).  
+	- Local sugerido: `packages/core/src/cashflow/obligations.ts`  
+	- Funções: `expandObligationsToMonths(obligations, months): Map<month, amount>`, validação de `start`/`end` e proration.  
+
+5) Parsers básica para faturas e extratos (PDF/OFX/CSV)
+	- Por que: ETP lista parsers para bancos e faturas; front e sync dependem de dados estruturados (ETP §7.2).  
+	- Local sugerido: `packages/parsers/*` (criar pacotes)  
+	- Funções: `parsePdfInvoice(buffer): Invoice[]`, `parseOfx(file): Transaction[]`, `parseCsvStatement(file, format): Transaction[]`. Incluir adaptadores por provedor (nubank, itau, etc.).  
+
+6) API client / service layer (backend ↔ frontend contract)
+	- Por que: front precisa endpoints e contrato estável (auth, cashflow projections, transactions).  
+	- Local sugerido: `apps/api` (server) e `apps/web/src/services/api.ts` (client)  
+	- Funções: `getCashFlowProjection(params)`, `getTransactions(params)`, `postTransaction(payload)`, `auth/login(credentials)`. Documentar formatos de payloads.  
+
+7) Seeds / fixtures e scripts de validação (idempotência)
+	- Por que: ETP recomenda seeds (categorias, system defaults) e validação para evitar duplicatas (ETP nota sobre unicidade).  
+	- Local sugerido: `packages/db/scripts/*`  
+	- Funções: `seedCategories()`, `validateSystemSeeds()` (idempotente).  
+
+8) Tests & Contracts: tipos e exemplos consumíveis pelo front
+	- Por que: front precisa tipos TS e exemplos (contracts) do `CashFlowOutput` e endpoints.  
+	- Local sugerido: `packages/core/src/types.ts` (expandir) e `docs/` (exemplos).  
+	- Funções/artifacts: JSON schema / types + example fixtures `examples/cashflow-sample.json`.  
+
+Observações / next steps propostos:
+- Priorizar (1)-(4) para garantir que o motor de projeção e os dados processados estejam corretos antes do trabalho de UI.  
+- Criar tasks separadas e PRs pequenas por item (ex.: `feat/cashflow-complete`, `feat/parsers-nubank`).  
+- Atualizar `.synapse/synapse_inbox.md` para cada ação concreta (append-only) e linkar PRs quando abertos.  
+
+TAGS: cashflow,parsers,api,tests,ETP
+PRIORIDADE: Alta
+STATUS: Pendente
+
+
 ---
