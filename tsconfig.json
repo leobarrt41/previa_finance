@@ -4,10 +4,11 @@
     "module": "CommonJS",
     "strict": true,
     "esModuleInterop": true,
-    "moduleResolution": "node",
+  "moduleResolution": "bundler",
+  "jsx": "react-jsx",
     "skipLibCheck": true,
     "ignoreDeprecations": "6.0",
-    "types": ["node", "jest"]
+  "types": ["node", "jest", "vite/client"]
   },
   "include": ["packages/**/*", "apps/**/*", "docs/**/*"],
   "exclude": ["node_modules", "dist"]
