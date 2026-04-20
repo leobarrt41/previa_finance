@@ -6,6 +6,7 @@
     "esModuleInterop": true,
     "moduleResolution": "node",
     "skipLibCheck": true,
+    "ignoreDeprecations": "6.0",
     "types": ["node", "jest"]
   },
   "include": ["packages/**/*", "apps/**/*", "docs/**/*"],
