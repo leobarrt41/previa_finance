@@ -19,8 +19,15 @@ declare module '*.jpeg' {
   export default src
 }
 
-declare module '*.css'
-declare module '*.module.css'
+declare module '*.css' {
+  const content: { [className: string]: string } | string
+  export default content
+}
+
+declare module '*.module.css' {
+  const content: { [className: string]: string }
+  export default content
+}
 
 declare module '*.json' {
   const value: any

@@ -10,6 +10,7 @@
     "ignoreDeprecations": "6.0",
   "types": ["node", "jest"]
   },
-  "include": ["packages/**/*", "apps/**/*", "docs/**/*"],
+  "include": ["packages/**/*", "apps/**/*", "docs/**/*", "types/**/*"],
+  "allowImportingTsExtensions": true,
   "exclude": ["node_modules", "dist"]
 }
