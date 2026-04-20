@@ -8,9 +8,9 @@
   "jsx": "react-jsx",
     "skipLibCheck": true,
     "ignoreDeprecations": "6.0",
-  "types": ["node", "jest"]
+    "allowImportingTsExtensions": true,
+    "types": ["node", "jest"]
   },
   "include": ["packages/**/*", "apps/**/*", "docs/**/*", "types/**/*"],
-  "allowImportingTsExtensions": true,
   "exclude": ["node_modules", "dist"]
 }
