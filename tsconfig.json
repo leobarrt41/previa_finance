@@ -4,11 +4,9 @@
     "module": "CommonJS",
     "strict": true,
     "esModuleInterop": true,
-  "moduleResolution": "bundler",
-  "jsx": "react-jsx",
+    "moduleResolution": "node",
     "skipLibCheck": true,
     "ignoreDeprecations": "6.0",
-    "allowImportingTsExtensions": true,
     "types": ["node", "jest"]
   },
   "include": ["packages/**/*", "apps/**/*", "docs/**/*", "types/**/*"],
