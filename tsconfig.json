@@ -9,6 +9,6 @@
     "ignoreDeprecations": "6.0",
     "types": ["node", "jest"]
   },
-  "include": ["packages/**/*", "apps/**/*", "docs/**/*", "types/**/*"],
+  "include": ["packages/**/*", "docs/**/*", "types/**/*"],
   "exclude": ["node_modules", "dist"]
 }
