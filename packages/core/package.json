@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "vitest"
+    "test": "jest --config ../../jest.config.cjs --runInBand"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+// Use Jest globals (describe/it/expect) so tests run under Jest
 import { CashFlowEngine } from '../index'
 import type { CashFlowInput } from '../types'
 
