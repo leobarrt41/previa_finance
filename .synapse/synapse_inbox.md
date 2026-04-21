@@ -327,3 +327,32 @@ STATUS: Pendente
 
 
 ---
+## [2026-04-21 14:20]
+
+ID: 20260421-1420-001
+SOURCE: previa_finance/copilot
+CATEGORIA: Operação
+TÍTULO: Configurar Jest/ts-jest e tornar testes do `@previa/core` executáveis
+DESCRIÇÃO: Instalei e configurei Jest com `ts-jest` no monorepo para permitir execução dos testes TypeScript sem depender do runner `vitest` local do pacote. Ações realizadas:
+
+- Adicionado `jest`, `ts-jest` e `jest-environment-node` às `devDependencies` da raiz (`package.json`).
+- Criado `jest.config.cjs` na raiz com preset `ts-jest`, mapeamento de assets para `__mocks__/fileMock.js` e apontando para o `tsconfig.json` raiz.
+- Criado `__mocks__/fileMock.js` para mocks de arquivos estáticos (CSS/imagens) durante os testes.
+- Atualizados scripts: raiz (`package.json`) ganhou `test` (executa testes em todos os pacotes) e `test:core` (atalho para `@previa/core`).
+- `packages/core/package.json`: alterado o script `test` para `jest --config ../../jest.config.cjs --runInBand`.
+- Ajustados testes que utilizavam `vitest` importado (remoção do `import { ... } from 'vitest'`), deixando-os compatíveis com os globais do Jest (`describe/it/expect`).
+- Executei `pnpm --filter @previa/core test` localmente: TODOS os testes do core passaram (4 suites, 10 testes).
+
+FILES ALTERADOS:
+- `package.json` (raiz) — scripts e devDependencies de teste adicionados
+- `packages/core/package.json` — script `test` para usar jest
+- `jest.config.cjs` (novo, raiz)
+- `__mocks__/fileMock.js` (novo, raiz)
+- `packages/core/src/cashflow/__tests__/cashflow.spec.ts` — remove import `vitest` (usa globals)
+- `packages/core/src/cashflow/__tests__/cashflow.placeholder.spec.ts` — remove import `vitest` (usa globals)
+
+IMPACTO: Testes do `@previa/core` podem agora ser executados por Jest no CI e localmente via `pnpm --filter @previa/core test`. Se preferirmos padronizar em `vitest` no monorepo, posso migrar a configuração do runner em vez disso; por ora escolhi Jest para compatibilidade com `ts-jest` e facilidade de integração.
+
+TAGS: testing,jest,ci
+PRIORIDADE: Média
+STATUS: Concluído
