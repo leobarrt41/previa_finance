@@ -236,6 +236,13 @@ export const api = {
 
   categories: {
     list: () => request<Category[]>('/api/categories'),
+    tree: () => request<Category[]>('/api/categories/tree'),
+    create: (body: { name: string; type: 'expense' | 'income'; parentId?: string | null; sortOrder?: number }) =>
+      request<Category>('/api/categories', { method: 'POST', body: JSON.stringify(body) }),
+    update: (id: string, body: { name?: string; type?: 'expense' | 'income'; parentId?: string | null; sortOrder?: number }) =>
+      request<Category>(`/api/categories/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    remove: (id: string) =>
+      request<{ deleted: boolean; id: string }>(`/api/categories/${id}`, { method: 'DELETE' }),
   },
 }
 

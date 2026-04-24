@@ -10,9 +10,11 @@ import React from 'react'
 export function Card({
   children,
   className = '',
+  style,
 }: {
   children: React.ReactNode
   className?: string
+  style?: React.CSSProperties
 }) {
   return (
     <div
@@ -21,6 +23,7 @@ export function Card({
         borderRadius: 12,
         padding: '1.25rem 1.5rem',
         border: '1px solid #2a2f45',
+        ...style,
       }}
       className={className}
     >
@@ -97,9 +100,11 @@ const alertColors: Record<AlertVariant, { bg: string; color: string; border: str
 export function Alert({
   children,
   variant = 'error',
+  style,
 }: {
   children: React.ReactNode
   variant?: AlertVariant
+  style?: React.CSSProperties
 }) {
   const { bg, color, border } = alertColors[variant]
   return (
@@ -111,6 +116,7 @@ export function Alert({
         borderRadius: 8,
         padding: '0.75rem 1rem',
         fontSize: '0.875rem',
+        ...style,
       }}
     >
       {children}
@@ -163,6 +169,7 @@ export function Button({
   variant = 'primary',
   disabled = false,
   fullWidth = false,
+  style,
 }: {
   children: React.ReactNode
   onClick?: () => void
@@ -170,6 +177,7 @@ export function Button({
   variant?: ButtonVariant
   disabled?: boolean
   fullWidth?: boolean
+  style?: React.CSSProperties
 }) {
   return (
     <button
@@ -186,6 +194,7 @@ export function Button({
         opacity: disabled ? 0.5 : 1,
         width: fullWidth ? '100%' : undefined,
         transition: 'opacity 0.15s',
+        ...style,
       }}
     >
       {children}
@@ -276,7 +285,7 @@ export function Select({
 // ---------------------------------------------------------------------------
 // SectionTitle
 // ---------------------------------------------------------------------------
-export function SectionTitle({ children }: { children: React.ReactNode }) {
+export function SectionTitle({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return (
     <h2
       style={{
@@ -285,6 +294,7 @@ export function SectionTitle({ children }: { children: React.ReactNode }) {
         color: '#e5e7eb',
         marginBottom: '1rem',
         letterSpacing: '0.01em',
+        ...style,
       }}
     >
       {children}

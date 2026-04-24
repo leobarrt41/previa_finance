@@ -2,9 +2,11 @@ import React from 'react'
 import { NavLink } from 'react-router-dom'
 
 const NAV_ITEMS = [
-  { to: '/',         label: 'Dashboard',   icon: '🏠' },
-  { to: '/cashflow', label: 'CashFlow',    icon: '📈' },
-  { to: '/budget',   label: 'Orçamento',   icon: '🎯' },
+  { to: '/',                label: 'Dashboard',       icon: '🏠' },
+  { to: '/cashflow',        label: 'CashFlow',        icon: '📈' },
+  { to: '/budget',          label: 'Orçamento',       icon: '🎯' },
+  { to: '/invoices/upload', label: 'Upload Fatura',   icon: '📤' },
+  { to: '/categories',      label: 'Categorias',      icon: '🏷️' },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {

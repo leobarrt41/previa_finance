@@ -3,6 +3,8 @@ import { Layout } from './components/Layout'
 import { Dashboard } from './pages/Dashboard'
 import { CashFlow } from './pages/CashFlow'
 import { Budget } from './pages/Budget'
+import { Categories } from './pages/Categories'
+import { InvoiceUpload } from './pages/InvoiceUpload'
 
 export default function App() {
   return (
@@ -12,6 +14,8 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/cashflow" element={<CashFlow />} />
           <Route path="/budget" element={<Budget />} />
+          <Route path="/categories" element={<Categories />} />
+          <Route path="/invoices/upload" element={<InvoiceUpload />} />
         </Routes>
       </Layout>
     </BrowserRouter>
