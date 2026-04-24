@@ -48,6 +48,38 @@ TÍTULO: [título curto e específico]
 DESCRIÇÃO: [descrição clara: o que aconteceu, o que foi descoberto, o que mudou. Para BUGs inclua causa provável/raiz e solução aplicada se conhecida]  
 TAGS: [tag1,tag2,...]  
 PRIORIDADE: [Alta|Média|Baixa]  
+
+---
+
+## 2026-04-23 15:45
+
+ID: 20260423-1545-frontend-manus  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Decisão  
+TÍTULO: Frontend será gerado pelo Manus  
+DESCRIÇÃO: Decisão arquitetural importante - o frontend da aplicação Previa Finance será gerado automaticamente pelo assistente Manus, não desenvolvido manualmente. Isso acelera drasticamente a Phase 2 do roadmap, permitindo focar recursos no backend e integrações. A API já está 100% funcional e pronta para consumo por qualquer frontend.  
+TAGS: frontend,manus,automacao,phase2,decisao-arquitetural  
+PRIORIDADE: Alta  
+
+## 2026-04-23 15:46
+
+ID: 20260423-1546-auth-clerk  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Arquitetura  
+TÍTULO: Autenticação via Clerk - sem tabela users local  
+DESCRIÇÃO: A arquitetura atual usa Clerk para autenticação externa. Não existe tabela 'users' no banco local - o user_id é referência externa ao Clerk. Todas as tabelas do schema usam int("user_id") com comentário @external-fk: users.id para marcar esta dependência externa. JWT do Clerk é validado no middleware da API.  
+TAGS: auth,clerk,external-fk,user-id,jwt  
+PRIORIDADE: Média  
+
+## 2026-04-23 15:47
+
+ID: 20260423-1547-db-config  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Insight  
+TÍTULO: Configuração DB via variáveis ambiente sem .env  
+DESCRIÇÃO: O banco está configurado via env.ts com fallbacks locais: DB_HOST=localhost, DB_USERNAME=root, DB_PASSWORD='', DB_NAME=previa_finance. Não existe arquivo .env no repositório. Para produção, usar DATABASE_URL no drizzle.config.ts ou definir as variáveis específicas (DB_HOST, DB_PORT, etc). MySQL 8+ é requerido.  
+TAGS: database,mysql,env-vars,config,localhost  
+PRIORIDADE: Média  
 STATUS: [Pendente|Em andamento|Concluído]
 
 ---
@@ -238,6 +270,28 @@ CATEGORIA: Arquitetura
 TÍTULO: Atualizar workspaces para suportar `packages/domains/*` e `packages/libs/*`
 DESCRIÇÃO: Atualizado o `package.json` raiz para incluir explicitamente os workspaces `packages/domains/*` e `packages/libs/*`. Essa mudança permite mover pacotes para `packages/domains/*` sem que saiam do conjunto de workspaces do monorepo. A modificação foi commitada e pushada no branch `feat/db-redesign`. Não houve alterações de código além do `package.json` raiz e desta nota de registro.  
 TAGS: workspaces,monorepo,architecture
+
+## [2026-04-23 20:04]
+
+ID: 20260423-2004-001  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Roadmap  
+TÍTULO: Status atual do app antes do commit  
+DESCRIÇÃO: Revisão estática do repositório mostrou que a Fase 1 está parcialmente pronta: há servidor HTTP básico em `apps/api` com health check, CORS, helmet, conexão com banco e rotas `/api/cashflow`, `/api/budget`, `/api/categories`; porém `/api/transactions` ainda é stub e autenticação simples não está implementada, apesar de existirem dependências de `jsonwebtoken` e `bcryptjs`. Na Fase 2, `BudgetEngine`, `ImpactCalculator` e `CashFlowEngine` já existem em `packages/core` com testes, mas os parsers robustos ainda são skeletons (ex.: Nubank retorna array vazio) e os seeds completos não estão fechados. Na Fase 3, há schema/migrations para Open Finance, webhook e sync no `packages/db`, mas não encontrei integração Pluggy, sincronização automática nem endpoints/worker de webhooks no backend. A UI web ainda está no starter padrão do Vite/React.  
+TAGS: status,roadmap,api,auth,parsers,open-finance,frontend  
+PRIORIDADE: Alta  
+STATUS: Concluído
+
+## [2026-04-23 22:41]
+
+ID: 20260423-2241-001  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Arquitetura  
+TÍTULO: Clerk e categoria textual alinhados na Fase 1  
+DESCRIÇÃO: Corrigido o caminho da Fase 1 para autenticação externa com Clerk sem tabela local de `users`, mantendo apenas um mapeamento interno de owner para compatibilidade com os `user_id` inteiros já existentes no schema. O contrato de `transactions.categoryId` foi alinhado com `categories.id` string, com migration nova para `transactions` e `card_transactions`. A API ganhou rotas de auth/transactions consistentes com Clerk e o core deixou de compilar testes no build de produção após excluir `__tests__` do `tsconfig` de `@previa/core`. Validações executadas com sucesso: `pnpm --filter @previa/db build`, `pnpm --filter @previa/core build`, `pnpm --filter @previa/api build`.  
+TAGS: clerk,auth,transactions,categories,db,core,build  
+PRIORIDADE: Alta  
+STATUS: Concluído
 PRIORIDADE: Alta
 STATUS: Concluído
 
@@ -444,3 +498,16 @@ NEXT STEPS (sugestão de execução incremental)
 TAGS: cashflow,db,feature,forecast
 PRIORIDADE: Alta
 STATUS: Proposto
+
+---
+
+## [2026-04-24 12:13]
+
+ID: 20260424-1213-001
+SOURCE: previa_finance/copilot
+CATEGORIA: Tarefa
+TÍTULO: Atualizar inbox do Synapse e sincronizar branch no GitHub
+DESCRIÇÃO: Registrada a atualização operacional do arquivo `.synapse/synapse_inbox.md` na branch atual (`feat/forecast-support`) e iniciada a sincronização das alterações locais para o repositório remoto no GitHub, preservando o histórico append-only das notas do projeto.
+TAGS: synapse,github,operacao,branch,registro
+PRIORIDADE: Alta
+STATUS: Concluído

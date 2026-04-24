@@ -10,7 +10,9 @@
  *      All SQL column names are now semantically explicit.
  *   3. accounts: `display_name` kept as the single name field. `name` (canonical)
  *      is NOT added — see comment in the table definition for rationale.
- *   4. FK strategy: `user_id` and `category_id` remain untyped `int` references.
+ *   4. FK strategy: `user_id` remains an untyped `int` reference.
+ *      `category_id` is stored as text so it matches `categories.id`
+ *      (which is string-based in the current categories model).
  *      A `// @external-fk` comment marks every such field so they are easy to
  *      find when the auth/categories modules are integrated.
  *   5. bigint consistency: all monetary fields use `bigint` with `mode: "bigint"`.
@@ -260,7 +262,7 @@ export const transactions = mysqlTable(
     // -----------------------------------------------------------------------
     description: text("description").notNull(),
     normalizedDescription: varchar("normalized_description", { length: 500 }),
-    categoryId: int("category_id"),  // @external-fk: categories.id
+    categoryId: varchar("category_id", { length: 128 }),  // @external-fk: categories.id
 
     // -----------------------------------------------------------------------
     // Installments
@@ -407,7 +409,7 @@ export const cardTransactions = mysqlTable(
     // Description and category
     description: text("description").notNull(),
     normalizedDescription: varchar("normalized_description", { length: 500 }),
-    categoryId: int("category_id"),  // @external-fk: categories.id
+    categoryId: varchar("category_id", { length: 128 }),  // @external-fk: categories.id
 
     // Merchant
     merchantName: varchar("merchant_name", { length: 255 }),

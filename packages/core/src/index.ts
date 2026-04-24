@@ -6,6 +6,7 @@
  *
  * Usage:
  *   import { generateFingerprint, buildFingerprintFromRaw, normalizeDescription } from "@previa/core"
+ *   import { BudgetEngine, ImpactCalculator } from "@previa/core"
  */
 
 export {
@@ -29,3 +30,22 @@ export type {
   CashFlowOutput,
   MonthlyCashFlow,
 } from "./cashflow";
+
+// Budget analysis exports - NEW for photo-to-analysis feature
+export {
+  BudgetEngine,
+  ImpactCalculator,
+} from "./budget";
+
+export type {
+  CategoryBudget,
+  CategorySpending,
+  BudgetAnalysis,
+  BudgetStatus,
+  BudgetImpact,
+  TransactionImpact,
+  TransactionAnalysisInput,
+  SpendingPattern,
+  BudgetStatusType,
+  BudgetPeriod,
+} from "./budget";

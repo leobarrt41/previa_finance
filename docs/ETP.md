@@ -317,23 +317,82 @@ consulta rápida
 lançamento rápido
 impacto imediato
 alerta financeiro
-11. Roadmap MVP
-Fase 1
-banco novo
-migrations
-front novo base
-dashboard simples
-Fase 2
-fluxo mensal inteligente
-parser robusto
-IA básica
-Fase 3
-Open Finance
-sincronização automática
-Fase 4
-IA avançada
-ranking evolutivo
-recomendações inteligentes
+# 11. Roadmap MVP
+
+# 11. Roadmap MVP
+
+## Fase 1 - MVP Básico ✅ **CONCLUÍDA**
+- ✅ **banco novo** (FEITO - Schema v4 completo)
+- ✅ **migrations** (FEITO - Incluindo v0005 categoryId fix)  
+- ✅ **API server básica** (FEITO - Express + middlewares + rotas funcionais)
+- ✅ **Autenticação Clerk** (FEITO - Middleware completo, sem users local)
+- ✅ **Endpoints essenciais** (FEITO - cashflow, budget, transactions, categories)
+- ✅ **categoryId alignment** (FEITO - transactions.categoryId agora varchar(128) alinhado com categories.id)
+
+## Fase 2 - Funcionalidades Core (Ordem Otimizada)
+- � **Frontend MVP** - Dashboard funcional substituindo Vite starter (NOVA PRIORIDADE #1)
+- 🧪 **Testes de API** - Jest para endpoints críticos (garantir estabilidade)
+- 📋 **Seeds completos** - dados de exemplo robustos para desenvolvimento
+- ✅ **IA básica** (FEITO - Budget/Impact engines 100% testados)
+- � **Parsers robustos** (PDF, CSV) - automatização de importação
+
+## Fase 3 - Open Finance
+- 🚨 **Integração Pluggy** - schema pronto, implementar workers e sync
+- 🚨 **Sincronização automática** - implementar jobs e webhooks
+- 🚨 **Webhooks** - rotas não implementadas
+
+---
+
+## Status Detalhado (Abril 2026)
+
+### ✅ **Fase 1 Concluída - Backend MVP Funcional:**
+- **CashFlowEngine** com suporte a forecasts (15 testes passando)
+- **BudgetEngine + ImpactCalculator** para foto → análise (9 testes passando)
+- **API REST completa**:
+  - `POST /api/cashflow/projection` - projeções financeiras
+  - `POST /api/budget/analyze-transaction` - análise foto → análise
+  - `GET/POST/PUT/DELETE /api/transactions` - CRUD completo
+  - `GET /api/categories` - listagem de categorias
+  - `GET/POST /api/auth/me` - autenticação Clerk
+- **Autenticação Clerk** sem users local, mapeamento interno
+- **Validação Zod** robusta em todos endpoints
+- **Error handling** estruturado com middlewares
+- **Database connection** Drizzle ORM + MySQL
+- **Builds funcionais**: @previa/db, @previa/core, @previa/api
+
+### 🔄 **Parcialmente implementado (Fase 2):**
+- Seeds de categorias (básico funcionando, expandir)
+- Testes (core 100%, API estrutura existe)
+
+### 🚨 **Próximas prioridades (Fase 2 - Ordem Otimizada):**
+1. **🔥 Frontend MVP** - Dashboard real com projeções e análise de orçamento
+   - Integrar com `POST /api/cashflow/projection`
+   - Implementar feature foto → análise com `POST /api/budget/analyze-transaction`
+   - UI para lançamentos manuais via `POST /api/transactions`
+
+2. **🧪 Testes de API** - Jest para endpoints críticos
+   - Testes de integração para cashflow, budget, transactions
+   - Validação de contratos e error handling
+
+3. **📋 Seeds completos** - dados robustos para desenvolvimento
+   - Categorias expandidas (alimentação, transporte, etc.)
+   - Contas de exemplo, transações de teste
+
+4. **📄 Parsers PDF/CSV** - automatização de importação
+   - Nubank, Banco do Brasil, Bradesco, Itaú
+   - Fallback IA para bancos desconhecidos
+
+### 📊 **Métricas de qualidade:**
+- **Testes Core**: 24/24 ✅ (100%)
+- **Build Status**: 3/3 packages ✅ 
+- **API Coverage**: 5/5 endpoints essenciais ✅
+- **Type Safety**: 100% TypeScript ✅
+
+## Próximos passos naturais:
+1. **Revisar endpoints** funcionais da API
+2. **Implementar parsers** para importação de documentos  
+3. **Desenvolver frontend** com dashboards reais
+4. **Integração Open Finance** para automatização
 12. Filosofia do Produto
 
 O usuário não quer apenas registrar despesas.

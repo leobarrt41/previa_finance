@@ -1,4 +1,4 @@
-import { normalizeDescription, generateFingerprint } from '../..'
+import { normalizeDescription, buildFingerprintFromRaw } from '../..'
 
 describe('fingerprint utilities (placeholder)', () => {
   it('normalizes accented descriptions', () => {
@@ -6,8 +6,17 @@ describe('fingerprint utilities (placeholder)', () => {
     const normalized = normalizeDescription(s)
     expect(typeof normalized).toBe('string')
   })
-  it('generates a fingerprint', () => {
-    const fp = generateFingerprint('1', '01/01/2026', 100)
-    expect(typeof fp).toBe('string')
+
+  it('generates a fingerprint from raw input', () => {
+    const raw = {
+      competencyMonth: '2026-04',
+      amountMinor: 100n,
+      rawDescription: 'Água e LUZ  - Nº 123',
+    }
+
+    const { fingerprint, normalizedDescription } = buildFingerprintFromRaw(raw)
+    expect(typeof fingerprint).toBe('string')
+    expect(typeof normalizedDescription).toBe('string')
+    expect(fingerprint.length).toBeGreaterThan(0)
   })
 })

@@ -33,14 +33,49 @@ export class CashFlowEngine {
   // compute projections per requested months
   static project(input: CashFlowInput): CashFlowOutput {
     const months = input.projectionMonths
+    
+    // determine current month context (YYYY-MM). If caller provides currentMonth, use it.
+    const currentMonth: CompetencyMonth = (input as any).currentMonth || new Date().toISOString().slice(0, 7)
 
-    // index transactions by month
+    // index transactions by month (build earlier so we can use if needed)
     const txByMonth = new Map<CompetencyMonth, Transaction[]>()
     ;(input.transactions || []).forEach((t) => {
       const arr = txByMonth.get(t.competencyMonth) || []
       arr.push(t)
       txByMonth.set(t.competencyMonth, arr)
     })
+
+    // build forecast additions per month
+    const forecastByMonth = new Map<CompetencyMonth, Minor>()
+    ;(input.forecasts || []).forEach((f) => {
+      const recurrence = f.recurrence || 'one-time'
+      const start = f.competencyMonth
+      const end = f.recurrenceEnd
+
+      const addToMonth = (m: CompetencyMonth) => {
+        // Simple rule: forecasts do not apply when their competency month arrives or has passed
+        // The real transactions (extrato) will be the source of truth for current/past months
+        if (m <= currentMonth) return
+        
+        const curr = forecastByMonth.get(m) || zero()
+        forecastByMonth.set(m, add(curr, f.amountMinor))
+      }
+
+      if (recurrence === 'one-time') {
+        addToMonth(start)
+      } else if (recurrence === 'monthly') {
+        for (const m of months) {
+          if (m >= start && (!end || m <= end)) addToMonth(m)
+        }
+      } else if (recurrence === 'yearly') {
+        const startMM = start.slice(5)
+        for (const m of months) {
+          if (m >= start && (!end || m <= end) && m.slice(5) === startMM) addToMonth(m)
+        }
+      }
+    })
+
+    // (transactions already indexed above for matching forecasts)
 
     // index invoice payments by month
     const payByMonth = new Map<CompetencyMonth, number | bigint>()
@@ -95,6 +130,12 @@ export class CashFlowEngine {
           default:
             break
         }
+      }
+
+      // forecasts (planned incomes/payments) — treat as planned income for now
+      const forecastAmt = forecastByMonth.get(month) || zero()
+      if (forecastAmt) {
+        income = add(income, forecastAmt)
       }
 
   // invoice payments (explicit cash events). Treat them as liability payments / outflows

@@ -58,6 +58,18 @@ export interface InvoicePayment {
   metadata?: Record<string, unknown>
 }
 
+// User-created forecast (previsão manual) to represent planned future cash
+export interface CashFlowForecast {
+  id: string
+  competencyMonth: CompetencyMonth
+  amountMinor: Minor
+  recurrence?: 'one-time' | 'monthly' | 'yearly'
+  recurrenceEnd?: CompetencyMonth | null
+  description?: string
+  // allow soft-disable
+  isActive?: boolean
+}
+
 // Normalized input accepted by the engine
 export interface CashFlowInput {
   // opening balance at the start of the earliest month (minor units)
@@ -70,6 +82,11 @@ export interface CashFlowInput {
   invoicePayments?: InvoicePayment[]
   // future obligations / recurring commitments
   obligations?: Obligation[]
+  // user forecasts (planned incomes/payments that are not real transactions)
+  forecasts?: CashFlowForecast[]
+  // optional current month context (YYYY-MM). If provided, engine will treat forecasts
+  // whose competencyMonth === currentMonth as expired/unapplied unless realized.
+  currentMonth?: CompetencyMonth
   // list of months to project (ordered)
   projectionMonths: CompetencyMonth[]
 }
