@@ -511,3 +511,29 @@ DESCRIÇÃO: Registrada a atualização operacional do arquivo `.synapse/synapse
 TAGS: synapse,github,operacao,branch,registro
 PRIORIDADE: Alta
 STATUS: Concluído
+
+---
+
+## [2026-04-25 21:38]
+
+ID: 20260425-2138-001
+SOURCE: previa_finance/copilot
+CATEGORIA: Decisão
+TÍTULO: Regra de projeção de dívidas do cartão no CashFlow
+DESCRIÇÃO: Decisão funcional consolidada para o CashFlow. 1) Parcela identificada no formato N/T (ex.: 3/12) deve gerar previsão das parcelas restantes dentro da janela de meses selecionada na projeção. 2) O mês atual deve priorizar realizado por extrato (auditoria), sem parear previsto vs pago no mesmo mês para simplificar a regra operacional. 3) Para cartão, valores em aberto permanecem como despesa projetada até evidência de pagamento via extrato atualizado (sem Open Finance/Pluggy). 4) Lançamentos manuais representam previsão (dívida futura, despesa esperada ou expectativa de receita) e não movimento real de caixa. 5) Metáfora visual aprovada para o gráfico: despesa paga em azul claro, cartão/projeção em laranja, e receita em linha azul escuro como linha de vida do orçamento; ultrapassagem da despesa sobre a receita indica risco financeiro.
+TAGS: cashflow,cartao,parcelas,projecao,extrato,regra-negocio,ux
+PRIORIDADE: Alta
+STATUS: Concluído
+
+---
+
+## [2026-04-25 21:45]
+
+ID: 20260425-2145-001
+SOURCE: previa_finance/copilot
+CATEGORIA: Bug
+TÍTULO: Import de fatura salva em `transactions` em vez de `card_transactions` + `card_invoice`
+DESCRIÇÃO: O endpoint POST /api/invoices/import (apps/api/src/routes/invoices.ts) está inserindo as compras de cartão diretamente na tabela `transactions` com movementType = 'card_purchase', contrariando o ETP §6.2 e §9. O modelo correto exige: (1) criar ou recuperar um registro em `card_invoices` para o mês da fatura, (2) inserir cada compra em `card_transactions` vinculada ao card_invoice_id. A tabela `transactions` deve receber apenas o pagamento da fatura (extrato bancário), não as compras individuais. Causa: atalho de implementação na Fase 2 sem seguir o modelo de domínio especificado no ETP. Impacto atual: zero no cashflow (projeção é stateless), mas causará distorção quando o banco for integrado ao cashflow — compras seriam contadas como saída real de caixa. Solução: corrigir o endpoint de import para usar card_invoices + card_transactions. A correção será feita via prompt para o Manus.
+TAGS: bug,import,card_transactions,card_invoices,transactions,ETP,cashflow
+PRIORIDADE: Alta
+STATUS: Pendente
