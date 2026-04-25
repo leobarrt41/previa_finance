@@ -8,15 +8,20 @@
  *
  * POST /api/invoices/import
  *   Accepts the confirmed transactions list and saves them to the DB.
+ *
+ *   REGRA DE NEGÓCIO (ETP §6.2):
+ *   - Compra no cartão NÃO afeta o caixa → vai para card_transactions
+ *   - card_transactions é vinculada a um card_invoice (passivo mensal)
+ *   - A tabela transactions só recebe o PAGAMENTO da fatura (evento de extrato)
  */
 
 import { Router, type Request, type Response } from 'express'
 import multer from 'multer'
 import { z } from 'zod'
 import { parseBBInvoice, invoiceToForecast } from '@previa/parser-bb'
-import { transactions, categories } from '@previa/db'
+import { accounts, categories, cardInvoices, cardTransactions } from '@previa/db'
 import { buildFingerprintFromRaw } from '@previa/core'
-import { eq } from 'drizzle-orm'
+import { eq, and, desc } from 'drizzle-orm'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { createError } from '../middlewares/errorHandler.js'
@@ -122,20 +127,19 @@ router.post('/import', async (req: Request, res: Response) => {
   const clerkUserId = req.authUser?.clerkUserId ?? 'dev-user'
   const owner = await resolveOwnerId(clerkUserId)
 
-  // Resolve default account (credit card account for invoice imports)
-  const { accounts } = await import('@previa/db')
-  const { desc } = await import('drizzle-orm')
-
+  // -------------------------------------------------------------------------
+  // 1. Resolve or create the credit card account
+  // -------------------------------------------------------------------------
   let accountId: number
-  const [existing] = await db
+  const [existingAccount] = await db
     .select({ id: accounts.id })
     .from(accounts)
     .where(eq(accounts.userId, owner.id))
     .orderBy(desc(accounts.id))
     .limit(1)
 
-  if (existing) {
-    accountId = existing.id
+  if (existingAccount) {
+    accountId = existingAccount.id
   } else {
     await db.insert(accounts).values({
       userId: owner.id,
@@ -156,18 +160,71 @@ router.post('/import', async (req: Request, res: Response) => {
     accountId = created.id
   }
 
-  // Validate categoryIds if provided
+  // -------------------------------------------------------------------------
+  // 2. Validate categoryIds (non-blocking — unknown categories are cleared)
+  // -------------------------------------------------------------------------
   const categoryIds = [...new Set(body.transactions.map(t => t.categoryId).filter(Boolean))] as string[]
   if (categoryIds.length > 0) {
-    const found = await db
+    await db
       .select({ id: categories.id })
       .from(categories)
-      .where(eq(categories.id, categoryIds[0])) // quick check
-    if (found.length === 0) {
-      // Don't block import for unknown categories — just clear them
-    }
+      .where(eq(categories.id, categoryIds[0]))
+    // If not found, we don't block — categoryId will be null on insert
   }
 
+  // -------------------------------------------------------------------------
+  // 3. Resolve or create the card_invoice for this month
+  //    card_invoice = passivo mensal do cartão (NÃO afeta o caixa)
+  // -------------------------------------------------------------------------
+  const dueDate = new Date(`${body.dueMonth ?? body.invoiceMonth}-01T12:00:00Z`)
+
+  let cardInvoiceId: number
+  const [existingInvoice] = await db
+    .select({ id: cardInvoices.id })
+    .from(cardInvoices)
+    .where(
+      and(
+        eq(cardInvoices.userId, owner.id),
+        eq(cardInvoices.accountId, accountId),
+        eq(cardInvoices.invoiceMonth, body.invoiceMonth),
+      )
+    )
+    .limit(1)
+
+  if (existingInvoice) {
+    cardInvoiceId = existingInvoice.id
+  } else {
+    await db.insert(cardInvoices).values({
+      userId: owner.id,
+      accountId,
+      invoiceMonth: body.invoiceMonth,
+      dueDate,
+      totalAmountMinor: 0n,
+      openAmountMinor: 0n,
+      status: 'OPEN',
+      source: 'pdf_invoice',
+      dataState: 'consolidated',
+    })
+    const [created] = await db
+      .select({ id: cardInvoices.id })
+      .from(cardInvoices)
+      .where(
+        and(
+          eq(cardInvoices.userId, owner.id),
+          eq(cardInvoices.accountId, accountId),
+          eq(cardInvoices.invoiceMonth, body.invoiceMonth),
+        )
+      )
+      .limit(1)
+    if (!created) throw createError('Failed to create card_invoice', 500)
+    cardInvoiceId = created.id
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. Insert each purchase into card_transactions
+  //    IMPORTANT: card_transactions does NOT affect cash flow.
+  //    Only the invoice payment (in `transactions`) affects the bank account.
+  // -------------------------------------------------------------------------
   let imported = 0
   let skipped = 0
 
@@ -192,17 +249,15 @@ router.post('/import', async (req: Request, res: Response) => {
     }
 
     try {
-      await db.insert(transactions).values({
+      await db.insert(cardTransactions).values({
         userId: owner.id,
-        accountId,
+        cardInvoiceId,
         source: 'pdf_invoice',
         dataState: 'consolidated',
         movementType: 'card_purchase',
         movementSubtype: tx.installment ? 'installment' : 'single',
-        financialChannel: 'credit_card',
         amountMinor,
         currencyCode: 'BRL',
-        balanceAfterMinor: null,
         occurredAt,
         competencyMonth: tx.competencyMonth,
         description: tx.description,
@@ -211,13 +266,8 @@ router.post('/import', async (req: Request, res: Response) => {
         installmentNumber,
         installmentTotal,
         installmentGroupId,
-        isRecurring: false,
-        recurringRuleId: null,
         fingerprint,
         isReconciled: false,
-        reconciledGroupId: null,
-        providerTransactionId: null,
-        providerPayload: null,
       })
       imported++
     } catch (err: unknown) {
@@ -231,11 +281,26 @@ router.post('/import', async (req: Request, res: Response) => {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // 5. Update totalAmountMinor and openAmountMinor on the card_invoice
+  // -------------------------------------------------------------------------
+  const totalImported = body.transactions
+    .reduce((sum, t) => sum + BigInt(t.amountMinor), 0n)
+
+  await db
+    .update(cardInvoices)
+    .set({
+      totalAmountMinor: totalImported,
+      openAmountMinor: totalImported,
+    })
+    .where(eq(cardInvoices.id, cardInvoiceId))
+
   res.json({
     imported,
     skipped,
     invoiceMonth: body.invoiceMonth,
     dueMonth: body.dueMonth ?? null,
+    cardInvoiceId,
   })
 })
 
