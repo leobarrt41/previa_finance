@@ -3,3 +3,4 @@ packages:
   - "packages/*"
   - "packages/domains/*"
   - "packages/libs/*"
+  - "packages/parsers/*"

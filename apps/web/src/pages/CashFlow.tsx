@@ -118,7 +118,7 @@ function ForecastRow({ fc, onRemove }: { fc: CashFlowForecast; onRemove: () => v
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Badge variant="blue">{recurrenceLabel[fc.recurrence ?? 'one-time']}</Badge>
-        <span style={{ color: '#a78bfa', fontWeight: 600 }}>{formatBRL(fc.amountMinor)}</span>
+        <span style={{ color: fc.amountMinor >= 0 ? '#4ade80' : '#f87171', fontWeight: 600 }}>{formatBRL(fc.amountMinor)}</span>
         <button onClick={onRemove} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1rem' }}>×</button>
       </div>
     </div>
@@ -173,6 +173,7 @@ export function CashFlow() {
 
   // Forecast form
   const [fcDesc, setFcDesc] = useState('')
+  const [fcType, setFcType] = useState<'income' | 'expense'>('expense')
   const [fcAmount, setFcAmount] = useState('')
   const [fcMonth, setFcMonth] = useState(now)
   const [fcRecurrence, setFcRecurrence] = useState<'one-time' | 'monthly' | 'yearly'>('monthly')
@@ -223,9 +224,9 @@ export function CashFlow() {
       {
         id: `fc-${Date.now()}`,
         competencyMonth: fcMonth,
-        amountMinor: minor(fcAmount),
+        amountMinor: fcType === 'expense' ? -Math.abs(minor(fcAmount)) : Math.abs(minor(fcAmount)),
         recurrence: fcRecurrence,
-        recurrenceEnd: fcEnd || null,
+        recurrenceEnd: fcEnd || undefined,
         description: fcDesc || undefined,
         isActive: true,
       },
@@ -368,6 +369,14 @@ export function CashFlow() {
                 />
               )}
               <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <select
+                  value={fcType}
+                  onChange={(e) => setFcType(e.target.value as 'income' | 'expense')}
+                  style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem' }}
+                >
+                  <option value="income">Receita</option>
+                  <option value="expense">Despesa</option>
+                </select>
                 <input
                   value={fcAmount}
                   onChange={(e) => setFcAmount(e.target.value)}

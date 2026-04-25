@@ -50,6 +50,27 @@ async function request<T>(
   return res.json() as Promise<T>
 }
 
+/** Like `request` but does NOT set Content-Type (lets browser set it for FormData). */
+async function requestRaw<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const token = getAuthToken()
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string>),
+  }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
+  const res = await fetch(path, { ...options, headers })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, body?.error ?? res.statusText, body)
+  }
+  return res.json() as Promise<T>
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -204,6 +225,62 @@ export interface Category {
   isSystem: boolean
 }
 
+// --- Invoices ---
+
+export interface InvoiceTransaction {
+  id: string
+  date: string
+  description: string
+  amountMinor: number
+  installment?: string
+  categoryId: string | null
+  competencyMonth: string
+  include: boolean
+  category: string
+  country?: string
+}
+
+export interface InvoiceParseResult {
+  bank: string
+  summary: {
+    cardLast4: string
+    product: string
+    invoiceMonth: string
+    dueDate: string
+    dueMonth: string
+    closingDate: string
+    totalMinor: number
+    previousBalanceMinor: number
+    paymentsMinor: number
+    nationalPurchasesMinor: number
+    internationalPurchasesMinor: number
+    chargesMinor: number
+    openBalanceMinor: number
+  }
+  transactions: InvoiceTransaction[]
+  forecasts: Array<{
+    id: string
+    competencyMonth: string
+    amountMinor: number
+    recurrence: 'one-time'
+    description: string
+  }>
+}
+
+export interface InvoiceImportBody {
+  transactions: Array<{
+    date: string
+    description: string
+    amountMinor: number
+    categoryId?: string | null
+    competencyMonth: string
+    installment?: string
+  }>
+  invoiceMonth: string
+  dueMonth?: string
+  bank?: string
+}
+
 // ---------------------------------------------------------------------------
 // API calls
 // ---------------------------------------------------------------------------
@@ -243,6 +320,23 @@ export const api = {
       request<Category>(`/api/categories/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
     remove: (id: string) =>
       request<{ deleted: boolean; id: string }>(`/api/categories/${id}`, { method: 'DELETE' }),
+  },
+
+  invoices: {
+    /** Upload a PDF invoice and receive extracted transactions for preview. */
+    parse: (file: File, bank?: string): Promise<InvoiceParseResult> => {
+      const form = new FormData()
+      form.append('file', file)
+      if (bank) form.append('bank', bank)
+      return requestRaw<InvoiceParseResult>('/api/invoices/parse', { method: 'POST', body: form })
+    },
+
+    /** Confirm and import the reviewed transactions. */
+    import: (body: InvoiceImportBody) =>
+      request<{ imported: number; skipped: number }>('/api/invoices/import', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
   },
 }
 

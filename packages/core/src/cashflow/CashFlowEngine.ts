@@ -45,20 +45,23 @@ export class CashFlowEngine {
       txByMonth.set(t.competencyMonth, arr)
     })
 
-    // build forecast additions per month
-    const forecastByMonth = new Map<CompetencyMonth, Minor>()
+    // build forecast additions per month — split income/expense
+    const forecastIncomeByMonth = new Map<CompetencyMonth, Minor>()
+    const forecastExpenseByMonth = new Map<CompetencyMonth, Minor>()
     ;(input.forecasts || []).forEach((f) => {
       const recurrence = f.recurrence || 'one-time'
       const start = f.competencyMonth
       const end = f.recurrenceEnd
+      const isNeg = typeof f.amountMinor === 'bigint' ? f.amountMinor < 0n : (f.amountMinor as number) < 0
+      const targetMap = isNeg ? forecastExpenseByMonth : forecastIncomeByMonth
+      const absAmt: Minor = isNeg
+        ? (typeof f.amountMinor === 'bigint' ? -f.amountMinor : -(f.amountMinor as number))
+        : f.amountMinor
 
       const addToMonth = (m: CompetencyMonth) => {
-        // Simple rule: forecasts do not apply when their competency month arrives or has passed
-        // The real transactions (extrato) will be the source of truth for current/past months
         if (m <= currentMonth) return
-        
-        const curr = forecastByMonth.get(m) || zero()
-        forecastByMonth.set(m, add(curr, f.amountMinor))
+        const curr = targetMap.get(m) || zero()
+        targetMap.set(m, add(curr, absAmt))
       }
 
       if (recurrence === 'one-time') {
@@ -132,11 +135,11 @@ export class CashFlowEngine {
         }
       }
 
-      // forecasts (planned incomes/payments) — treat as planned income for now
-      const forecastAmt = forecastByMonth.get(month) || zero()
-      if (forecastAmt) {
-        income = add(income, forecastAmt)
-      }
+      // forecasts: positive → income, negative → expense (tracked in separate maps)
+      const forecastInc = forecastIncomeByMonth.get(month) || zero()
+      const forecastExp = forecastExpenseByMonth.get(month) || zero()
+      if (forecastInc) income = add(income, forecastInc)
+      if (forecastExp) expense = add(expense, forecastExp)
 
   // invoice payments (explicit cash events). Treat them as liability payments / outflows
   const invoicePaid = payByMonth.get(month) || zero()
