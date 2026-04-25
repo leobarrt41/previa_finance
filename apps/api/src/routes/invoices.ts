@@ -194,17 +194,30 @@ router.post('/import', async (req: Request, res: Response) => {
   if (existingInvoice) {
     cardInvoiceId = existingInvoice.id
   } else {
-    await db.insert(cardInvoices).values({
-      userId: owner.id,
-      accountId,
-      invoiceMonth: body.invoiceMonth,
-      dueDate,
-      totalAmountMinor: 0n,
-      openAmountMinor: 0n,
-      status: 'OPEN',
-      source: 'pdf_invoice',
-      dataState: 'consolidated',
-    })
+    try {
+      await db.insert(cardInvoices).values({
+        userId: owner.id,
+        accountId,
+        invoiceMonth: body.invoiceMonth,
+        dueDate: dueDate,
+        totalAmountMinor: 0n,
+        paidAmountMinor: 0n,
+        previousBalanceMinor: 0n,
+        openAmountMinor: 0n,
+        status: 'OPEN',
+        source: 'pdf_invoice',
+        dataState: 'consolidated',
+      })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[import] failed to create card_invoice:', {
+        invoiceMonth: body.invoiceMonth,
+        dueDate: dueDate,
+        dueMonth: body.dueMonth,
+        error: msg,
+      })
+      throw createError(`Failed to create card_invoice: ${msg}`, 500)
+    }
     const [created] = await db
       .select({ id: cardInvoices.id })
       .from(cardInvoices)
