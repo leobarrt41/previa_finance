@@ -142,3 +142,7 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Fixtures de PDF com dados pessoais (Itaú, BB, etc.)
+packages/parsers/**/fixtures/*.pdf
+FATURAS/
