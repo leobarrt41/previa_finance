@@ -7,8 +7,8 @@
 import { Router, Request, Response } from 'express'
 import { z } from 'zod'
 import { CashFlowEngine, CashFlowInput } from '@previa/core'
-import { transactions, cardInvoices } from '@previa/db'
-import { and, eq, inArray, gte, lte } from 'drizzle-orm'
+import { transactions, cardInvoices, cardTransactions } from '@previa/db'
+import { and, eq, inArray, gte, lte, sql } from 'drizzle-orm'
 import { createError } from '../middlewares/errorHandler.js'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
@@ -33,6 +33,13 @@ function buildProjectionMonths(startMonth: string, months: number): string[] {
   }
 
   return result
+}
+
+function toBigInt(value: unknown): bigint {
+  if (typeof value === 'bigint') return value
+  if (typeof value === 'number') return BigInt(value)
+  if (typeof value === 'string') return BigInt(value)
+  return 0n
 }
 
 // Schema de validação para projeção
@@ -127,6 +134,21 @@ router.post('/projection', async (req: Request, res: Response) => {
           )
       : []
 
+    const dbCardInvoiceSums = useDbCardInvoices
+      ? await db
+          .select({
+            cardInvoiceId: cardTransactions.cardInvoiceId,
+            totalMinor: sql<string>`sum(${cardTransactions.amountMinor})`,
+          })
+          .from(cardTransactions)
+          .where(eq(cardTransactions.userId, owner.id))
+          .groupBy(cardTransactions.cardInvoiceId)
+      : []
+
+    const sumByInvoiceId = new Map<string, bigint>(
+      dbCardInvoiceSums.map((row) => [String(row.cardInvoiceId), toBigInt(row.totalMinor)]),
+    )
+
     const normalizedTransactions = useDbTransactions
       ? dbTransactions.map((t) => ({
           id: String(t.id),
@@ -142,15 +164,19 @@ router.post('/projection', async (req: Request, res: Response) => {
     const normalizedCardInvoices = useDbCardInvoices
       ? dbCardInvoices
           .map((ci) => {
-            const dueDate = ci.dueDate instanceof Date ? ci.dueDate : new Date(ci.dueDate as unknown as string)
-            const dueMonth = `${dueDate.getUTCFullYear()}-${String(dueDate.getUTCMonth() + 1).padStart(2, '0')}`
+            const dueMonth = ci.dueDate instanceof Date
+              ? `${ci.dueDate.getUTCFullYear()}-${String(ci.dueDate.getUTCMonth() + 1).padStart(2, '0')}`
+              : String(ci.dueDate).slice(0, 7)
+            const totalFromInvoice = toBigInt(ci.totalAmountMinor)
+            const totalFromTransactions = sumByInvoiceId.get(String(ci.id)) ?? 0n
+            const resolvedAmount = totalFromInvoice > 0n ? totalFromInvoice : totalFromTransactions
 
             return {
               id: String(ci.id),
               competencyMonth: ci.invoiceMonth,
               dueMonth,
-              amountMinor: BigInt(ci.totalAmountMinor),
-              paidMinor: BigInt(ci.paidAmountMinor ?? 0n),
+              amountMinor: resolvedAmount,
+              paidMinor: toBigInt(ci.paidAmountMinor ?? 0n),
             }
           })
           .filter((ci) => ci.dueMonth >= startMonth)

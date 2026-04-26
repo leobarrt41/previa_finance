@@ -8,8 +8,9 @@
  */
 import { useState, useCallback } from 'react'
 import {
-  AreaChart,
-  Area,
+  ComposedChart,
+  Bar,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -53,8 +54,8 @@ function toChartData(monthly: MonthlyCashFlow[]) {
     month: m.competencyMonth,
     saldo: Number(m.projectedClosingBalanceMinor) / 100,
     receita: Number(m.totalIncomeMinor) / 100,
-    despesa: Number(m.totalExpenseMinor) / 100,
-    divida: Number(m.debtOpenMinor) / 100,
+    despesaPaga: (Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)) / 100,
+    cartaoAberto: Number(m.debtOpenMinor) / 100,
   }))
 }
 
@@ -418,7 +419,7 @@ export function CashFlow() {
                 {[
                   { label: 'Saldo final', value: Number(state.data.monthly[state.data.monthly.length - 1]?.projectedClosingBalanceMinor ?? 0), color: Number(state.data.monthly[state.data.monthly.length - 1]?.projectedClosingBalanceMinor ?? 0) >= 0 ? '#4ade80' : '#f87171' },
                   { label: 'Total receitas', value: state.data.monthly.reduce((s, m) => s + Number(m.totalIncomeMinor), 0), color: '#4ade80' },
-                  { label: 'Total despesas', value: state.data.monthly.reduce((s, m) => s + Number(m.totalExpenseMinor), 0), color: '#f87171' },
+                  { label: 'Total despesas', value: state.data.monthly.reduce((s, m) => s + Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor), 0), color: '#f87171' },
                 ].map(({ label, value, color }) => (
                   <div key={label} style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 10, padding: '0.75rem', textAlign: 'center' }}>
                     <p style={{ fontSize: '0.72rem', color: '#6b7280', marginBottom: 4 }}>{label}</p>
@@ -429,26 +430,29 @@ export function CashFlow() {
 
               {/* Chart */}
               <Card>
-                <SectionTitle>Saldo projectado</SectionTitle>
+                <SectionTitle>Receita vs Despesas</SectionTitle>
                 <ResponsiveContainer width="100%" height={220}>
-                  <AreaChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="gradSaldo" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
+                  <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e2130" />
                     <XAxis dataKey="month" tick={{ fill: '#6b7280', fontSize: 11 }} />
                     <YAxis tick={{ fill: '#6b7280', fontSize: 11 }} tickFormatter={(v) => `R$${(v / 1000).toFixed(0)}k`} />
                     <Tooltip
                       contentStyle={{ background: '#1e2130', border: '1px solid #2a2f45', borderRadius: 8 }}
                       labelStyle={{ color: '#9ca3af' }}
-                      formatter={(v) => [formatBRL(Number(v ?? 0) * 100), 'Saldo']}
+                      formatter={(v, name) => {
+                        const labels: Record<string, string> = {
+                          receita: 'Receita (linha de vida)',
+                          despesaPaga: 'Despesa paga',
+                          cartaoAberto: 'Cartão em aberto',
+                        }
+                        return [formatBRL(Number(v ?? 0) * 100), labels[String(name)] ?? String(name)]
+                      }}
                     />
                     <ReferenceLine y={0} stroke="#f87171" strokeDasharray="4 2" />
-                    <Area type="monotone" dataKey="saldo" stroke="#6366f1" strokeWidth={2} fill="url(#gradSaldo)" />
-                  </AreaChart>
+                    <Bar dataKey="despesaPaga" name="despesaPaga" fill="#7dd3fc" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="cartaoAberto" name="cartaoAberto" fill="#fb923c" radius={[4, 4, 0, 0]} />
+                    <Line type="monotone" dataKey="receita" name="receita" stroke="#1d4ed8" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                  </ComposedChart>
                 </ResponsiveContainer>
               </Card>
 
@@ -469,11 +473,12 @@ export function CashFlow() {
                     <tbody>
                       {state.data.monthly.map((m) => {
                         const closing = Number(m.projectedClosingBalanceMinor)
+                        const paidExpenseMinor = Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)
                         return (
                           <tr key={m.competencyMonth} style={{ borderBottom: '1px solid #1e2130' }}>
                             <td style={{ padding: '0.45rem 0.5rem', color: '#e5e7eb', fontWeight: 600 }}>{m.competencyMonth}</td>
                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#4ade80' }}>{formatBRL(m.totalIncomeMinor)}</td>
-                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#f87171' }}>{formatBRL(m.totalExpenseMinor)}</td>
+                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#f87171' }}>{formatBRL(paidExpenseMinor)}</td>
                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 700, color: closing >= 0 ? '#4ade80' : '#f87171' }}>
                               {formatBRL(m.projectedClosingBalanceMinor)}
                             </td>
