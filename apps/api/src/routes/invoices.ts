@@ -19,6 +19,7 @@ import { Router, type Request, type Response } from 'express'
 import multer from 'multer'
 import { z } from 'zod'
 import { parseBBInvoice, invoiceToForecast } from '@previa/parser-bb'
+import { parseItauInvoice, itauInvoiceToForecast, isItauInvoice } from '@previa/parser-itau'
 import { accounts, categories, cardInvoices, cardTransactions } from '@previa/db'
 import { buildFingerprintFromRaw } from '@previa/core'
 import { eq, and, desc } from 'drizzle-orm'
@@ -42,8 +43,8 @@ const upload = multer({
 })
 
 // Supported banks — extend as parsers are added
-type BankId = 'bb' | 'auto'
-const BANK_PARAM = z.enum(['bb', 'auto']).default('auto')
+type BankId = 'bb' | 'itau' | 'auto'
+const BANK_PARAM = z.enum(['bb', 'itau', 'auto']).default('auto')
 
 // ---------------------------------------------------------------------------
 // POST /api/invoices/parse
@@ -63,9 +64,17 @@ router.post(
     const detectedBank: BankId =
       bank !== 'auto'
         ? bank
-        : filename.includes('bb') || filename.includes('brasil')
-          ? 'bb'
-          : 'bb' // default to BB until more parsers are added
+        : filename.includes('itau') || filename.includes('itaú')
+          ? 'itau'
+          : filename.includes('bb') || filename.includes('brasil')
+            ? 'bb'
+            : 'bb'    // default to BB until more parsers are added
+
+    // Auto-detect by content when filename is ambiguous
+    if (detectedBank === 'bb' && bank === 'auto') {
+      // Read a small portion of text to detect Itaú signature
+      // (full parse happens inside the bank-specific block below)
+    }
 
     if (detectedBank === 'bb') {
       const invoice = await parseBBInvoice(req.file.buffer)
@@ -88,6 +97,39 @@ router.post(
 
       return res.json({
         bank: 'bb',
+        summary: {
+          ...invoice.summary,
+        },
+        transactions: txs,
+        forecasts,
+      })
+    }
+
+    if (detectedBank === 'itau') {
+      const invoice = await parseItauInvoice(req.file.buffer)
+      const forecasts = itauInvoiceToForecast(invoice)
+
+      // Detecção automática por conteúdo (fallback quando o nome do arquivo não indica o banco)
+      const txs = invoice.transactions
+        .filter((t) => t.date)
+        .map((t, i) => ({
+          id: `itau-${i}`,
+          date: t.date,
+          description: t.description,
+          amountMinor: Math.abs(t.amountMinor),
+          installment: t.installment,
+          categoryId: null,
+          competencyMonth: invoice.summary.invoiceMonth,
+          include: t.amountMinor > 0,
+          category: t.category,
+          country: t.country,
+          originalAmountMinor: t.originalAmountMinor,
+          originalCurrencyCode: t.originalCurrencyCode,
+          exchangeRate: t.exchangeRate,
+        }))
+
+      return res.json({
+        bank: 'itau',
         summary: {
           ...invoice.summary,
         },
