@@ -172,6 +172,9 @@ router.post('/import', async (req: Request, res: Response) => {
     // If not found, we don't block — categoryId will be null on insert
   }
 
+  const totalImported = body.transactions
+    .reduce((sum, t) => sum + BigInt(t.amountMinor), 0n)
+
   // -------------------------------------------------------------------------
   // 3. Resolve or create the card_invoice for this month
   //    card_invoice = passivo mensal do cartão (NÃO afeta o caixa)
@@ -206,10 +209,10 @@ router.post('/import', async (req: Request, res: Response) => {
         accountId,
         invoiceMonth: body.invoiceMonth,
         dueDate, // Ensure this is a valid Date object
-        totalAmountMinor: 0n,
+        totalAmountMinor: totalImported,
         paidAmountMinor: 0n,
         previousBalanceMinor: 0n,
-        openAmountMinor: 0n,
+        openAmountMinor: totalImported,
         status: 'OPEN',
         source: 'pdf_invoice',
         dataState: 'consolidated',
@@ -301,20 +304,6 @@ router.post('/import', async (req: Request, res: Response) => {
       }
     }
   }
-
-  // -------------------------------------------------------------------------
-  // 5. Update totalAmountMinor and openAmountMinor on the card_invoice
-  // -------------------------------------------------------------------------
-  const totalImported = body.transactions
-    .reduce((sum, t) => sum + BigInt(t.amountMinor), 0n)
-
-  await db
-    .update(cardInvoices)
-    .set({
-      totalAmountMinor: totalImported,
-      openAmountMinor: totalImported,
-    })
-    .where(eq(cardInvoices.id, cardInvoiceId))
 
   res.json({
     imported,
