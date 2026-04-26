@@ -49,13 +49,20 @@ function minor(brl: string): number {
   return isNaN(n) ? 0 : Math.round(n * 100)
 }
 
-function toChartData(monthly: MonthlyCashFlow[]) {
+function toChartData(monthly: MonthlyCashFlow[], startMonth: string) {
   return monthly.map((m) => ({
     month: m.competencyMonth,
     saldo: Number(m.projectedClosingBalanceMinor) / 100,
     receita: Number(m.totalIncomeMinor) / 100,
-    despesaPaga: (Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)) / 100,
-    cartaoAberto: Number(m.debtOpenMinor) / 100,
+    despesaPaga: m.competencyMonth <= startMonth
+      ? (Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)) / 100
+      : 0,
+    despesaPrevista: m.competencyMonth > startMonth
+      ? (Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)) / 100
+      : 0,
+    cartaoProjetado: m.competencyMonth > startMonth
+      ? Number(m.debtOpenMinor) / 100
+      : 0,
   }))
 }
 
@@ -251,7 +258,7 @@ export function CashFlow() {
     })
   }
 
-  const chartData = state.status === 'success' ? toChartData(state.data.monthly) : []
+  const chartData = state.status === 'success' ? toChartData(state.data.monthly, startMonth) : []
 
   return (
     <div style={{ maxWidth: 1020 }}>
@@ -443,14 +450,16 @@ export function CashFlow() {
                         const labels: Record<string, string> = {
                           receita: 'Receita (linha de vida)',
                           despesaPaga: 'Despesa paga',
-                          cartaoAberto: 'Cartão em aberto',
+                          despesaPrevista: 'Despesa prevista',
+                          cartaoProjetado: 'Cartão projetado',
                         }
                         return [formatBRL(Number(v ?? 0) * 100), labels[String(name)] ?? String(name)]
                       }}
                     />
                     <ReferenceLine y={0} stroke="#f87171" strokeDasharray="4 2" />
                     <Bar dataKey="despesaPaga" name="despesaPaga" fill="#7dd3fc" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="cartaoAberto" name="cartaoAberto" fill="#fb923c" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="despesaPrevista" name="despesaPrevista" stackId="proj" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="cartaoProjetado" name="cartaoProjetado" stackId="proj" fill="#fb923c" radius={[4, 4, 0, 0]} />
                     <Line type="monotone" dataKey="receita" name="receita" stroke="#1d4ed8" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
                   </ComposedChart>
                 </ResponsiveContainer>
