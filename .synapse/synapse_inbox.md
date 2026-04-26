@@ -537,3 +537,16 @@ DESCRIÇÃO: O endpoint POST /api/invoices/import (apps/api/src/routes/invoices.
 TAGS: bug,import,card_transactions,card_invoices,transactions,ETP,cashflow
 PRIORIDADE: Alta
 STATUS: Pendente
+
+---
+
+## [2026-04-26 15:10]
+
+ID: 20260426-1510-001
+SOURCE: previa_finance/copilot
+CATEGORIA: Tarefa
+TÍTULO: Implementar parser de fatura Itaú com paridade de dados do parser BB
+DESCRIÇÃO: Definido escopo para implementação do parser de faturas do Itaú via Manus. O novo parser deve extrair o mesmo conjunto de informações já disponível no parser do Banco do Brasil: dados de fatura (banco, bandeira/produto, quatro últimos dígitos do cartão, mês de referência, vencimento, fechamento, saldo em aberto), transações detalhadas (data, descrição, valor em centavos, parcela N/T quando houver), além de detecção e agregação de compras nacionais vs estrangeiras. Também deve implementar conversões de moeda para compras internacionais quando os dados estiverem presentes na fatura (valor original, moeda e valor convertido em BRL), preservando o contrato de resposta usado em `/api/invoices/parse` para integração transparente com preview e import.
+TAGS: parser,itau,faturas,pdf,moeda,internacional,cashflow
+PRIORIDADE: Alta
+STATUS: Pendente
