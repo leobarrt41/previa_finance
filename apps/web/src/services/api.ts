@@ -281,6 +281,11 @@ export interface InvoiceImportBody {
   bank?: string
 }
 
+export interface InvoiceParseOptions {
+  bank?: string
+  password?: string
+}
+
 // ---------------------------------------------------------------------------
 // API calls
 // ---------------------------------------------------------------------------
@@ -324,10 +329,11 @@ export const api = {
 
   invoices: {
     /** Upload a PDF invoice and receive extracted transactions for preview. */
-    parse: (file: File, bank?: string): Promise<InvoiceParseResult> => {
+    parse: (file: File, options: InvoiceParseOptions = {}): Promise<InvoiceParseResult> => {
       const form = new FormData()
       form.append('file', file)
-      if (bank) form.append('bank', bank)
+      if (options.bank) form.append('bank', options.bank)
+      if (options.password) form.append('password', options.password)
       return requestRaw<InvoiceParseResult>('/api/invoices/parse', { method: 'POST', body: form })
     },
 

@@ -15,7 +15,7 @@
  *   - A tabela transactions só recebe o PAGAMENTO da fatura (evento de extrato)
  */
 
-import { Router, type Request, type Response } from 'express'
+import { Router, type NextFunction, type Request, type Response } from 'express'
 import multer from 'multer'
 import { z } from 'zod'
 import { parseBBInvoice, invoiceToForecast } from '@previa/parser-bb'
@@ -46,99 +46,157 @@ const upload = multer({
 type BankId = 'bb' | 'itau' | 'auto'
 const BANK_PARAM = z.enum(['bb', 'itau', 'auto']).default('auto')
 
+function isPdfPasswordError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return error.message.includes('PDFPasswordIncorrect')
+    || error.message.includes('PdfminerException')
+    || error.message.includes('PDF_PASSWORD_REQUIRED')
+    || error.message.includes('password')
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/invoices/parse
 // ---------------------------------------------------------------------------
 router.post(
   '/parse',
   upload.single('file'),
-  async (req: Request, res: Response) => {
-    if (!req.file) {
-      throw createError('No PDF file uploaded. Send a multipart/form-data request with field "file".', 400)
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!req.file) {
+        throw createError('No PDF file uploaded. Send a multipart/form-data request with field "file".', 400)
+      }
+      const file = req.file
+
+      const bankParam = BANK_PARAM.safeParse(req.body.bank ?? req.query.bank)
+      const bank: BankId = bankParam.success ? bankParam.data : 'auto'
+      const password = typeof req.body.password === 'string' && req.body.password.trim()
+        ? req.body.password.trim()
+        : undefined
+
+      const filename = file.originalname.toLowerCase()
+      const hintedBank: BankId =
+        bank !== 'auto'
+          ? bank
+          : filename.includes('itau') || filename.includes('itaú')
+            ? 'itau'
+            : filename.includes('bb') || filename.includes('brasil')
+              ? 'bb'
+              : 'auto'
+
+      const parseAsBB = async () => {
+        const invoice = await parseBBInvoice(file.buffer)
+        const forecasts = invoiceToForecast(invoice)
+
+        const txs = invoice.transactions
+          .filter((t) => t.date)
+          .map((t, i) => ({
+            id: `bb-${i}`,
+            date: t.date,
+            description: t.description,
+            amountMinor: Math.abs(t.amountMinor),
+            installment: t.installment,
+            categoryId: null,
+            competencyMonth: invoice.summary.invoiceMonth,
+            include: t.amountMinor > 0,
+            category: t.category,
+            country: t.country,
+          }))
+
+        return {
+          bank: 'bb' as const,
+          summary: {
+            ...invoice.summary,
+          },
+          transactions: txs,
+          forecasts,
+        }
+      }
+
+      const parseAsItau = async () => {
+        const invoice = await parseItauInvoice(file.buffer, password)
+        const forecasts = itauInvoiceToForecast(invoice)
+
+        const txs = invoice.transactions
+          .filter((t) => t.date)
+          .map((t, i) => ({
+            id: `itau-${i}`,
+            date: t.date,
+            description: t.description,
+            amountMinor: Math.abs(t.amountMinor),
+            installment: t.installment,
+            categoryId: null,
+            competencyMonth: invoice.summary.invoiceMonth,
+            include: t.amountMinor > 0,
+            category: t.category,
+            country: t.country,
+            originalAmountMinor: t.originalAmountMinor,
+            originalCurrencyCode: t.originalCurrencyCode,
+            exchangeRate: t.exchangeRate,
+          }))
+
+        return {
+          bank: 'itau' as const,
+          summary: {
+            ...invoice.summary,
+          },
+          transactions: txs,
+          forecasts,
+        }
+      }
+
+      if (hintedBank === 'bb') {
+        try {
+          const payload = await parseAsBB()
+          return res.json(payload)
+        } catch (error) {
+          if (isPdfPasswordError(error)) {
+            throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+          }
+          throw error
+        }
+      }
+
+      if (hintedBank === 'itau') {
+        try {
+          const payload = await parseAsItau()
+          return res.json(payload)
+        } catch (error) {
+          if (isPdfPasswordError(error)) {
+            throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+          }
+          throw error
+        }
+      }
+
+      // bank=auto com filename ambíguo: tenta Itaú primeiro, depois BB.
+      // Isso evita parse incorreto quando o nome do arquivo não contém "itau"/"bb".
+      const autoErrors: unknown[] = []
+      let hasPasswordError = false
+
+      try {
+        const payload = await parseAsItau()
+        return res.json(payload)
+      } catch (error) {
+        autoErrors.push(error)
+        hasPasswordError = hasPasswordError || isPdfPasswordError(error)
+      }
+
+      try {
+        const payload = await parseAsBB()
+        return res.json(payload)
+      } catch (error) {
+        autoErrors.push(error)
+        hasPasswordError = hasPasswordError || isPdfPasswordError(error)
+      }
+
+      if (hasPasswordError) {
+        throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+      }
+
+      throw createError('Não foi possível identificar automaticamente o banco da fatura. Selecione o banco manualmente.', 400)
+    } catch (error) {
+      next(error)
     }
-
-    const bankParam = BANK_PARAM.safeParse(req.body.bank ?? req.query.bank)
-    const bank: BankId = bankParam.success ? bankParam.data : 'auto'
-
-    const filename = req.file.originalname.toLowerCase()
-    const detectedBank: BankId =
-      bank !== 'auto'
-        ? bank
-        : filename.includes('itau') || filename.includes('itaú')
-          ? 'itau'
-          : filename.includes('bb') || filename.includes('brasil')
-            ? 'bb'
-            : 'bb'    // default to BB until more parsers are added
-
-    // Auto-detect by content when filename is ambiguous
-    if (detectedBank === 'bb' && bank === 'auto') {
-      // Read a small portion of text to detect Itaú signature
-      // (full parse happens inside the bank-specific block below)
-    }
-
-    if (detectedBank === 'bb') {
-      const invoice = await parseBBInvoice(req.file.buffer)
-      const forecasts = invoiceToForecast(invoice)
-
-      const txs = invoice.transactions
-        .filter((t) => t.date)
-        .map((t, i) => ({
-          id: `bb-${i}`,
-          date: t.date,
-          description: t.description,
-          amountMinor: Math.abs(t.amountMinor),
-          installment: t.installment,
-          categoryId: null,
-          competencyMonth: invoice.summary.invoiceMonth,
-          include: t.amountMinor > 0,
-          category: t.category,
-          country: t.country,
-        }))
-
-      return res.json({
-        bank: 'bb',
-        summary: {
-          ...invoice.summary,
-        },
-        transactions: txs,
-        forecasts,
-      })
-    }
-
-    if (detectedBank === 'itau') {
-      const invoice = await parseItauInvoice(req.file.buffer)
-      const forecasts = itauInvoiceToForecast(invoice)
-
-      // Detecção automática por conteúdo (fallback quando o nome do arquivo não indica o banco)
-      const txs = invoice.transactions
-        .filter((t) => t.date)
-        .map((t, i) => ({
-          id: `itau-${i}`,
-          date: t.date,
-          description: t.description,
-          amountMinor: Math.abs(t.amountMinor),
-          installment: t.installment,
-          categoryId: null,
-          competencyMonth: invoice.summary.invoiceMonth,
-          include: t.amountMinor > 0,
-          category: t.category,
-          country: t.country,
-          originalAmountMinor: t.originalAmountMinor,
-          originalCurrencyCode: t.originalCurrencyCode,
-          exchangeRate: t.exchangeRate,
-        }))
-
-      return res.json({
-        bank: 'itau',
-        summary: {
-          ...invoice.summary,
-        },
-        transactions: txs,
-        forecasts,
-      })
-    }
-
-    throw createError(`Bank "${detectedBank}" parser is not yet implemented`, 501)
   }
 )
 

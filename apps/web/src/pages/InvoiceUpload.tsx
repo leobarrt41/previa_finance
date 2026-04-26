@@ -155,6 +155,8 @@ function TransactionPreviewRow({
 export function InvoiceUpload() {
   const [step, setStep] = useState<UploadStep>('select')
   const [file, setFile] = useState<File | null>(null)
+  const [pdfPassword, setPdfPassword] = useState('')
+  const [awaitingPassword, setAwaitingPassword] = useState(false)
   const [transactions, setTransactions] = useState<ParsedTransaction[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [invoiceMonth, setInvoiceMonth] = useState(currentMonth())
@@ -167,23 +169,56 @@ export function InvoiceUpload() {
     api.categories.list().then(setCategories).catch(() => {})
   }, [])
 
-  function handleFile(f: File) {
-    setFile(f)
+  function isPasswordRequiredError(error: unknown): boolean {
+    return error instanceof Error
+      && error.message.toLowerCase().includes('pdf protegido por senha')
+  }
+
+  function parseSelectedFile(selectedFile: File, password?: string) {
     setStep('parsing')
     setErrorMsg('')
 
-    api.invoices.parse(f)
+    api.invoices.parse(selectedFile, { password })
       .then((result) => {
         if (result.summary.dueMonth) setDueMonth(result.summary.dueMonth)
         if (result.summary.invoiceMonth) setInvoiceMonth(result.summary.invoiceMonth)
         setInvoiceSummary(result.summary)
         setTransactions(result.transactions)
+        setAwaitingPassword(false)
         setStep('preview')
       })
       .catch((e: unknown) => {
+        if (isPasswordRequiredError(e)) {
+          setAwaitingPassword(true)
+          setErrorMsg('Esta fatura exige senha. Informe a senha para gerar o preview.')
+          setStep('select')
+          return
+        }
         setErrorMsg(e instanceof Error ? e.message : 'Erro ao processar o arquivo. Verifique se é um PDF válido.')
         setStep('error')
       })
+  }
+
+  function handleFile(f: File) {
+    setFile(f)
+    setPdfPassword('')
+    setAwaitingPassword(false)
+    parseSelectedFile(f)
+  }
+
+  function submitPassword() {
+    if (!file) {
+      setErrorMsg('Selecione a fatura novamente.')
+      return
+    }
+
+    const password = pdfPassword.trim()
+    if (!password) {
+      setErrorMsg('Informe a senha da fatura para continuar.')
+      return
+    }
+
+    parseSelectedFile(file, password)
   }
 
   function handleChange(id: string, patch: Partial<ParsedTransaction>) {
@@ -221,6 +256,8 @@ export function InvoiceUpload() {
   function reset() {
     setStep('select')
     setFile(null)
+    setPdfPassword('')
+    setAwaitingPassword(false)
     setTransactions([])
     setInvoiceMonth(currentMonth())
     setDueMonth('')
@@ -247,6 +284,49 @@ export function InvoiceUpload() {
           <Card>
             <SectionTitle>Seleccionar arquivo</SectionTitle>
             <DropZone onFile={handleFile} />
+            {awaitingPassword && file && (
+              <div
+                style={{
+                  marginTop: '1rem',
+                  padding: '0.85rem',
+                  background: '#1f1627',
+                  borderLeft: '3px solid #f59e0b',
+                  borderRadius: '0 8px 8px 0',
+                }}
+              >
+                <p style={{ color: '#fcd34d', fontSize: '0.82rem', marginTop: 0, marginBottom: '0.55rem' }}>
+                  Arquivo protegido detectado: <strong>{file.name}</strong>
+                </p>
+                <label
+                  htmlFor="invoice-pdf-password"
+                  style={{ display: 'block', color: '#e5e7eb', fontSize: '0.8rem', marginBottom: '0.35rem' }}
+                >
+                  Digite a senha para continuar
+                </label>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <input
+                    id="invoice-pdf-password"
+                    type="password"
+                    value={pdfPassword}
+                    onChange={(e) => setPdfPassword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') submitPassword()
+                    }}
+                    placeholder="Senha do PDF"
+                    style={{
+                      flex: 1,
+                      background: '#0f1117',
+                      border: '1px solid #2a2f45',
+                      borderRadius: 8,
+                      padding: '0.65rem 0.75rem',
+                      color: '#e5e7eb',
+                      fontSize: '0.82rem',
+                    }}
+                  />
+                  <Button variant="primary" onClick={submitPassword}>Continuar</Button>
+                </div>
+              </div>
+            )}
             <div
               style={{
                 marginTop: '1rem',
