@@ -170,27 +170,23 @@ router.post(
 
       // bank=auto com filename ambíguo: tenta Itaú primeiro, depois BB.
       // Isso evita parse incorreto quando o nome do arquivo não contém "itau"/"bb".
-      const autoErrors: unknown[] = []
-      let hasPasswordError = false
-
       try {
         const payload = await parseAsItau()
         return res.json(payload)
       } catch (error) {
-        autoErrors.push(error)
-        hasPasswordError = hasPasswordError || isPdfPasswordError(error)
+        if (isPdfPasswordError(error)) {
+          // Evita chamar o parser BB quando o problema já é senha.
+          throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+        }
       }
 
       try {
         const payload = await parseAsBB()
         return res.json(payload)
       } catch (error) {
-        autoErrors.push(error)
-        hasPasswordError = hasPasswordError || isPdfPasswordError(error)
-      }
-
-      if (hasPasswordError) {
-        throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+        if (isPdfPasswordError(error)) {
+          throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+        }
       }
 
       throw createError('Não foi possível identificar automaticamente o banco da fatura. Selecione o banco manualmente.', 400)
