@@ -42,6 +42,12 @@ function toBigInt(value: unknown): bigint {
   return 0n
 }
 
+function addMonths(month: string, offset: number): string {
+  const [y, m] = month.split('-').map(Number)
+  const d = new Date(Date.UTC(y, m - 1 + offset, 1))
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+}
+
 // Schema de validação para projeção
 const CashFlowRequestSchema = z.object({
   startMonth: z.string().regex(/^\d{4}-\d{2}$/, 'Format must be YYYY-MM'),
@@ -145,6 +151,19 @@ router.post('/projection', async (req: Request, res: Response) => {
           .groupBy(cardTransactions.cardInvoiceId)
       : []
 
+    const dbInstallments = useDbCardInvoices
+      ? await db
+          .select({
+            id: cardTransactions.id,
+            competencyMonth: cardTransactions.competencyMonth,
+            amountMinor: cardTransactions.amountMinor,
+            installmentNumber: cardTransactions.installmentNumber,
+            installmentTotal: cardTransactions.installmentTotal,
+          })
+          .from(cardTransactions)
+          .where(eq(cardTransactions.userId, owner.id))
+      : []
+
     const sumByInvoiceId = new Map<string, bigint>(
       dbCardInvoiceSums.map((row) => [String(row.cardInvoiceId), toBigInt(row.totalMinor)]),
     )
@@ -185,6 +204,35 @@ router.post('/projection', async (req: Request, res: Response) => {
           amountMinor: BigInt(ci.amountMinor),
           paidMinor: ci.paidMinor !== undefined ? BigInt(ci.paidMinor) : undefined,
         }))
+
+    const projectedInstallmentInvoices = useDbCardInvoices
+      ? dbInstallments.flatMap((tx) => {
+          const n = tx.installmentNumber ?? 0
+          const t = tx.installmentTotal ?? 0
+          if (t <= 0 || n <= 0 || t <= n) return []
+
+          const remaining = t - n
+          const amountMinor = toBigInt(tx.amountMinor)
+          const baseMonth = tx.competencyMonth
+          const rows: Array<{ id: string; competencyMonth: string; dueMonth: string; amountMinor: bigint; paidMinor: bigint }> = []
+
+          for (let step = 1; step <= remaining; step++) {
+            const dueMonth = addMonths(baseMonth, step)
+            if (dueMonth < startMonth || dueMonth > endMonth) continue
+            rows.push({
+              id: `inst-${tx.id}-${step}`,
+              competencyMonth: baseMonth,
+              dueMonth,
+              amountMinor,
+              paidMinor: 0n,
+            })
+          }
+
+          return rows
+        })
+      : []
+
+    const finalCardInvoices = [...normalizedCardInvoices, ...projectedInstallmentInvoices]
     
     // Converter para formato do CashFlowEngine
     const input: CashFlowInput = {
@@ -192,7 +240,7 @@ router.post('/projection', async (req: Request, res: Response) => {
       projectionMonths,
       currentMonth: data.startMonth,
       transactions: normalizedTransactions,
-      cardInvoices: normalizedCardInvoices,
+      cardInvoices: finalCardInvoices,
       forecasts: data.forecasts?.map(f => ({
         ...f,
         amountMinor: BigInt(f.amountMinor)
