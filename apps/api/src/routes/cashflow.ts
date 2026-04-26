@@ -7,7 +7,11 @@
 import { Router, Request, Response } from 'express'
 import { z } from 'zod'
 import { CashFlowEngine, CashFlowInput } from '@previa/core'
+import { transactions, cardInvoices } from '@previa/db'
+import { and, eq, inArray, gte, lte } from 'drizzle-orm'
 import { createError } from '../middlewares/errorHandler.js'
+import { getDatabase } from '../config/database.js'
+import { resolveOwnerId } from '../services/ownerStore.js'
 
 const router: Router = Router()
 
@@ -76,21 +80,93 @@ router.post('/projection', async (req: Request, res: Response) => {
     // Validação dos dados
     const data = CashFlowRequestSchema.parse(req.body)
     const projectionMonths = buildProjectionMonths(data.startMonth, data.months)
+    const startMonth = projectionMonths[0]
+    const endMonth = projectionMonths[projectionMonths.length - 1]
+
+    const db = getDatabase()
+    const clerkUserId = req.authUser?.clerkUserId ?? 'dev-user'
+    const owner = await resolveOwnerId(clerkUserId)
+
+    const useDbTransactions = !data.transactions || data.transactions.length === 0
+    const useDbCardInvoices = !data.cardInvoices || data.cardInvoices.length === 0
+
+    const dbTransactions = useDbTransactions
+      ? await db
+          .select({
+            id: transactions.id,
+            competencyMonth: transactions.competencyMonth,
+            movementType: transactions.movementType,
+            amountMinor: transactions.amountMinor,
+          })
+          .from(transactions)
+          .where(
+            and(
+              eq(transactions.userId, owner.id),
+              inArray(transactions.movementType, ['income', 'expense', 'transfer', 'liability_payment', 'card_purchase']),
+              gte(transactions.competencyMonth, startMonth),
+              lte(transactions.competencyMonth, endMonth),
+            ),
+          )
+      : []
+
+    const dbCardInvoices = useDbCardInvoices
+      ? await db
+          .select({
+            id: cardInvoices.id,
+            invoiceMonth: cardInvoices.invoiceMonth,
+            dueDate: cardInvoices.dueDate,
+            totalAmountMinor: cardInvoices.totalAmountMinor,
+            paidAmountMinor: cardInvoices.paidAmountMinor,
+          })
+          .from(cardInvoices)
+          .where(
+            and(
+              eq(cardInvoices.userId, owner.id),
+              lte(cardInvoices.invoiceMonth, endMonth),
+            ),
+          )
+      : []
+
+    const normalizedTransactions = useDbTransactions
+      ? dbTransactions.map((t) => ({
+          id: String(t.id),
+          competencyMonth: t.competencyMonth,
+          type: t.movementType as 'income' | 'expense' | 'transfer' | 'liability_payment' | 'card_purchase',
+          amountMinor: BigInt(t.amountMinor),
+        }))
+      : data.transactions!.map((t) => ({
+          ...t,
+          amountMinor: BigInt(t.amountMinor),
+        }))
+
+    const normalizedCardInvoices = useDbCardInvoices
+      ? dbCardInvoices
+          .map((ci) => {
+            const dueDate = ci.dueDate instanceof Date ? ci.dueDate : new Date(ci.dueDate as unknown as string)
+            const dueMonth = `${dueDate.getUTCFullYear()}-${String(dueDate.getUTCMonth() + 1).padStart(2, '0')}`
+
+            return {
+              id: String(ci.id),
+              competencyMonth: ci.invoiceMonth,
+              dueMonth,
+              amountMinor: BigInt(ci.totalAmountMinor),
+              paidMinor: BigInt(ci.paidAmountMinor ?? 0n),
+            }
+          })
+          .filter((ci) => ci.dueMonth >= startMonth)
+      : data.cardInvoices!.map((ci) => ({
+          ...ci,
+          amountMinor: BigInt(ci.amountMinor),
+          paidMinor: ci.paidMinor !== undefined ? BigInt(ci.paidMinor) : undefined,
+        }))
     
     // Converter para formato do CashFlowEngine
     const input: CashFlowInput = {
       openingBalanceMinor: BigInt(data.openingBalanceMinor),
       projectionMonths,
       currentMonth: data.startMonth,
-      transactions: data.transactions?.map(t => ({
-        ...t,
-        amountMinor: BigInt(t.amountMinor)
-      })) || [],
-      cardInvoices: data.cardInvoices?.map(ci => ({
-        ...ci,
-        amountMinor: BigInt(ci.amountMinor),
-        paidMinor: ci.paidMinor !== undefined ? BigInt(ci.paidMinor) : undefined
-      })) || [],
+      transactions: normalizedTransactions,
+      cardInvoices: normalizedCardInvoices,
       forecasts: data.forecasts?.map(f => ({
         ...f,
         amountMinor: BigInt(f.amountMinor)
