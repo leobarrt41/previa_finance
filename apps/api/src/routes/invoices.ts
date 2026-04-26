@@ -176,7 +176,13 @@ router.post('/import', async (req: Request, res: Response) => {
   // 3. Resolve or create the card_invoice for this month
   //    card_invoice = passivo mensal do cartão (NÃO afeta o caixa)
   // -------------------------------------------------------------------------
-  const dueDate = new Date(`${body.dueMonth ?? body.invoiceMonth}-01T12:00:00Z`)
+  // Ensure dueMonth is provided or default to invoiceMonth
+  const dueMo = body.dueMonth || body.invoiceMonth
+  if (!dueMo || !dueMo.match(/^\d{4}-\d{2}$/)) {
+    throw createError(`Invalid dueMonth format: ${dueMo}. Expected YYYY-MM.`, 400)
+  }
+  const dueDate = new Date(`${dueMo}-15T23:59:59Z`) // 15th of due month at EOD
+
 
   let cardInvoiceId: number
   const [existingInvoice] = await db
@@ -199,7 +205,7 @@ router.post('/import', async (req: Request, res: Response) => {
         userId: owner.id,
         accountId,
         invoiceMonth: body.invoiceMonth,
-        dueDate: dueDate,
+        dueDate, // Ensure this is a valid Date object
         totalAmountMinor: 0n,
         paidAmountMinor: 0n,
         previousBalanceMinor: 0n,
@@ -207,14 +213,16 @@ router.post('/import', async (req: Request, res: Response) => {
         status: 'OPEN',
         source: 'pdf_invoice',
         dataState: 'consolidated',
+        // closingDate, created_at, updated_at: omitted — use DB defaults
       })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error('[import] failed to create card_invoice:', {
         invoiceMonth: body.invoiceMonth,
-        dueDate: dueDate,
         dueMonth: body.dueMonth,
+        dueDate: dueDate?.toISOString?.(),
         error: msg,
+        stack: err instanceof Error ? err.stack : undefined,
       })
       throw createError(`Failed to create card_invoice: ${msg}`, 500)
     }
