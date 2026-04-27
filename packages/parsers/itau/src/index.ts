@@ -400,9 +400,20 @@ function parseNationalTransactions(
 
   // Ignorar secção de próximas faturas
   let inNextInvoices = false
+  let inTransactionsSection = false
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
+
+    if (!inTransactionsSection) {
+      if (/^Pagamentos\s+efetuados$/i.test(line)
+        || /^DATA\s+VALOR\s+EM\s+R\$/i.test(line)
+        || /^Lançamentos:\s*compras\s+e\s+saques/i.test(line)
+        || /^DATA\s+ESTABELECIMENTO\s+VALOR\s+EM\s+R\$/i.test(line)) {
+        inTransactionsSection = true
+      }
+      continue
+    }
 
     if (/^Compras\s*parceladas\s*-\s*pr[oó]ximas\s*faturas/i.test(line)
       || /^Comprasparceladas-próximas/i.test(line)) {
