@@ -213,7 +213,36 @@ const importBodySchema = z.object({
   invoiceMonth: z.string().regex(/^\d{4}-\d{2}$/),
   dueMonth: z.string().regex(/^\d{4}-\d{2}$/).optional(),
   bank: z.string().optional(),
+  cardLast4: z.string().max(4).optional(),
+  product: z.string().optional(),
+  sourceFileName: z.string().optional(),
 })
+
+const INSTITUTION_MAP: Record<string, string> = {
+  itau: 'Itaú',
+  bb: 'Banco do Brasil',
+  nubank: 'Nubank',
+  bradesco: 'Bradesco',
+  santander: 'Santander',
+  caixa: 'Caixa Econômica Federal',
+  inter: 'Banco Inter',
+  picpay: 'PicPay',
+}
+
+function extractCardBrand(...sources: Array<string | undefined>): string | null {
+  const joined = sources
+    .filter((value): value is string => Boolean(value && value.trim()))
+    .join(' ')
+    .toUpperCase()
+
+  if (!joined) return null
+  if (joined.includes('VISA')) return 'VISA'
+  if (joined.includes('MASTERCARD') || joined.includes('MASTER')) return 'MASTERCARD'
+  if (joined.includes('ELO')) return 'ELO'
+  if (joined.includes('AMEX') || joined.includes('AMERICAN EXPRESS')) return 'AMEX'
+  if (joined.includes('HIPERCARD')) return 'HIPERCARD'
+  return null
+}
 
 router.post('/import', async (req: Request, res: Response) => {
   const body = importBodySchema.parse(req.body)
@@ -224,24 +253,49 @@ router.post('/import', async (req: Request, res: Response) => {
   const owner = await resolveOwnerId(clerkUserId)
 
   // -------------------------------------------------------------------------
-  // 1. Resolve or create the credit card account
+  // 1. Resolve or create the credit card account by card identity
   // -------------------------------------------------------------------------
+  const institutionName = body.bank
+    ? (INSTITUTION_MAP[body.bank.toLowerCase()] ?? body.bank)
+    : null
+  const cardBrand = extractCardBrand(body.product, body.sourceFileName)
+  const cardLast4 = body.cardLast4 ?? null
+
   let accountId: number
-  const [existingAccount] = await db
-    .select({ id: accounts.id })
-    .from(accounts)
-    .where(eq(accounts.userId, owner.id))
-    .orderBy(desc(accounts.id))
-    .limit(1)
+
+  // Prefer matching by (userId, institutionName, cardLast4) — most specific
+  const whereConditions = [
+    eq(accounts.userId, owner.id),
+    ...(institutionName ? [eq(accounts.institutionName, institutionName)] : []),
+    ...(cardLast4 ? [eq(accounts.cardLast4, cardLast4)] : []),
+  ]
+  const hasIdentity = !!(institutionName && cardLast4)
+
+  const [existingAccount] = hasIdentity
+    ? await db
+        .select({ id: accounts.id })
+        .from(accounts)
+        .where(and(...whereConditions))
+        .limit(1)
+    : []
 
   if (existingAccount) {
     accountId = existingAccount.id
   } else {
+    // Build a human-readable display name: "Itaú Platinum ••••9970"
+    const last4Display = cardLast4 ? ` ••••${cardLast4}` : ''
+    const productDisplay = body.product ? ` ${body.product}` : ''
+    const institutionDisplay = institutionName ?? (body.bank ? body.bank.toUpperCase() : 'Cartão de crédito')
+    const displayName = `${institutionDisplay}${productDisplay}${last4Display}`.trim()
+
     await db.insert(accounts).values({
       userId: owner.id,
       type: 'CREDIT_CARD',
       financialChannel: 'credit_card',
-      displayName: body.bank ? `Cartão ${body.bank.toUpperCase()}` : 'Cartão de crédito',
+      displayName,
+      institutionName: institutionName ?? undefined,
+      cardBrand: cardBrand ?? undefined,
+      cardLast4: cardLast4 ?? undefined,
       source: 'manual',
       currencyCode: 'BRL',
       isActive: true,
@@ -252,7 +306,7 @@ router.post('/import', async (req: Request, res: Response) => {
       .where(eq(accounts.userId, owner.id))
       .orderBy(desc(accounts.id))
       .limit(1)
-    if (!created) throw createError('Failed to create default account', 500)
+    if (!created) throw createError('Failed to create account', 500)
     accountId = created.id
   }
 

@@ -45,7 +45,7 @@ async function request<T>(
   const res = await fetch(path, { ...options, headers })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new ApiError(res.status, body?.error ?? res.statusText, body)
+    throw new ApiError(res.status, getApiErrorMessage(body, res.statusText), body)
   }
   return res.json() as Promise<T>
 }
@@ -66,9 +66,25 @@ async function requestRaw<T>(
   const res = await fetch(path, { ...options, headers })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new ApiError(res.status, body?.error ?? res.statusText, body)
+    throw new ApiError(res.status, getApiErrorMessage(body, res.statusText), body)
   }
   return res.json() as Promise<T>
+}
+
+function getApiErrorMessage(body: unknown, fallback: string): string {
+  if (typeof body === 'string' && body.trim()) return body
+  if (body && typeof body === 'object') {
+    const asRecord = body as Record<string, unknown>
+    const nestedError = asRecord.error
+    if (typeof nestedError === 'string' && nestedError.trim()) return nestedError
+    if (nestedError && typeof nestedError === 'object') {
+      const nestedMessage = (nestedError as Record<string, unknown>).message
+      if (typeof nestedMessage === 'string' && nestedMessage.trim()) return nestedMessage
+    }
+    const topLevelMessage = asRecord.message
+    if (typeof topLevelMessage === 'string' && topLevelMessage.trim()) return topLevelMessage
+  }
+  return fallback
 }
 
 export class ApiError extends Error {
@@ -279,6 +295,9 @@ export interface InvoiceImportBody {
   invoiceMonth: string
   dueMonth?: string
   bank?: string
+  cardLast4?: string
+  product?: string
+  sourceFileName?: string
 }
 
 export interface InvoiceParseOptions {

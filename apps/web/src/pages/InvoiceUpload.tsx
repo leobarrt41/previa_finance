@@ -164,6 +164,7 @@ export function InvoiceUpload() {
   const [errorMsg, setErrorMsg] = useState('')
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number } | null>(null)
   const [invoiceSummary, setInvoiceSummary] = useState<InvoiceParseResult['summary'] | null>(null)
+  const [invoiceBank, setInvoiceBank] = useState<string | null>(null)
 
   useEffect(() => {
     api.categories.list().then(setCategories).catch(() => {})
@@ -244,6 +245,10 @@ export function InvoiceUpload() {
         })),
         invoiceMonth,
         dueMonth,
+        bank: invoiceBank ?? undefined,
+        cardLast4: invoiceSummary?.cardLast4 ?? undefined,
+        product: invoiceSummary?.product ?? undefined,
+        sourceFileName: file?.name,
       })
       setImportResult({ imported: result.imported, skipped: result.skipped })
       setStep('done')
@@ -264,6 +269,7 @@ export function InvoiceUpload() {
     setErrorMsg('')
     setImportResult(null)
     setInvoiceSummary(null)
+    setInvoiceBank(null)
   }
 
   return (
