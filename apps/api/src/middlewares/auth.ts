@@ -22,6 +22,19 @@ function getBearerToken(req: Request): string | null {
 export function requireClerkAuth(req: Request, _res: Response, next: NextFunction) {
   try {
     const token = getBearerToken(req)
+
+    const devAuthBypass = process.env.DEV_AUTH_BYPASS === 'true'
+    if (!token && devAuthBypass) {
+      const clerkUserId = process.env.DEV_USER_OPEN_ID || 'dev-user'
+      req.authUser = {
+        clerkUserId,
+        sessionId: 'dev-session',
+        authorizedParty: 'dev-local',
+      }
+      next()
+      return
+    }
+
     if (!token) {
       throw createError('Missing authorization token', 401)
     }

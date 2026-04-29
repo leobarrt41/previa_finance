@@ -11,13 +11,16 @@ export function Card({
   children,
   className = '',
   style,
+  onClick,
 }: {
   children: React.ReactNode
   className?: string
   style?: React.CSSProperties
+  onClick?: () => void
 }) {
   return (
     <div
+      onClick={onClick}
       style={{
         background: '#1e2130',
         borderRadius: 12,

@@ -11,7 +11,7 @@
  * Enquanto o parser não está implementado na API, o frontend
  * simula o preview com dados de exemplo para permitir testar o fluxo.
  */
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import { api, formatBRL, currentMonth, type Category, type InvoiceTransaction, type InvoiceParseResult } from '../services/api'
 import {
   Card,
@@ -30,6 +30,7 @@ import {
 // Types
 // ---------------------------------------------------------------------------
 type ParsedTransaction = InvoiceTransaction
+type CategoryOption = { id: string; label: string; disabled: boolean }
 
 type UploadStep = 'select' | 'parsing' | 'preview' | 'importing' | 'done' | 'error'
 
@@ -86,11 +87,11 @@ function DropZone({ onFile }: { onFile: (f: File) => void }) {
 
 function TransactionPreviewRow({
   tx,
-  categories,
+  categoryOptions,
   onChange,
 }: {
   tx: ParsedTransaction
-  categories: Category[]
+  categoryOptions: CategoryOption[]
   onChange: (id: string, patch: Partial<ParsedTransaction>) => void
 }) {
   return (
@@ -134,15 +135,14 @@ function TransactionPreviewRow({
           onChange={(e) => onChange(tx.id, { categoryId: e.target.value || null })}
           style={{
             background: '#0f1117', border: `1px solid ${tx.categoryId ? '#2a2f45' : '#f87171'}`,
-            borderRadius: 6, padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', maxWidth: 160,
+            borderRadius: 6, padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', maxWidth: 220,
+            fontFamily: 'monospace',
           }}
         >
           <option value="">— sem categoria —</option>
-          {categories
-            .filter((c) => c.type === 'expense')
-            .map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
+          {categoryOptions.map((opt) => (
+            <option key={opt.id} value={opt.id} disabled={opt.disabled}>{opt.label}</option>
+          ))}
         </select>
       </td>
     </tr>
@@ -166,6 +166,41 @@ export function InvoiceUpload() {
   const [invoiceSummary, setInvoiceSummary] = useState<InvoiceParseResult['summary'] | null>(null)
   const [invoiceBank, setInvoiceBank] = useState<string | null>(null)
 
+  const categoryOptions = useMemo(() => {
+    const expenses = categories.filter((c) => c.type === 'expense')
+    const parents = expenses.filter((c) => !c.parentId)
+    const byParent = new Map<string, Category[]>()
+
+    for (const cat of expenses) {
+      if (!cat.parentId) continue
+      const arr = byParent.get(cat.parentId) || []
+      arr.push(cat)
+      byParent.set(cat.parentId, arr)
+    }
+
+    const sortByName = (a: Category, b: Category) => a.name.localeCompare(b.name)
+
+    const options: CategoryOption[] = []
+    for (const parent of [...parents].sort(sortByName)) {
+      const children = [...(byParent.get(parent.id) || [])].sort(sortByName)
+      if (children.length > 0) {
+        options.push({ id: parent.id, label: parent.name, disabled: true })
+        for (const child of children) {
+          options.push({ id: child.id, label: `  └ ${child.name}`, disabled: false })
+        }
+      } else {
+        options.push({ id: parent.id, label: parent.name, disabled: false })
+      }
+    }
+
+    return options
+  }, [categories])
+
+  const expenseCategories = useMemo(
+    () => categories.filter((c) => c.type === 'expense'),
+    [categories]
+  )
+
   useEffect(() => {
     api.categories.list().then(setCategories).catch(() => {})
   }, [])
@@ -175,29 +210,74 @@ export function InvoiceUpload() {
       && error.message.toLowerCase().includes('pdf protegido por senha')
   }
 
-  function parseSelectedFile(selectedFile: File, password?: string) {
+  async function suggestCategoriesWithAI(parsedTransactions: ParsedTransaction[]): Promise<ParsedTransaction[]> {
+    if (expenseCategories.length === 0) return parsedTransactions
+
+    const pending = parsedTransactions.filter((t) => t.include && !t.categoryId)
+    if (pending.length === 0) return parsedTransactions
+
+    try {
+      const response = await api.invoices.classify({
+        transactions: pending.map((t) => ({
+          id: t.id,
+          description: t.description,
+          amountMinor: t.amountMinor,
+          country: t.country,
+          installment: t.installment,
+        })),
+        categories: expenseCategories.map((c) => ({
+          id: c.id,
+          name: c.name,
+          slug: c.slug,
+          type: c.type,
+          parentId: c.parentId,
+        })),
+      })
+
+      const suggestions = response.suggestions ?? {}
+      if (Object.keys(suggestions).length === 0) return parsedTransactions
+
+      return parsedTransactions.map((t) => {
+        const suggestion = suggestions[t.id]
+        if (!suggestion) return t
+        return {
+          ...t,
+          // card_transactions has one categoryId field today.
+          // Persist subcategory when available; fallback to parent category.
+          categoryId: suggestion.subcategoryId ?? suggestion.categoryId,
+        }
+      })
+    } catch {
+      return parsedTransactions
+    }
+  }
+
+  async function parseSelectedFile(selectedFile: File, password?: string) {
     setStep('parsing')
     setErrorMsg('')
 
-    api.invoices.parse(selectedFile, { password })
-      .then((result) => {
-        if (result.summary.dueMonth) setDueMonth(result.summary.dueMonth)
-        if (result.summary.invoiceMonth) setInvoiceMonth(result.summary.invoiceMonth)
-        setInvoiceSummary(result.summary)
-        setTransactions(result.transactions)
-        setAwaitingPassword(false)
-        setStep('preview')
-      })
-      .catch((e: unknown) => {
-        if (isPasswordRequiredError(e)) {
-          setAwaitingPassword(true)
-          setErrorMsg('Esta fatura exige senha. Informe a senha para gerar o preview.')
-          setStep('select')
-          return
-        }
-        setErrorMsg(e instanceof Error ? e.message : 'Erro ao processar o arquivo. Verifique se é um PDF válido.')
-        setStep('error')
-      })
+    try {
+      const result = await api.invoices.parse(selectedFile, { password })
+      if (result.summary.dueMonth) setDueMonth(result.summary.dueMonth)
+      if (result.summary.invoiceMonth) setInvoiceMonth(result.summary.invoiceMonth)
+      setInvoiceSummary(result.summary)
+      setInvoiceBank(result.bank)
+
+      const suggestedTransactions = await suggestCategoriesWithAI(result.transactions)
+      setTransactions(suggestedTransactions)
+
+      setAwaitingPassword(false)
+      setStep('preview')
+    } catch (e: unknown) {
+      if (isPasswordRequiredError(e)) {
+        setAwaitingPassword(true)
+        setErrorMsg('Esta fatura exige senha. Informe a senha para gerar o preview.')
+        setStep('select')
+        return
+      }
+      setErrorMsg(e instanceof Error ? e.message : 'Erro ao processar o arquivo. Verifique se é um PDF válido.')
+      setStep('error')
+    }
   }
 
   function handleFile(f: File) {
@@ -249,6 +329,12 @@ export function InvoiceUpload() {
         cardLast4: invoiceSummary?.cardLast4 ?? undefined,
         product: invoiceSummary?.product ?? undefined,
         sourceFileName: file?.name,
+        dueDate: invoiceSummary?.dueDate ?? undefined,
+        closingDate: invoiceSummary?.closingDate ?? undefined,
+        totalMinor: invoiceSummary?.totalMinor ?? undefined,
+        previousBalanceMinor: invoiceSummary?.previousBalanceMinor ?? undefined,
+        paymentsMinor: invoiceSummary?.paymentsMinor ?? undefined,
+        openBalanceMinor: invoiceSummary?.openBalanceMinor ?? undefined,
       })
       setImportResult({ imported: result.imported, skipped: result.skipped })
       setStep('done')
@@ -486,16 +572,16 @@ export function InvoiceUpload() {
                     <th style={{ padding: '0.5rem', textAlign: 'left' }}>Categoria</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {transactions.map((tx) => (
-                    <TransactionPreviewRow
-                      key={tx.id}
-                      tx={tx}
-                      categories={categories}
-                      onChange={handleChange}
-                    />
-                  ))}
-                </tbody>
+                  <tbody>
+                    {transactions.map((tx) => (
+                      <TransactionPreviewRow
+                        key={tx.id}
+                        tx={tx}
+                        categoryOptions={categoryOptions}
+                        onChange={handleChange}
+                      />
+                    ))}
+                  </tbody>
               </table>
             </div>
           </Card>

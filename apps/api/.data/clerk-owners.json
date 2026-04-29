@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1,
+    "clerkUserId": "dev-user",
+    "createdAt": "2026-04-25T01:09:18.109Z",
+    "updatedAt": "2026-04-25T01:09:18.109Z"
+  },
+  {
+    "id": 2,
+    "clerkUserId": "dev-user-2",
+    "createdAt": "2026-04-28T00:17:03.585Z",
+    "updatedAt": "2026-04-28T00:17:03.585Z"
+  }
+]

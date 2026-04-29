@@ -1,0 +1,437 @@
+OFXHEADER:100
+DATA:OFXSGML
+VERSION:102
+SECURITY:NONE
+ENCODING:UTF-8
+CHARSET:NONE
+COMPRESSION:NONE
+OLDFILEUID:NONE
+NEWFILEUID:NONE
+
+
+<OFX>
+  <SIGNONMSGSRSV1>
+   <SONRS>
+    <STATUS>
+      <CODE>0</CODE>
+      <SEVERITY>INFO</SEVERITY>
+    </STATUS>
+    <DTSERVER>20260427210937[-3:BRT]</DTSERVER>
+    <LANGUAGE>POR</LANGUAGE>
+    <FI>
+     <ORG>Banco do Brasil</ORG>
+     <FID>1</FID>
+    </FI>
+   </SONRS>
+  </SIGNONMSGSRSV1>
+  <BANKMSGSRSV1>
+    <STMTTRNRS>
+      <TRNUID>1</TRNUID>
+        <STATUS>
+        <CODE>0</CODE>
+        <SEVERITY>INFO</SEVERITY>
+       </STATUS>
+      <STMTRS>
+        <CURDEF>BRL</CURDEF>
+        <BANKACCTFROM>
+          <BANKID>1</BANKID>
+          <BRANCHID>765</BRANCHID>
+          <ACCTID>50625</ACCTID>
+          <ACCTTYPE>CHECKING</ACCTTYPE>
+        </BANKACCTFROM>
+        <BANKTRANLIST>
+            <DTSTART>20260427000000[-3:BRT]</DTSTART>
+            <DTEND>20260427210937[-3:BRT]</DTEND>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>20260330000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>0.00</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo Anterior</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>20260401000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>8112.82</TRNAMT>
+              <FITID>81.144</FITID>
+              <NAME>Recebimento de Proventos</NAME>
+              <MEMO>00.394.429/0082-76 COMANDO DA AERONAUT</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260401000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-0.01</TRNAMT>
+              <FITID>391.100.701</FITID>
+              <NAME>Cobrança de I.O.F.</NAME>
+              <MEMO>IOF Saldo Devedor Conta</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260401000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-8112.81</TRNAMT>
+              <FITID>9.903</FITID>
+              <NAME>BB Rende Fácil</NAME>
+              <MEMO>Rende Facil</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>00021130000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>0.00</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo do dia</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260402000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-30.00</TRNAMT>
+              <FITID>40.201</FITID>
+              <NAME>Pix - Enviado</NAME>
+              <MEMO>02/04 12:51 NUTRIVALE</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260402000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-67.20</TRNAMT>
+              <FITID>34.329</FITID>
+              <NAME>Pagto Mensalidade Clube</NAME>
+              <MEMO>ADC-CTA REC</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>20260402000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>97.20</TRNAMT>
+              <FITID>9.903</FITID>
+              <NAME>BB Rende Fácil</NAME>
+              <MEMO>Rende Facil</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>00021130000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>0.00</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo do dia</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260406000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-30.00</TRNAMT>
+              <FITID>141.090</FITID>
+              <NAME>Compra com Cartão</NAME>
+              <MEMO>05/04 11:24 MFA ESTACIONAMENTO</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260406000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-10.83</TRNAMT>
+              <FITID>271.692</FITID>
+              <NAME>Compra com Cartão</NAME>
+              <MEMO>05/04 19:54 CARREFOUR SJC</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260406000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-10.98</TRNAMT>
+              <FITID>371.992</FITID>
+              <NAME>Compra com Cartão</NAME>
+              <MEMO>05/04 19:59 CARREFOUR DJC</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260406000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-1000.00</TRNAMT>
+              <FITID>40.601</FITID>
+              <NAME>Pix - Enviado</NAME>
+              <MEMO>06/04 20:03 ITAU UNIBANCO HOLDING S A</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260406000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-137.54</TRNAMT>
+              <FITID>40.602</FITID>
+              <NAME>Pix - Enviado</NAME>
+              <MEMO>06/04 22:39 MASTER DA WEB</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260406000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-187.69</TRNAMT>
+              <FITID>21.335</FITID>
+              <NAME>CLARO S/A - MÓVEL</NAME>
+              <MEMO>CLARO SP DDD 11</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260406000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-35.00</TRNAMT>
+              <FITID>220.000</FITID>
+              <NAME>Movimento do Dia</NAME>
+              <MEMO>Clube de beneficios 04/2026</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>20260406000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>1412.04</TRNAMT>
+              <FITID>9.903</FITID>
+              <NAME>BB Rende Fácil</NAME>
+              <MEMO>Rende Facil</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>00021130000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>0.00</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo do dia</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>20260407000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>1500.00</TRNAMT>
+              <FITID>71.415.232.671.862</FITID>
+              <NAME>Pix - Recebido</NAME>
+              <MEMO>07/04 14:15 00027827286879 MARIA FRANC</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260407000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-1500.00</TRNAMT>
+              <FITID>9.903</FITID>
+              <NAME>BB Rende Fácil</NAME>
+              <MEMO>Rende Facil</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>00021130000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>0.00</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo do dia</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>20260408000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>25.49</TRNAMT>
+              <FITID>907.120.495.000.001</FITID>
+              <NAME>Cashback com pontos</NAME>
+              <MEMO>Cashback Automático</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260408000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-3263.32</TRNAMT>
+              <FITID>650.076.500.152.933</FITID>
+              <NAME>Pagto cartão crédito</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260408000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-1930.22</TRNAMT>
+              <FITID>40.801</FITID>
+              <NAME>Pagamento de Boleto</NAME>
+              <MEMO>SAFRA CFI S.A.</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>20260408000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>5168.05</TRNAMT>
+              <FITID>9.903</FITID>
+              <NAME>BB Rende Fácil</NAME>
+              <MEMO>Rende Facil</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>00021130000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>0.00</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo do dia</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>20260410000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>194.58</TRNAMT>
+              <FITID>1.565.788.000.000</FITID>
+              <NAME>Ordem Banc 12 Sec Tes Nac</NAME>
+              <MEMO>003944290164-57 GRUPAMENTO DE APOIO DE</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260410000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-120.00</TRNAMT>
+              <FITID>41.001</FITID>
+              <NAME>Pix - Enviado</NAME>
+              <MEMO>10/04 14:38 VINDI PAGAMENTOS ONLINE</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260410000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-1925.15</TRNAMT>
+              <FITID>41.002</FITID>
+              <NAME>Pagamento de Boleto</NAME>
+              <MEMO>BORDA DA MATA DESENV IMOB SA</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260410000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-350.00</TRNAMT>
+              <FITID>41.003</FITID>
+              <NAME>Pagamento de Boleto</NAME>
+              <MEMO>ASSOCIACAO DOS PROPRIETARIOS D</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260410000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-217.20</TRNAMT>
+              <FITID>41.004</FITID>
+              <NAME>Pagamento de Boleto</NAME>
+              <MEMO>BANCO BRADESCARD S A</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260410000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-251.57</TRNAMT>
+              <FITID>11.806</FITID>
+              <NAME>Pagamento Pedágio</NAME>
+              <MEMO>SEM PARAR</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260410000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-355.26</TRNAMT>
+              <FITID>26.447</FITID>
+              <NAME>Tokio Marine Seguradora</NAME>
+              <MEMO>TOKIO MARINE SEGURADORA</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>CREDIT</TRNTYPE>
+              <DTPOSTED>20260410000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>3011.26</TRNAMT>
+              <FITID>9.903</FITID>
+              <NAME>BB Rende Fácil</NAME>
+              <MEMO>Rende Facil</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>00021130000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-13.34</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo do dia</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260413000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-188.74</TRNAMT>
+              <FITID>41.301</FITID>
+              <NAME>Pix - Enviado</NAME>
+              <MEMO>13/04 16:06 CLARO</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>00021130000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-202.08</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo do dia</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260415000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-35.00</TRNAMT>
+              <FITID>41.501</FITID>
+              <NAME>Pix - Enviado</NAME>
+              <MEMO>15/04 09:48 51.290.446 DONIZETTI SIMO</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>00021130000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-237.08</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo do dia</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260420000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-20.07</TRNAMT>
+              <FITID>170.123</FITID>
+              <NAME>Compra com Cartão</NAME>
+              <MEMO>18/04 19:28 CVS</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260420000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-75.59</TRNAMT>
+              <FITID>260.583</FITID>
+              <NAME>Compra com Cartão</NAME>
+              <MEMO>19/04 16:49 NATURAL VALLE U</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260420000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-21.96</TRNAMT>
+              <FITID>367.539</FITID>
+              <NAME>Compra com Cartão</NAME>
+              <MEMO>19/04 18:45 RemedioPopular</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260420000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-35.00</TRNAMT>
+              <FITID>42.001</FITID>
+              <NAME>Pix - Enviado</NAME>
+              <MEMO>18/04 12:25 NUTRIVALE</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>00021130000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-389.70</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo do dia</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260422000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-10.71</TRNAMT>
+              <FITID>12.695</FITID>
+              <NAME>Pagto Mensalidade Seguro</NAME>
+              <MEMO>BB SEGUROS</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>00021130000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-400.41</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo do dia</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>20260424000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-8.90</TRNAMT>
+              <FITID>42.401</FITID>
+              <NAME>Pix - Enviado</NAME>
+              <MEMO>24/04 11:19 ASSOCIACAO DESPORTIVA CLA</MEMO>
+            </STMTTRN>
+            <STMTTRN>
+              <TRNTYPE>DEBIT</TRNTYPE>
+              <DTPOSTED>00021130000000[-3:BRT]</DTPOSTED>
+              <TRNAMT>-409.31</TRNAMT>
+              <FITID></FITID>
+              <NAME>Saldo do dia</NAME>
+              <MEMO></MEMO>
+            </STMTTRN>
+      </BANKTRANLIST>
+      <LEDGERBAL>
+        <BALAMT>-409.31</BALAMT>
+        <DTASOF>20260427000000[-3:BRT]</DTASOF>
+      </LEDGERBAL>
+    </STMTRS>
+    </STMTTRNRS>
+  </BANKMSGSRSV1>
+</OFX>

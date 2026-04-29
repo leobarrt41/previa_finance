@@ -1,11 +1,14 @@
-import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
-import { useState } from 'react';
-import reactLogo from './assets/react.svg';
-import viteLogo from './assets/vite.svg';
-import heroImg from './assets/hero.png';
-import './App.css';
-function App() {
-    const [count, setCount] = useState(0);
-    return (_jsxs(_Fragment, { children: [_jsxs("section", { id: "center", children: [_jsxs("div", { className: "hero", children: [_jsx("img", { src: heroImg, className: "base", width: "170", height: "179", alt: "" }), _jsx("img", { src: reactLogo, className: "framework", alt: "React logo" }), _jsx("img", { src: viteLogo, className: "vite", alt: "Vite logo" })] }), _jsxs("div", { children: [_jsx("h1", { children: "Get started" }), _jsxs("p", { children: ["Edit ", _jsx("code", { children: "src/App.tsx" }), " and save to test ", _jsx("code", { children: "HMR" })] })] }), _jsxs("button", { className: "counter", onClick: () => setCount((count) => count + 1), children: ["Count is ", count] })] }), _jsx("div", { className: "ticks" }), _jsxs("section", { id: "next-steps", children: [_jsxs("div", { id: "docs", children: [_jsx("svg", { className: "icon", role: "presentation", "aria-hidden": "true", children: _jsx("use", { href: "/icons.svg#documentation-icon" }) }), _jsx("h2", { children: "Documentation" }), _jsx("p", { children: "Your questions, answered" }), _jsxs("ul", { children: [_jsx("li", { children: _jsxs("a", { href: "https://vite.dev/", target: "_blank", children: [_jsx("img", { className: "logo", src: viteLogo, alt: "" }), "Explore Vite"] }) }), _jsx("li", { children: _jsxs("a", { href: "https://react.dev/", target: "_blank", children: [_jsx("img", { className: "button-icon", src: reactLogo, alt: "" }), "Learn more"] }) })] })] }), _jsxs("div", { id: "social", children: [_jsx("svg", { className: "icon", role: "presentation", "aria-hidden": "true", children: _jsx("use", { href: "/icons.svg#social-icon" }) }), _jsx("h2", { children: "Connect with us" }), _jsx("p", { children: "Join the Vite community" }), _jsxs("ul", { children: [_jsx("li", { children: _jsxs("a", { href: "https://github.com/vitejs/vite", target: "_blank", children: [_jsx("svg", { className: "button-icon", role: "presentation", "aria-hidden": "true", children: _jsx("use", { href: "/icons.svg#github-icon" }) }), "GitHub"] }) }), _jsx("li", { children: _jsxs("a", { href: "https://chat.vite.dev/", target: "_blank", children: [_jsx("svg", { className: "button-icon", role: "presentation", "aria-hidden": "true", children: _jsx("use", { href: "/icons.svg#discord-icon" }) }), "Discord"] }) }), _jsx("li", { children: _jsxs("a", { href: "https://x.com/vite_js", target: "_blank", children: [_jsx("svg", { className: "button-icon", role: "presentation", "aria-hidden": "true", children: _jsx("use", { href: "/icons.svg#x-icon" }) }), "X.com"] }) }), _jsx("li", { children: _jsxs("a", { href: "https://bsky.app/profile/vite.dev", target: "_blank", children: [_jsx("svg", { className: "button-icon", role: "presentation", "aria-hidden": "true", children: _jsx("use", { href: "/icons.svg#bluesky-icon" }) }), "Bluesky"] }) })] })] })] }), _jsx("div", { className: "ticks" }), _jsx("section", { id: "spacer" })] }));
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { Layout } from './components/Layout';
+import { Dashboard } from './pages/Dashboard';
+import { CashFlow } from './pages/CashFlow';
+import { Budget } from './pages/Budget';
+import { Categories } from './pages/Categories';
+import { Accounts } from './pages/Accounts';
+import { AccountDetail } from './pages/AccountDetail';
+import { InvoiceUpload } from './pages/InvoiceUpload';
+import { StatementUpload } from './pages/StatementUpload';
+export default function App() {
+    return (_jsx(BrowserRouter, { children: _jsx(Layout, { children: _jsxs(Routes, { children: [_jsx(Route, { path: "/", element: _jsx(Dashboard, {}) }), _jsx(Route, { path: "/cashflow", element: _jsx(CashFlow, {}) }), _jsx(Route, { path: "/budget", element: _jsx(Budget, {}) }), _jsx(Route, { path: "/accounts", element: _jsx(Accounts, {}) }), _jsx(Route, { path: "/accounts/:accountId", element: _jsx(AccountDetail, {}) }), _jsx(Route, { path: "/categories", element: _jsx(Categories, {}) }), _jsx(Route, { path: "/statements/upload", element: _jsx(StatementUpload, {}) }), _jsx(Route, { path: "/invoices/upload", element: _jsx(InvoiceUpload, {}) })] }) }) }));
 }
-export default App;

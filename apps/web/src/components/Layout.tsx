@@ -1,15 +1,38 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
+import { api } from '../services/api'
 
 const NAV_ITEMS = [
   { to: '/',                label: 'Dashboard',       icon: '🏠' },
   { to: '/cashflow',        label: 'CashFlow',        icon: '📈' },
   { to: '/budget',          label: 'Orçamento',       icon: '🎯' },
+  { to: '/accounts',        label: 'Contas',          icon: '🏦' },
+  { to: '/statements/upload', label: 'Upload Extrato', icon: '🧾' },
   { to: '/invoices/upload', label: 'Upload Fatura',   icon: '📤' },
   { to: '/categories',      label: 'Categorias',      icon: '🏷️' },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {
+  const [authLabel, setAuthLabel] = useState('Carregando usuario...')
+
+  useEffect(() => {
+    let active = true
+
+    api.auth.me()
+      .then((me) => {
+        if (!active) return
+        setAuthLabel(`${me.clerkUserId} (owner ${me.ownerId})`)
+      })
+      .catch(() => {
+        if (!active) return
+        setAuthLabel('Nao autenticado')
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#0f1117', color: '#e5e7eb' }}>
       {/* Sidebar */}
@@ -69,6 +92,24 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
       {/* Main content */}
       <main style={{ flex: 1, padding: '2rem', overflowY: 'auto' }}>
+        <div
+          style={{
+            marginBottom: '1rem',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.45rem',
+            padding: '0.35rem 0.65rem',
+            borderRadius: 999,
+            border: '1px solid #2b3150',
+            background: '#171b2e',
+            color: '#c7d2fe',
+            fontSize: '0.78rem',
+            fontWeight: 600,
+          }}
+        >
+          <span>Usuario ativo:</span>
+          <span style={{ color: '#e0e7ff' }}>{authLabel}</span>
+        </div>
         {children}
       </main>
     </div>

@@ -12,8 +12,10 @@ import { and, eq, inArray, gte, lte, sql } from 'drizzle-orm'
 import { createError } from '../middlewares/errorHandler.js'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
+import { requireClerkAuth } from '../middlewares/auth.js'
 
 const router: Router = Router()
+router.use(requireClerkAuth)
 
 function buildProjectionMonths(startMonth: string, months: number): string[] {
   const [yearPart, monthPart] = startMonth.split('-')
@@ -40,6 +42,10 @@ function toBigInt(value: unknown): bigint {
   if (typeof value === 'number') return BigInt(value)
   if (typeof value === 'string') return BigInt(value)
   return 0n
+}
+
+function absMinor(value: bigint): bigint {
+  return value < 0n ? -value : value
 }
 
 function addMonths(month: string, offset: number): string {
@@ -97,8 +103,7 @@ router.post('/projection', async (req: Request, res: Response) => {
     const endMonth = projectionMonths[projectionMonths.length - 1]
 
     const db = getDatabase()
-    const clerkUserId = req.authUser?.clerkUserId ?? 'dev-user'
-    const owner = await resolveOwnerId(clerkUserId)
+    const owner = await resolveOwnerId(req.authUser!.clerkUserId)
 
     const useDbTransactions = !data.transactions || data.transactions.length === 0
     const useDbCardInvoices = !data.cardInvoices || data.cardInvoices.length === 0
@@ -169,16 +174,25 @@ router.post('/projection', async (req: Request, res: Response) => {
     )
 
     const normalizedTransactions = useDbTransactions
-      ? dbTransactions.map((t) => ({
-          id: String(t.id),
-          competencyMonth: t.competencyMonth,
-          type: t.movementType as 'income' | 'expense' | 'transfer' | 'liability_payment' | 'card_purchase',
-          amountMinor: BigInt(t.amountMinor),
-        }))
-      : data.transactions!.map((t) => ({
-          ...t,
-          amountMinor: BigInt(t.amountMinor),
-        }))
+      ? dbTransactions.map((t) => {
+          const type = t.movementType as 'income' | 'expense' | 'transfer' | 'liability_payment' | 'card_purchase'
+          const rawAmount = toBigInt(t.amountMinor)
+          const amountMinor = type === 'transfer' ? rawAmount : absMinor(rawAmount)
+          return {
+            id: String(t.id),
+            competencyMonth: t.competencyMonth,
+            type,
+            amountMinor,
+          }
+        })
+      : data.transactions!.map((t) => {
+          const rawAmount = BigInt(t.amountMinor)
+          const amountMinor = t.type === 'transfer' ? rawAmount : absMinor(rawAmount)
+          return {
+            ...t,
+            amountMinor,
+          }
+        })
 
     const normalizedCardInvoices = useDbCardInvoices
       ? dbCardInvoices

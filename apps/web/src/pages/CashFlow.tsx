@@ -55,10 +55,10 @@ function toChartData(monthly: MonthlyCashFlow[], startMonth: string) {
     saldo: Number(m.projectedClosingBalanceMinor) / 100,
     receita: Number(m.totalIncomeMinor) / 100,
     despesaPaga: m.competencyMonth <= startMonth
-      ? (Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)) / 100
+      ? Math.abs(Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)) / 100
       : 0,
     despesaPrevista: m.competencyMonth > startMonth
-      ? (Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)) / 100
+      ? Math.abs(Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)) / 100
       : 0,
     cartaoProjetado: m.competencyMonth > startMonth
       ? Number(m.debtOpenMinor) / 100
@@ -426,7 +426,7 @@ export function CashFlow() {
                 {[
                   { label: 'Saldo final', value: Number(state.data.monthly[state.data.monthly.length - 1]?.projectedClosingBalanceMinor ?? 0), color: Number(state.data.monthly[state.data.monthly.length - 1]?.projectedClosingBalanceMinor ?? 0) >= 0 ? '#4ade80' : '#f87171' },
                   { label: 'Total receitas', value: state.data.monthly.reduce((s, m) => s + Number(m.totalIncomeMinor), 0), color: '#4ade80' },
-                  { label: 'Total despesas', value: state.data.monthly.reduce((s, m) => s + Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor), 0), color: '#f87171' },
+                  { label: 'Total despesas', value: Math.abs(state.data.monthly.reduce((s, m) => s + Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor), 0)), color: '#f87171' },
                 ].map(({ label, value, color }) => (
                   <div key={label} style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 10, padding: '0.75rem', textAlign: 'center' }}>
                     <p style={{ fontSize: '0.72rem', color: '#6b7280', marginBottom: 4 }}>{label}</p>
@@ -482,7 +482,7 @@ export function CashFlow() {
                     <tbody>
                       {state.data.monthly.map((m) => {
                         const closing = Number(m.projectedClosingBalanceMinor)
-                        const paidExpenseMinor = Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)
+                        const paidExpenseMinor = Math.abs(Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor))
                         return (
                           <tr key={m.competencyMonth} style={{ borderBottom: '1px solid #1e2130' }}>
                             <td style={{ padding: '0.45rem 0.5rem', color: '#e5e7eb', fontWeight: 600 }}>{m.competencyMonth}</td>

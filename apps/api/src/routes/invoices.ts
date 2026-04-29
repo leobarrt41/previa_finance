@@ -22,12 +22,15 @@ import { parseBBInvoice, invoiceToForecast } from '@previa/parser-bb'
 import { parseItauInvoice, itauInvoiceToForecast, isItauInvoice } from '@previa/parser-itau'
 import { accounts, categories, cardInvoices, cardTransactions } from '@previa/db'
 import { buildFingerprintFromRaw } from '@previa/core'
-import { eq, and, desc } from 'drizzle-orm'
+import { eq, and, desc, sql } from 'drizzle-orm'
 import { getDatabase } from '../config/database.js'
+import { config } from '../config/env.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { createError } from '../middlewares/errorHandler.js'
+import { requireClerkAuth } from '../middlewares/auth.js'
 
 const router: Router = Router()
+router.use(requireClerkAuth)
 
 // Store file in memory (max 20 MB)
 const upload = multer({
@@ -52,6 +55,157 @@ function isPdfPasswordError(error: unknown): boolean {
     || error.message.includes('PdfminerException')
     || error.message.includes('PDF_PASSWORD_REQUIRED')
     || error.message.includes('password')
+}
+
+const classifyBodySchema = z.object({
+  transactions: z.array(
+    z.object({
+      id: z.string(),
+      description: z.string().min(1),
+      amountMinor: z.number().int().positive(),
+      country: z.string().optional(),
+      installment: z.string().optional(),
+    })
+  ).max(200),
+  categories: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      slug: z.string().optional(),
+      type: z.string(),
+      parentId: z.string().nullable().optional(),
+    })
+  ).max(200),
+})
+
+type AiAssignment = {
+  transactionId: string
+  categoryId: string
+  subcategoryId?: string | null
+}
+
+function parseAiAssignments(raw: string): Array<AiAssignment> {
+  try {
+    const parsed = JSON.parse(raw) as {
+      assignments?: Array<{ transactionId?: string; categoryId?: string; subcategoryId?: string | null }>
+    }
+    if (!parsed.assignments || !Array.isArray(parsed.assignments)) return []
+    return parsed.assignments
+      .filter((item) => Boolean(item?.transactionId && item?.categoryId))
+      .map((item) => ({
+        transactionId: item.transactionId as string,
+        categoryId: item.categoryId as string,
+        subcategoryId: item.subcategoryId ?? null,
+      }))
+  } catch {
+    return []
+  }
+}
+
+async function classifyTransactionsWithAI(
+  txs: Array<{ id: string; description: string; amountMinor: number; country?: string; installment?: string }>,
+  availableCategories: Array<{ id: string; name: string; slug?: string; type: string; parentId?: string | null }>,
+): Promise<Record<string, { categoryId: string; subcategoryId: string | null }>> {
+  if (!config.ai.apiKey) return {}
+  if (txs.length === 0 || availableCategories.length === 0) return {}
+
+  const baseUrl = config.ai.baseUrl.replace(/\/$/, '')
+  const expenseCategories = availableCategories.filter((c) => c.type === 'expense')
+  const byId = new Map(expenseCategories.map((c) => [c.id, c]))
+  const parentCategories = expenseCategories.filter((c) => !c.parentId)
+  const subcategories = expenseCategories.filter((c) => Boolean(c.parentId))
+
+  const categoryCatalog = parentCategories.map((c) => ({
+    id: c.id,
+    name: c.name,
+    slug: c.slug ?? '',
+  }))
+
+  const subcategoryCatalog = subcategories.map((c) => ({
+    id: c.id,
+    name: c.name,
+    slug: c.slug ?? '',
+    parentId: c.parentId as string,
+    parentName: byId.get(c.parentId as string)?.name ?? '',
+  }))
+
+  const promptPayload = {
+    transactions: txs.map((t) => ({
+      id: t.id,
+      description: t.description,
+      amountMinor: t.amountMinor,
+      installment: t.installment ?? null,
+      country: t.country ?? null,
+    })),
+    categories: categoryCatalog,
+    subcategories: subcategoryCatalog,
+  }
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.ai.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.ai.model,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Voce classifica transacoes de cartao em categoria e subcategoria. Responda SOMENTE JSON no formato {"assignments":[{"transactionId":"...","categoryId":"...","subcategoryId":"...|null"}]}. categoryId deve ser uma categoria pai valida; subcategoryId deve pertencer a essa categoria pai (ou null quando nao houver).',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify(promptPayload),
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(15000),
+  })
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`AI classify failed (${response.status}): ${text}`)
+  }
+
+  const json = await response.json() as {
+    choices?: Array<{ message?: { content?: string } }>
+  }
+  const content = json.choices?.[0]?.message?.content ?? ''
+  const assignments = parseAiAssignments(content)
+
+  const parentIds = new Set(parentCategories.map((c) => c.id))
+  const subById = new Map(subcategories.map((c) => [c.id, c]))
+  const suggestions: Record<string, { categoryId: string; subcategoryId: string | null }> = {}
+
+  for (const item of assignments) {
+    let categoryId = item.categoryId
+    let subcategoryId: string | null = item.subcategoryId ?? null
+
+    // Backward compatibility: if model returns a leaf as categoryId,
+    // promote parent->categoryId and keep leaf as subcategoryId.
+    if (!parentIds.has(categoryId) && subById.has(categoryId)) {
+      const leaf = subById.get(categoryId)!
+      categoryId = leaf.parentId as string
+      subcategoryId = leaf.id
+    }
+
+    if (!parentIds.has(categoryId)) continue
+    if (subcategoryId) {
+      const sub = subById.get(subcategoryId)
+      if (!sub || sub.parentId !== categoryId) continue
+    }
+
+    suggestions[item.transactionId] = {
+      categoryId,
+      subcategoryId,
+    }
+  }
+
+  return suggestions
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +351,31 @@ router.post(
 )
 
 // ---------------------------------------------------------------------------
+// POST /api/invoices/classify
+// ---------------------------------------------------------------------------
+router.post('/classify', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = classifyBodySchema.parse(req.body)
+
+    // Feature is optional: when no key is configured, keep manual flow untouched.
+    if (!config.ai.apiKey) {
+      return res.json({ suggestions: {}, enabled: false })
+    }
+
+    const suggestions = await classifyTransactionsWithAI(body.transactions, body.categories)
+    return res.json({ suggestions, enabled: true })
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return next(createError('Payload inválido para classificação de categorias.', 400))
+    }
+
+    // Non-blocking behavior: never fail invoice flow because AI failed.
+    console.warn('[invoices/classify] fallback to manual categorization:', error)
+    return res.json({ suggestions: {}, enabled: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
 // POST /api/invoices/import
 // ---------------------------------------------------------------------------
 const importBodySchema = z.object({
@@ -216,6 +395,12 @@ const importBodySchema = z.object({
   cardLast4: z.string().max(4).optional(),
   product: z.string().optional(),
   sourceFileName: z.string().optional(),
+  dueDate: z.string().optional(),
+  closingDate: z.string().optional(),
+  totalMinor: z.number().int().nonnegative().optional(),
+  previousBalanceMinor: z.number().int().optional(),
+  paymentsMinor: z.number().int().optional(),
+  openBalanceMinor: z.number().int().optional(),
 })
 
 const INSTITUTION_MAP: Record<string, string> = {
@@ -244,13 +429,35 @@ function extractCardBrand(...sources: Array<string | undefined>): string | null 
   return null
 }
 
-router.post('/import', async (req: Request, res: Response) => {
-  const body = importBodySchema.parse(req.body)
-  const db = getDatabase()
+function parseInputDate(value: string, label: string): Date {
+  const trimmed = value.trim()
 
-  // Use 'dev-user' until Clerk auth is wired; resolveOwnerId auto-creates it
-  const clerkUserId = req.authUser?.clerkUserId ?? 'dev-user'
-  const owner = await resolveOwnerId(clerkUserId)
+  // Common date-only format from parsers
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const dateOnly = new Date(`${trimmed}T12:00:00Z`)
+    if (!Number.isNaN(dateOnly.getTime())) return dateOnly
+  }
+
+  // ISO / datetime fallback
+  const parsed = new Date(trimmed)
+  if (!Number.isNaN(parsed.getTime())) return parsed
+
+  throw createError(`Invalid ${label} format: ${value}.`, 400)
+}
+
+function assertValidDate(value: Date, label: string): Date {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    throw createError(`Invalid ${label} value.`, 400)
+  }
+  return value
+}
+
+router.post('/import', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = importBodySchema.parse(req.body)
+    const db = getDatabase()
+
+  const owner = await resolveOwnerId(req.authUser!.clerkUserId)
 
   // -------------------------------------------------------------------------
   // 1. Resolve or create the credit card account by card identity
@@ -325,61 +532,35 @@ router.post('/import', async (req: Request, res: Response) => {
   const totalImported = body.transactions
     .reduce((sum, t) => sum + BigInt(t.amountMinor), 0n)
 
+  const totalAmountMinor = BigInt(body.totalMinor ?? Number(totalImported))
+  const previousBalanceMinor = BigInt(body.previousBalanceMinor ?? 0)
+  const paidAmountMinor = BigInt(body.paymentsMinor ?? 0)
+  const fallbackOpen = totalAmountMinor - paidAmountMinor
+  const openAmountMinor = BigInt(body.openBalanceMinor ?? Number(fallbackOpen > 0n ? fallbackOpen : 0n))
+
   // -------------------------------------------------------------------------
   // 3. Resolve or create the card_invoice for this month
   //    card_invoice = passivo mensal do cartão (NÃO afeta o caixa)
   // -------------------------------------------------------------------------
-  // Ensure dueMonth is provided or default to invoiceMonth
-  const dueMo = body.dueMonth || body.invoiceMonth
-  if (!dueMo || !dueMo.match(/^\d{4}-\d{2}$/)) {
-    throw createError(`Invalid dueMonth format: ${dueMo}. Expected YYYY-MM.`, 400)
-  }
-  const dueDate = new Date(`${dueMo}-15T23:59:59Z`) // 15th of due month at EOD
-
-
-  let cardInvoiceId: number
-  const [existingInvoice] = await db
-    .select({ id: cardInvoices.id })
-    .from(cardInvoices)
-    .where(
-      and(
-        eq(cardInvoices.userId, owner.id),
-        eq(cardInvoices.accountId, accountId),
-        eq(cardInvoices.invoiceMonth, body.invoiceMonth),
-      )
-    )
-    .limit(1)
-
-  if (existingInvoice) {
-    cardInvoiceId = existingInvoice.id
-  } else {
-    try {
-      await db.insert(cardInvoices).values({
-        userId: owner.id,
-        accountId,
-        invoiceMonth: body.invoiceMonth,
-        dueDate, // Ensure this is a valid Date object
-        totalAmountMinor: totalImported,
-        paidAmountMinor: 0n,
-        previousBalanceMinor: 0n,
-        openAmountMinor: totalImported,
-        status: 'OPEN',
-        source: 'pdf_invoice',
-        dataState: 'consolidated',
-        // closingDate, created_at, updated_at: omitted — use DB defaults
-      })
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error('[import] failed to create card_invoice:', {
-        invoiceMonth: body.invoiceMonth,
-        dueMonth: body.dueMonth,
-        dueDate: dueDate?.toISOString?.(),
-        error: msg,
-        stack: err instanceof Error ? err.stack : undefined,
-      })
-      throw createError(`Failed to create card_invoice: ${msg}`, 500)
+  // Prefer parser dueDate (exact), fallback to dueMonth (15th)
+    let dueDate: Date
+    if (body.dueDate) {
+      dueDate = parseInputDate(body.dueDate, 'dueDate')
+    } else {
+      const dueMo = body.dueMonth || body.invoiceMonth
+      if (!dueMo || !dueMo.match(/^\d{4}-\d{2}$/)) {
+        throw createError(`Invalid dueMonth format: ${dueMo}. Expected YYYY-MM.`, 400)
+      }
+      dueDate = new Date(`${dueMo}-15T23:59:59Z`)
     }
-    const [created] = await db
+    dueDate = assertValidDate(dueDate, 'dueDate')
+
+    const closingDate = body.closingDate
+      ? assertValidDate(parseInputDate(body.closingDate, 'closingDate'), 'closingDate')
+      : null
+
+    let cardInvoiceId: number
+    const [existingInvoice] = await db
       .select({ id: cardInvoices.id })
       .from(cardInvoices)
       .where(
@@ -390,78 +571,137 @@ router.post('/import', async (req: Request, res: Response) => {
         )
       )
       .limit(1)
-    if (!created) throw createError('Failed to create card_invoice', 500)
-    cardInvoiceId = created.id
-  }
 
-  // -------------------------------------------------------------------------
-  // 4. Insert each purchase into card_transactions
-  //    IMPORTANT: card_transactions does NOT affect cash flow.
-  //    Only the invoice payment (in `transactions`) affects the bank account.
-  // -------------------------------------------------------------------------
-  let imported = 0
-  let skipped = 0
-
-  for (const tx of body.transactions) {
-    const occurredAt = new Date(`${tx.date}T12:00:00Z`)
-    const amountMinor = BigInt(tx.amountMinor)
-    const { fingerprint, normalizedDescription } = buildFingerprintFromRaw({
-      competencyMonth: tx.competencyMonth,
-      amountMinor,
-      rawDescription: tx.description,
-    })
-
-    // Parse installment info (e.g. "03/12")
-    let installmentNumber: number | null = null
-    let installmentTotal: number | null = null
-    let installmentGroupId: string | null = null
-    if (tx.installment) {
-      const parts = tx.installment.split('/')
-      installmentNumber = parseInt(parts[0], 10) || null
-      installmentTotal = parseInt(parts[1], 10) || null
-      installmentGroupId = `${fingerprint}-${installmentTotal}`
+    if (existingInvoice) {
+      cardInvoiceId = existingInvoice.id
+      await db.execute(sql`
+        update card_invoices
+        set
+          total_amount_minor = ${totalAmountMinor.toString()},
+          previous_balance_minor = ${previousBalanceMinor.toString()},
+          paid_amount_minor = ${paidAmountMinor.toString()},
+          open_amount_minor = ${openAmountMinor.toString()},
+          status = ${openAmountMinor > 0n ? 'OPEN' : 'PAID'},
+          updated_at = CURRENT_TIMESTAMP
+        where id = ${existingInvoice.id}
+      `)
+    } else {
+      try {
+        await db.insert(cardInvoices).values({
+          userId: owner.id,
+          accountId,
+          invoiceMonth: body.invoiceMonth,
+          dueDate,
+          ...(closingDate ? { closingDate } : {}),
+          totalAmountMinor,
+          paidAmountMinor,
+          previousBalanceMinor,
+          openAmountMinor,
+          status: openAmountMinor > 0n ? 'OPEN' : 'PAID',
+          source: 'pdf_invoice',
+          dataState: 'consolidated',
+        })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[import] failed to create card_invoice:', {
+          invoiceMonth: body.invoiceMonth,
+          dueMonth: body.dueMonth,
+          dueDate: dueDate?.toISOString?.(),
+          dueDateType: typeof dueDate,
+          dueDateIsDate: dueDate instanceof Date,
+          closingDateType: typeof closingDate,
+          closingDateIsDate: closingDate instanceof Date,
+          error: msg,
+          stack: err instanceof Error ? err.stack : undefined,
+        })
+        throw createError(`Failed to create card_invoice: ${msg}`, 500)
+      }
+      const [created] = await db
+        .select({ id: cardInvoices.id })
+        .from(cardInvoices)
+        .where(
+          and(
+            eq(cardInvoices.userId, owner.id),
+            eq(cardInvoices.accountId, accountId),
+            eq(cardInvoices.invoiceMonth, body.invoiceMonth),
+          )
+        )
+        .limit(1)
+      if (!created) throw createError('Failed to create card_invoice', 500)
+      cardInvoiceId = created.id
     }
 
-    try {
-      await db.insert(cardTransactions).values({
-        userId: owner.id,
-        cardInvoiceId,
-        source: 'pdf_invoice',
-        dataState: 'consolidated',
-        movementType: 'card_purchase',
-        movementSubtype: tx.installment ? 'installment' : 'single',
-        amountMinor,
-        currencyCode: 'BRL',
-        occurredAt,
+    // -------------------------------------------------------------------------
+    // 4. Insert each purchase into card_transactions
+    //    IMPORTANT: card_transactions does NOT affect cash flow.
+    //    Only the invoice payment (in `transactions`) affects the bank account.
+    // -------------------------------------------------------------------------
+    let imported = 0
+    let skipped = 0
+
+    for (const tx of body.transactions) {
+      const occurredAt = assertValidDate(parseInputDate(tx.date, 'transaction.date'), 'transaction.date')
+      const amountMinor = BigInt(tx.amountMinor)
+      const { fingerprint, normalizedDescription } = buildFingerprintFromRaw({
         competencyMonth: tx.competencyMonth,
-        description: tx.description,
-        normalizedDescription,
-        categoryId: tx.categoryId ?? null,
-        installmentNumber,
-        installmentTotal,
-        installmentGroupId,
-        fingerprint,
-        isReconciled: false,
+        amountMinor,
+        rawDescription: tx.description,
       })
-      imported++
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes('Duplicate entry') || msg.includes('ER_DUP_ENTRY')) {
-        skipped++
-      } else {
-        console.error('[import] insert error:', msg)
-        skipped++
+
+      // Parse installment info (e.g. "03/12")
+      let installmentNumber: number | null = null
+      let installmentTotal: number | null = null
+      let installmentGroupId: string | null = null
+      if (tx.installment) {
+        const parts = tx.installment.split('/')
+        installmentNumber = parseInt(parts[0], 10) || null
+        installmentTotal = parseInt(parts[1], 10) || null
+        installmentGroupId = `${fingerprint}-${installmentTotal}`
+      }
+
+      try {
+        await db.insert(cardTransactions).values({
+          userId: owner.id,
+          cardInvoiceId,
+          source: 'pdf_invoice',
+          dataState: 'consolidated',
+          movementType: 'card_purchase',
+          movementSubtype: tx.installment ? 'installment' : 'single',
+          amountMinor,
+          currencyCode: 'BRL',
+          occurredAt,
+          competencyMonth: tx.competencyMonth,
+          description: tx.description,
+          normalizedDescription,
+          categoryId: tx.categoryId ?? null,
+          installmentNumber,
+          installmentTotal,
+          installmentGroupId,
+          fingerprint,
+          isReconciled: false,
+        })
+        imported++
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.includes('Duplicate entry') || msg.includes('ER_DUP_ENTRY')) {
+          skipped++
+        } else {
+          console.error('[import] insert error:', msg)
+          skipped++
+        }
       }
     }
-  }
 
-  res.json({
-    imported,
-    skipped,
-    invoiceMonth: body.invoiceMonth,
-    dueMonth: body.dueMonth ?? null,
-    cardInvoiceId,
-  })
+    res.json({
+      imported,
+      skipped,
+      invoiceMonth: body.invoiceMonth,
+      dueMonth: body.dueMonth ?? null,
+      cardInvoiceId,
+    })
+  } catch (error) {
+    next(error)
+  }
 })
 
 export { router as invoiceRouter }

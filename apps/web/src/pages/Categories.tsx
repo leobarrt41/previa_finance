@@ -59,8 +59,15 @@ function CategoryRow({
   onDelete: (c: Category) => void
   onAddSub: (parent: Category) => void
 }) {
-  const [open, setOpen] = useState(false)
   const hasChildren = cat.children && cat.children.length > 0
+  const [open, setOpen] = useState(hasChildren)
+
+  // Keep parent expanded whenever it gains children after reload/create.
+  useEffect(() => {
+    if (hasChildren) {
+      setOpen(true)
+    }
+  }, [hasChildren])
 
   return (
     <div>

@@ -2,6 +2,40 @@
  * env.ts - Configuration from environment variables
  */
 
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { config as loadDotenv } from 'dotenv'
+
+const envCandidates = [
+  resolve(process.cwd(), '.env'),
+  resolve(process.cwd(), '../.env'),
+  resolve(process.cwd(), '../../.env'),
+]
+
+for (const candidate of envCandidates) {
+  if (existsSync(candidate)) {
+    loadDotenv({ path: candidate })
+  }
+}
+
+function parseDatabaseUrl(url?: string) {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    return {
+      host: parsed.hostname,
+      port: parsed.port ? parseInt(parsed.port, 10) : 3306,
+      username: decodeURIComponent(parsed.username),
+      password: decodeURIComponent(parsed.password),
+      database: parsed.pathname.replace(/^\//, ''),
+    }
+  } catch {
+    return null
+  }
+}
+
+const dbFromUrl = parseDatabaseUrl(process.env.DATABASE_URL)
+
 export const config = {
   server: {
     port: parseInt(process.env.PORT || '3001', 10),
@@ -9,11 +43,11 @@ export const config = {
   },
   
   database: {
-    host: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT || '3306', 10),
-    username: process.env.DB_USERNAME || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'previa_finance'
+    host: process.env.DB_HOST ?? dbFromUrl?.host ?? 'localhost',
+    port: parseInt(process.env.DB_PORT ?? String(dbFromUrl?.port ?? 3306), 10),
+    username: process.env.DB_USERNAME ?? dbFromUrl?.username ?? 'root',
+    password: process.env.DB_PASSWORD ?? dbFromUrl?.password ?? '',
+    database: process.env.DB_NAME ?? dbFromUrl?.database ?? 'previa_finance'
   },
   
   auth: {
@@ -27,5 +61,11 @@ export const config = {
   
   frontend: {
     url: process.env.FRONTEND_URL || 'http://localhost:5173'
+  },
+
+  ai: {
+    apiKey: process.env.AI_API_KEY || process.env.OPENAI_API_KEY || '',
+    model: process.env.AI_MODEL || process.env.LLM_MODEL_CLASSIFIER || 'gpt-4o-mini',
+    baseUrl: process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
   }
 }

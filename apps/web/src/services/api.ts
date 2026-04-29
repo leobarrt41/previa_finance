@@ -241,6 +241,175 @@ export interface Category {
   isSystem: boolean
 }
 
+export interface AccountMonthSummary {
+  month: string
+  count: number
+}
+
+export interface AccountSummary {
+  id: number
+  type: string
+  financialChannel: string
+  displayName: string
+  institutionName: string | null
+  cardBrand: string | null
+  cardLast4: string | null
+  bankMonths: AccountMonthSummary[]
+  invoiceMonths: AccountMonthSummary[]
+  totalBankEntries: number
+  totalInvoiceEntries: number
+}
+
+export interface AccountInvoiceLine {
+  id: number
+  occurredAt: string
+  description: string
+  amountMinor: number
+  competencyMonth: string
+  installmentNumber: number | null
+  installmentTotal: number | null
+  categoryId: string | null
+  categoryName: string | null
+}
+
+export interface AccountInvoiceLineCategoryUpdate {
+  id: number
+  categoryId: string | null
+  categoryName: string | null
+}
+
+export interface AccountInvoiceDetails {
+  accountId: number
+  month: string
+  account: {
+    id: number
+    displayName: string
+    type: string
+    institutionName: string | null
+    cardBrand: string | null
+    cardLast4: string | null
+  }
+  invoice: {
+    id: number
+    invoiceMonth: string
+    dueDate: string
+    totalAmountMinor: number
+    minimumPaymentMinor: number | null
+    paidAmountMinor: number
+    openAmountMinor: number
+    status: string
+    parserStrategy: string | null
+    institutionName: string | null
+    cardBrand: string | null
+    cardLast4: string | null
+  } | null
+  transactions: AccountInvoiceLine[]
+}
+
+export interface AccountBankTransactionLine {
+  id: number
+  occurredAt: string
+  description: string
+  amountMinor: number
+  competencyMonth: string
+  movementType: string
+  movementSubtype: string | null
+  categoryId: string | null
+  categoryName: string | null
+}
+
+export interface AccountStatementDetails {
+  accountId: number
+  month: string
+  account: {
+    id: number
+    displayName: string
+    type: string
+    institutionName: string | null
+    cardBrand: string | null
+    cardLast4: string | null
+  }
+  transactions: AccountBankTransactionLine[]
+}
+
+export interface StatementPreviewTransaction {
+  id: string
+  date: string
+  description: string
+  amountMinor: number
+  competencyMonth: string
+  movementType: string
+  movementSubtype?: string | null
+  providerTransactionId?: string | null
+  categoryId?: string | null
+  include: boolean
+}
+
+export interface StatementParseResult {
+  fileName: string
+  sourceAccount: {
+    institutionName: string | null
+    providerAccountId: string | null
+    accountLast4: string | null
+  }
+  detectedAccount: {
+    id: number
+    displayName: string
+  } | null
+  transactions: StatementPreviewTransaction[]
+}
+
+export interface StatementImportBody {
+  accountId?: number
+  sourceAccount?: {
+    institutionName?: string | null
+    providerAccountId?: string | null
+    accountLast4?: string | null
+  }
+  transactions: Array<{
+    date: string
+    description: string
+    amountMinor: number
+    competencyMonth?: string
+    movementType?: string
+    movementSubtype?: string | null
+    providerTransactionId?: string | null
+    categoryId?: string | null
+    include?: boolean
+  }>
+}
+
+export interface StatementImportResult {
+  imported: number
+  skippedDuplicates: number
+  skippedInvalid: number
+}
+
+export interface StatementClassifyBody {
+  transactions: Array<{
+    id: string
+    description: string
+    amountMinor: number
+    movementType: string
+    categoryId?: string | null
+  }>
+  categories: Array<{
+    id: string
+    name: string
+    slug?: string
+    type: string
+    parentId?: string | null
+  }>
+}
+
+export interface StatementClassifyResponse {
+  suggestions: Record<string, {
+    categoryId: string
+    subcategoryId: string | null
+    source: 'history' | 'ai'
+  }>
+}
+
 // --- Invoices ---
 
 export interface InvoiceTransaction {
@@ -298,6 +467,12 @@ export interface InvoiceImportBody {
   cardLast4?: string
   product?: string
   sourceFileName?: string
+  dueDate?: string
+  closingDate?: string
+  totalMinor?: number
+  previousBalanceMinor?: number
+  paymentsMinor?: number
+  openBalanceMinor?: number
 }
 
 export interface InvoiceParseOptions {
@@ -305,11 +480,47 @@ export interface InvoiceParseOptions {
   password?: string
 }
 
+export interface InvoiceClassifyBody {
+  transactions: Array<{
+    id: string
+    description: string
+    amountMinor: number
+    country?: string
+    installment?: string
+  }>
+  categories: Array<{
+    id: string
+    name: string
+    slug?: string
+    type: string
+    parentId?: string | null
+  }>
+}
+
+export interface InvoiceClassifyResponse {
+  suggestions: Record<string, {
+    categoryId: string
+    subcategoryId: string | null
+  }>
+  enabled: boolean
+}
+
+export interface AuthMeResponse {
+  clerkUserId: string
+  sessionId: string
+  ownerId: number
+  authorizedParty: string | null
+}
+
 // ---------------------------------------------------------------------------
 // API calls
 // ---------------------------------------------------------------------------
 
 export const api = {
+  auth: {
+    me: () => request<AuthMeResponse>('/api/auth/me'),
+  },
+
   cashflow: {
     project: (body: CashFlowRequest) =>
       request<CashFlowResponse>('/api/cashflow/projection', {
@@ -335,6 +546,27 @@ export const api = {
       }),
   },
 
+  transactions: {
+    parseStatement: (file: File): Promise<StatementParseResult> => {
+      const form = new FormData()
+      form.append('file', file)
+      return requestRaw<StatementParseResult>('/api/transactions/statement/parse', {
+        method: 'POST',
+        body: form,
+      })
+    },
+    classifyStatement: (body: StatementClassifyBody) =>
+      request<StatementClassifyResponse>('/api/transactions/statement/classify', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    importStatement: (body: StatementImportBody) =>
+      request<StatementImportResult>('/api/transactions/statement/import', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+  },
+
   categories: {
     list: () => request<Category[]>('/api/categories'),
     tree: () => request<Category[]>('/api/categories/tree'),
@@ -346,6 +578,33 @@ export const api = {
       request<{ deleted: boolean; id: string }>(`/api/categories/${id}`, { method: 'DELETE' }),
   },
 
+  accounts: {
+    list: () => request<{ items: AccountSummary[] }>('/api/accounts'),
+    invoiceDetails: (accountId: number, month: string) =>
+      request<AccountInvoiceDetails>(`/api/accounts/${accountId}/month/${month}/invoice`),
+    statementDetails: (accountId: number, month: string) =>
+      request<AccountStatementDetails>(`/api/accounts/${accountId}/month/${month}/statement`),
+    updateCardTransactionCategory: (cardTransactionId: number, categoryId: string | null) =>
+      request<AccountInvoiceLineCategoryUpdate>(`/api/accounts/card-transactions/${cardTransactionId}/category`, {
+        method: 'PATCH',
+        body: JSON.stringify({ categoryId }),
+      }),
+    updateBankTransactionCategory: (transactionId: number, categoryId: string | null) =>
+      request<{ id: number; categoryId: string | null; categoryName: string | null }>(
+        `/api/accounts/bank-transactions/${transactionId}/category`,
+        { method: 'PATCH', body: JSON.stringify({ categoryId }) },
+      ),
+    deleteByMonth: (accountId: number, month: string) =>
+      request<{
+        accountId: number
+        month: string
+        deletedBankTransactions: number
+        deletedCardInvoices: number
+        deletedCardTransactions: number
+        hasRemainingData: boolean
+      }>(`/api/accounts/${accountId}/month/${month}`, { method: 'DELETE' }),
+  },
+
   invoices: {
     /** Upload a PDF invoice and receive extracted transactions for preview. */
     parse: (file: File, options: InvoiceParseOptions = {}): Promise<InvoiceParseResult> => {
@@ -355,6 +614,12 @@ export const api = {
       if (options.password) form.append('password', options.password)
       return requestRaw<InvoiceParseResult>('/api/invoices/parse', { method: 'POST', body: form })
     },
+
+    classify: (body: InvoiceClassifyBody) =>
+      request<InvoiceClassifyResponse>('/api/invoices/classify', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
 
     /** Confirm and import the reviewed transactions. */
     import: (body: InvoiceImportBody) =>

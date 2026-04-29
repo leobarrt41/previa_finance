@@ -9,6 +9,7 @@ import { transactionRouter } from './transactions.js'
 import { categoryRouter } from './categories.js'
 import { authRouter } from './auth.js'
 import { invoiceRouter } from './invoices.js'
+import { accountRouter } from './accounts.js'
 
 export function setupRoutes(): Router {
   const router: Router = Router()
@@ -23,6 +24,7 @@ export function setupRoutes(): Router {
         cashflow: '/api/cashflow',
         budget: '/api/budget', 
         transactions: '/api/transactions',
+        accounts: '/api/accounts',
         categories: '/api/categories',
         invoices: '/api/invoices',
       }
@@ -34,6 +36,7 @@ export function setupRoutes(): Router {
   router.use('/budget', budgetRouter)
   router.use('/auth', authRouter)
   router.use('/transactions', transactionRouter)
+  router.use('/accounts', accountRouter)
   router.use('/categories', categoryRouter)
   router.use('/invoices', invoiceRouter)
 

@@ -258,6 +258,19 @@ CATEGORIA: Tarefa
 TÍTULO: Reorganizar estrutura de `packages` (mover domain-specific)  
 DESCRIÇÃO: Planejar e executar a reorganização de packages domain-specific para `packages/domains/*` (ex.: mover `packages/db` para `packages/domains/db`) e organizar libs em `packages/libs/*` conforme aplicável. Incluir inventário de pacotes, mapa de dependências cruzadas, atualização de `workspaces` no `package.json` raiz, ajustes em `tsconfig.json` `paths`/aliases, e checklist de PR com validações (build, typecheck, tests). Priorizar migração incremental e PRs pequenos para reduzir risco.  
 TAGS: reorg,packages,monorepo  
+
+---
+
+## [2026-04-27 22:41]
+
+ID: 20260427-2241-invoice-update-save-fix  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Bug  
+TÍTULO: Falha ao salvar fatura existente no import (`value.toISOString is not a function`)  
+DESCRIÇÃO: Reproduzido com payload real de fatura BB no endpoint `POST /api/invoices/import`. O caminho de criação (`insert`) funcionava, mas o caminho de atualização da fatura existente (`update`) falhava com erro interno do Drizzle em mapper de `timestamp` (`MySqlTimestamp.mapToDriverValue`). Causa raiz prática: bug no caminho de `update` do `card_invoices` ao persistir valores monetários/estado em combinação com o mapper da versão atual do ORM. Solução aplicada: substituir apenas o update dessa rota por SQL parametrizado com `db.execute(sql\`...\`)`, convertendo valores monetários para string (`toString()`) e mantendo `updated_at = CURRENT_TIMESTAMP`. Validação: build da API passou e reimport no mesmo mês retornou HTTP 200 sem erro.  
+TAGS: api,invoices,import,drizzle,mysql,bugfix  
+PRIORIDADE: Alta  
+STATUS: Concluído
 PRIORIDADE: Alta  
 STATUS: Pendente
 
@@ -550,3 +563,41 @@ DESCRIÇÃO: Definido escopo para implementação do parser de faturas do Itaú 
 TAGS: parser,itau,faturas,pdf,moeda,internacional,cashflow
 PRIORIDADE: Alta
 STATUS: Pendente
+---
+
+## [2026-04-27 22:50]
+
+ID: 20260427-2250-accounts-category-bad-gateway-fix  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Bug  
+TÍTULO: Troca de categoria em fatura derrubava API e causava Bad Gateway no frontend  
+DESCRIÇÃO: Ao chamar `PATCH /api/accounts/card-transactions/:id/category`, a rota lançava `createError('Categoria nao encontrada.', 404)` dentro de handler async sem encapsulamento com `try/catch` + `next`, causando queda do processo Node no Express 4 e cascata de `socket hang up`/`ECONNREFUSED` no Vite proxy (Bad Gateway). Além disso, havia desalinhamento funcional: `/api/categories` usa store em memória, enquanto a validação da rota de accounts consultava apenas a tabela `categories` do DB, gerando falso negativo para categorias criadas pelo front. Solução aplicada: (1) encapsular a rota PATCH com `try/catch` e repassar erros para middleware global via `next(error)`; (2) tornar a checagem de categoria não-bloqueante nessa rota para compatibilidade com o store atual de categorias. Build da API validado com sucesso após patch.  
+TAGS: bug,accounts,categories,bad-gateway,express,api,frontend-proxy  
+PRIORIDADE: Alta  
+STATUS: Concluído
+
+---
+
+## [2026-04-28 00:16]
+
+ID: 20260428-0016-statement-import-save-error
+SOURCE: previa_finance/copilot
+CATEGORIA: Bug
+TÍTULO: Upload de extrato parse OK, falha na etapa de salvar/importar
+DESCRIÇÃO: No fluxo novo de `Upload de Extratos Bancários` (OFX/CSV), o endpoint `POST /api/transactions/statement/parse` já retorna 200 com transações parseadas, porém a etapa de import/salvamento ainda apresenta erro em runtime no ambiente local. Hipótese principal levantada durante a sessão: inconsistência de tabela/colunas ou conflito de dados na gravação do import. Ação combinada: pausar investigação e retomar amanhã a partir da etapa de salvar (`/api/transactions/statement/import`), validando schema real no MySQL e query de insert/deduplicação.
+TAGS: bug,statement-upload,ofx,csv,transactions,import,deduplicacao
+PRIORIDADE: Alta
+STATUS: Em andamento
+
+## [2026-04-29 19:26]
+
+ID: 20260429192627-6249
+SOURCE: previa_finance/copilot
+CATEGORIA: Insight
+TÍTULO: Checkpoint solicitado pelo usuário antes da implementação de persistência de
+DESCRIÇÃO: Checkpoint solicitado pelo usuário antes da implementação de persistência de previsões recorrentes. Inclui ajustes em upload/classificação de extrato, categorização por histórico/regras/IA, bloqueio de edição para transferências neutras, exibição de usuário ativo no layout, separação de contas bancárias e faturas, correções de auth por owner, melhorias em cashflow (sinais/visualização) e uso opcional de webHint na classificação.
+TAGS: auth,ci,checkpoint,git,synapse,cashflow,statement,classificacao,contas
+PRIORIDADE: Média
+STATUS: Concluído
+
+---
