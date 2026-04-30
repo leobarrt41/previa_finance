@@ -154,21 +154,22 @@ export class CashFlowEngine {
         // obligations are expected outflows, so count as future commitment
       }
 
-      // card invoices affecting this month: mark open debts between competencyMonth and dueMonth
+      // Corrigido: para cada mês, mostrar apenas o saldo devedor aberto naquele mês (não repetir valor nos meses seguintes)
       for (const inv of invoices) {
+        // Considera a fatura "em aberto" apenas se ainda não foi totalmente paga até este mês
+        // e se o mês corrente está entre o mês da compra e o vencimento (inclusive)
         const paid = inv.paidMinor || zero()
         const outstanding = add(inv.amountMinor, (typeof paid === 'bigint' ? -BigInt(paid as any) : -(paid as any)))
         const outVal = typeof outstanding === 'bigint' ? (outstanding > 0n ? outstanding : 0n) : Math.max(0, outstanding as number)
 
-        // if current month is between competencyMonth (inclusive) and dueMonth (exclusive), show open debt
-        if (inv.competencyMonth <= month && month < inv.dueMonth) {
+        // Só mostra como "em aberto" se ainda não foi pago e o mês está entre competência e vencimento
+        if (inv.competencyMonth <= month && month <= inv.dueMonth && outVal) {
           debtOpen = add(debtOpen, outVal)
         }
 
         // on due month, include as committed (will reduce cash when paid)
         if (inv.dueMonth === month) {
           committed = add(committed, outVal)
-          debtOpen = add(debtOpen, outVal)
         }
       }
 

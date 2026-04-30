@@ -601,3 +601,29 @@ PRIORIDADE: Média
 STATUS: Concluído
 
 ---
+
+## [2026-04-30 17:30]
+
+ID: 20260430-1730-cashflow-heuristic-month-cursor  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Bug  
+TÍTULO: Heurístico de reconciliação de faturas ignorava pagamentos anteriores ao `startMonth`  
+DESCRIÇÃO: O cursor de meses do heurístico `inferredPaidCardInvoices` em `apps/api/src/routes/cashflow.ts` era gerado com `buildProjectionMonths(startMonth, data.months)`, ou seja, começava exatamente em `startMonth`. Pagamentos de fatura com `competencyMonth < startMonth` (ex.: fatura paga em fevereiro quando a projeção começa em abril) nunca eram casados com a fatura correspondente, deixando `paidMinor = 0` e exibindo a fatura como dívida em aberto no gráfico mesmo após quitada. Causa raiz: cursor de meses não incluía meses históricos com `liability_payment` no banco. Solução aplicada: o cursor passou a ser a união de todos os meses com pagamentos em `remainingByMonth` + os meses de projeção, ordenados cronologicamente. Arquivo alterado: `apps/api/src/routes/cashflow.ts`. Build validado com sucesso.  
+TAGS: cashflow,heuristic,reconciliation,bugfix,cartao,fatura  
+PRIORIDADE: Alta  
+STATUS: Concluído
+
+---
+
+## [2026-04-30 17:31]
+
+ID: 20260430-1731-cashflow-engine-debtopen-double-count  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Bug  
+TÍTULO: `debtOpenMinor` contado em dobro no mês de vencimento da fatura  
+DESCRIÇÃO: Em `packages/core/src/cashflow/CashFlowEngine.ts`, a lógica de cálculo do `debtOpen` acumulava `outVal` duas vezes para o mesmo mês quando `inv.dueMonth === month`: uma vez pelo bloco `inv.competencyMonth <= month` (correto — mantém dívida visível até quitação) e novamente pelo bloco `inv.dueMonth === month` (que deveria apenas adicionar ao `committed`). Resultado prático: o valor da coluna laranja ("Cartão em aberto") era o dobro do real no mês de vencimento, e faturas quitadas ainda apareciam com saldo residual no gráfico. Solução aplicada: removida a linha `debtOpen = add(debtOpen, outVal)` do bloco de `dueMonth`; o bloco agora só soma ao `committed` (compromisso de saída). Arquivo alterado: `packages/core/src/cashflow/CashFlowEngine.ts`. Build de `packages/core` e `apps/api` validados com sucesso.  
+TAGS: cashflow,engine,debtOpen,cartao,fatura,bugfix,double-count  
+PRIORIDADE: Alta  
+STATUS: Concluído
+
+---

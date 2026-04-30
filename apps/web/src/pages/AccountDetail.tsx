@@ -553,7 +553,7 @@ export function AccountDetail() {
                           Em aberto
                         </div>
                         <div style={{ color: '#f3f4f6', fontWeight: 700, fontSize: '1.05rem' }}>
-                          {formatBRL(invoiceDetails.invoice.openAmountMinor)}
+                          {formatBRL(invoiceDetails.invoice.emAbertoMinor)}
                         </div>
                       </div>
                     </div>

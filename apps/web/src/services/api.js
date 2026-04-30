@@ -41,6 +41,9 @@ async function request(path, options = {}) {
         const body = await res.json().catch(() => ({}));
         throw new ApiError(res.status, getApiErrorMessage(body, res.statusText), body);
     }
+    if (res.status === 204) {
+        return undefined;
+    }
     return res.json();
 }
 /** Like `request` but does NOT set Content-Type (lets browser set it for FormData). */
@@ -56,6 +59,9 @@ async function requestRaw(path, options = {}) {
     if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new ApiError(res.status, getApiErrorMessage(body, res.statusText), body);
+    }
+    if (res.status === 204) {
+        return undefined;
     }
     return res.json();
 }
@@ -99,6 +105,22 @@ export const api = {
             body: JSON.stringify(body),
         }),
         example: () => request('/api/cashflow/example'),
+        listRecurringTransactions: () => request('/api/cashflow/recurring-transactions'),
+        createRecurringTransaction: (body) => request('/api/cashflow/recurring-transactions', {
+            method: 'POST',
+            body: JSON.stringify(body),
+        }),
+        updateRecurringTransaction: (id, body) => request(`/api/cashflow/recurring-transactions/${id}`, {
+            method: 'PATCH',
+            body: JSON.stringify(body),
+        }),
+        deleteRecurringTransaction: (id) => request(`/api/cashflow/recurring-transactions/${id}`, {
+            method: 'DELETE',
+        }),
+        setRecurringMonthStatus: (id, competencyMonth, isPaid) => request(`/api/cashflow/recurring-transactions/${id}/month-status`, {
+            method: 'PUT',
+            body: JSON.stringify({ competencyMonth, isPaid }),
+        }),
     },
     budget: {
         analyzeTransaction: (body) => request('/api/budget/analyze-transaction', {

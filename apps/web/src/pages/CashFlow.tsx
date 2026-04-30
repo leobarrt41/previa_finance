@@ -6,7 +6,7 @@
  *
  * v2: adicionado suporte a Forecasts (recorrência: one-time | monthly | yearly)
  */
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import {
   ComposedChart,
   Bar,
@@ -25,7 +25,7 @@ import {
   currentMonth,
   type CashFlowTransaction,
   type CashFlowCardInvoice,
-  type CashFlowForecast,
+  type CashFlowRecurringTransaction,
   type MonthlyCashFlow,
   type CashFlowResponse,
 } from '../services/api'
@@ -49,21 +49,31 @@ function minor(brl: string): number {
   return isNaN(n) ? 0 : Math.round(n * 100)
 }
 
-function toChartData(monthly: MonthlyCashFlow[], startMonth: string) {
-  return monthly.map((m) => ({
+function sumPendingRecurringExpenseMinor(recurring: CashFlowRecurringTransaction[], month: string): number {
+  return recurring.reduce((sum, forecast) => {
+    if (forecast.amountMinor >= 0) return sum
+    if (!forecast.isActive) return sum
+    if (!appliesRecurringOnMonth(forecast, month)) return sum
+    if (forecast.paidMonths.includes(month)) return sum
+    return sum + Math.abs(forecast.amountMinor)
+  }, 0)
+}
+
+function toChartData(monthly: MonthlyCashFlow[], recurring: CashFlowRecurringTransaction[]) {
+  return monthly.map((m) => {
+    const totalExpenseMinor = Math.abs(Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor))
+    const pendingRecurringExpenseMinor = sumPendingRecurringExpenseMinor(recurring, m.competencyMonth)
+    const paidMinor = Math.max(0, totalExpenseMinor - pendingRecurringExpenseMinor)
+
+    return {
     month: m.competencyMonth,
     saldo: Number(m.projectedClosingBalanceMinor) / 100,
-    receita: Number(m.totalIncomeMinor) / 100,
-    despesaPaga: m.competencyMonth <= startMonth
-      ? Math.abs(Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)) / 100
-      : 0,
-    despesaPrevista: m.competencyMonth > startMonth
-      ? Math.abs(Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)) / 100
-      : 0,
-    cartaoProjetado: m.competencyMonth > startMonth
-      ? Number(m.debtOpenMinor) / 100
-      : 0,
-  }))
+    recebido: Number(m.totalIncomeMinor) / 100,
+    pago: paidMinor / 100,
+    previsto: pendingRecurringExpenseMinor / 100,
+    cartaoProjetado: Number(m.debtOpenMinor) / 100,
+    }
+  })
 }
 
 function statusVariant(value: number): 'green' | 'red' | 'yellow' {
@@ -76,6 +86,21 @@ const recurrenceLabel: Record<string, string> = {
   'one-time': 'Única',
   'monthly': 'Mensal',
   'yearly': 'Anual',
+}
+
+function recurringTypeFromAmount(amountMinor: number): 'income' | 'expense' {
+  return amountMinor >= 0 ? 'income' : 'expense'
+}
+
+function appliesRecurringOnMonth(fc: CashFlowRecurringTransaction, month: string): boolean {
+  if (month < fc.competencyMonth) return false
+  if (fc.recurrenceEnd && month > fc.recurrenceEnd) return false
+
+  const recurrence = fc.recurrence ?? 'one-time'
+  if (recurrence === 'one-time') return month === fc.competencyMonth
+  if (recurrence === 'monthly') return true
+  if (recurrence === 'yearly') return month.slice(5) === fc.competencyMonth.slice(5)
+  return false
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +139,15 @@ function InvoiceRow({ inv, onRemove }: { inv: CashFlowCardInvoice; onRemove: () 
   )
 }
 
-function ForecastRow({ fc, onRemove }: { fc: CashFlowForecast; onRemove: () => void }) {
+function ForecastRow({
+  fc,
+  onRemove,
+  onEdit,
+}: {
+  fc: CashFlowRecurringTransaction
+  onRemove: () => void
+  onEdit: () => void
+}) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: '1px solid #1e2130', fontSize: '0.85rem' }}>
       <div>
@@ -125,8 +158,10 @@ function ForecastRow({ fc, onRemove }: { fc: CashFlowForecast; onRemove: () => v
         )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {!fc.isActive && <Badge variant="yellow">Inativa</Badge>}
         <Badge variant="blue">{recurrenceLabel[fc.recurrence ?? 'one-time']}</Badge>
         <span style={{ color: fc.amountMinor >= 0 ? '#4ade80' : '#f87171', fontWeight: 600 }}>{formatBRL(fc.amountMinor)}</span>
+        <button onClick={onEdit} style={{ background: 'none', border: 'none', color: '#93c5fd', cursor: 'pointer', fontSize: '0.8rem' }}>editar</button>
         <button onClick={onRemove} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1rem' }}>×</button>
       </div>
     </div>
@@ -186,13 +221,34 @@ export function CashFlow() {
   const [fcMonth, setFcMonth] = useState(now)
   const [fcRecurrence, setFcRecurrence] = useState<'one-time' | 'monthly' | 'yearly'>('monthly')
   const [fcEnd, setFcEnd] = useState('')
-  const [forecasts, setForecasts] = useState<CashFlowForecast[]>([])
+  const [fcEditId, setFcEditId] = useState<string | null>(null)
+  const [recurring, setRecurring] = useState<CashFlowRecurringTransaction[]>([])
+  const [recurringLoading, setRecurringLoading] = useState(false)
+  const [recurringError, setRecurringError] = useState<string | null>(null)
+  const [recurringSaving, setRecurringSaving] = useState(false)
 
   const projectFn = useCallback(
     (body: Parameters<typeof api.cashflow.project>[0]) => api.cashflow.project(body),
     [],
   )
   const { state, execute } = useAsync<Parameters<typeof api.cashflow.project>[0], CashFlowResponse>(projectFn)
+
+  const loadRecurring = useCallback(async () => {
+    setRecurringLoading(true)
+    setRecurringError(null)
+    try {
+      const res = await api.cashflow.listRecurringTransactions()
+      setRecurring(res.items)
+    } catch (err) {
+      setRecurringError(err instanceof Error ? err.message : 'Falha ao carregar recorrentes')
+    } finally {
+      setRecurringLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadRecurring()
+  }, [loadRecurring])
 
   // Validation
   function validate(): boolean {
@@ -225,23 +281,80 @@ export function CashFlow() {
     setInvDue('')
   }
 
-  function addForecast() {
+  async function saveForecast() {
     if (!fcAmount) return
-    setForecasts((prev) => [
-      ...prev,
-      {
-        id: `fc-${Date.now()}`,
-        competencyMonth: fcMonth,
-        amountMinor: fcType === 'expense' ? -Math.abs(minor(fcAmount)) : Math.abs(minor(fcAmount)),
-        recurrence: fcRecurrence,
-        recurrenceEnd: fcEnd || undefined,
-        description: fcDesc || undefined,
-        isActive: true,
-      },
-    ])
+    setRecurringSaving(true)
+    const payload = {
+      competencyMonth: fcMonth,
+      amountMinor: fcType === 'expense' ? -Math.abs(minor(fcAmount)) : Math.abs(minor(fcAmount)),
+      recurrence: fcRecurrence,
+      recurrenceEnd: fcEnd || null,
+      description: fcDesc || undefined,
+      isActive: true,
+    }
+
+    try {
+      if (fcEditId) {
+        await api.cashflow.updateRecurringTransaction(fcEditId, payload)
+      } else {
+        await api.cashflow.createRecurringTransaction(payload)
+      }
+      await loadRecurring()
+      setFcEditId(null)
+    } catch (err) {
+      setRecurringError(err instanceof Error ? err.message : 'Falha ao salvar recorrente')
+    } finally {
+      setRecurringSaving(false)
+    }
+
     setFcDesc('')
     setFcAmount('')
     setFcEnd('')
+  }
+
+  async function removeForecast(id: string) {
+    try {
+      await api.cashflow.deleteRecurringTransaction(id)
+      await loadRecurring()
+      if (fcEditId === id) {
+        setFcEditId(null)
+      }
+    } catch (err) {
+      setRecurringError(err instanceof Error ? err.message : 'Falha ao remover recorrente')
+    }
+  }
+
+  function startEditForecast(fc: CashFlowRecurringTransaction) {
+    setFcEditId(fc.id)
+    setFcDesc(fc.description ?? '')
+    setFcMonth(fc.competencyMonth)
+    setFcRecurrence(fc.recurrence ?? 'monthly')
+    setFcEnd(fc.recurrenceEnd ?? '')
+    setFcType(recurringTypeFromAmount(fc.amountMinor))
+    setFcAmount((Math.abs(fc.amountMinor) / 100).toFixed(2))
+  }
+
+  function cancelEditForecast() {
+    setFcEditId(null)
+    setFcDesc('')
+    setFcAmount('')
+    setFcEnd('')
+  }
+
+  async function setForecastPaidMonth(forecastId: string, month: string, isPaid: boolean) {
+    try {
+      await api.cashflow.setRecurringMonthStatus(forecastId, month, isPaid)
+      await loadRecurring()
+      execute({
+        startMonth,
+        months: parseInt(months),
+        openingBalanceMinor: minor(openingBalance),
+        transactions,
+        cardInvoices: invoices,
+      })
+    } catch (err) {
+      setRecurringError(err instanceof Error ? err.message : 'Falha ao atualizar status mensal')
+    }
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -254,13 +367,14 @@ export function CashFlow() {
       openingBalanceMinor: minor(openingBalance),
       transactions,
       cardInvoices: invoices,
-      forecasts,
     })
   }
 
-  const chartData = state.status === 'success' ? toChartData(state.data.monthly, startMonth) : []
+  const chartData = state.status === 'success' ? toChartData(state.data.monthly, recurring) : []
+  const recurringExpenseItems = recurring.filter((item) => item.amountMinor < 0)
 
   return (
+
     <div style={{ maxWidth: 1020 }}>
       {/* Header */}
       <div style={{ marginBottom: '1.5rem' }}>
@@ -271,6 +385,49 @@ export function CashFlow() {
           Visualize seu saldo mês a mês. Compra no cartão é dívida — o pagamento da fatura afecta o caixa.
         </p>
       </div>
+
+      {/* Painel de faturas/cartões do mês atual - NOVO LAYOUT */}
+      {state.status === 'success' && state.data.cardInvoicesByMonth && (
+        <div style={{
+          background: '#181c2a',
+          borderRadius: 8,
+          padding: '1rem',
+          marginBottom: '1.5rem',
+          border: '1px solid #23263a',
+        }}>
+          <div style={{ fontWeight: 700, color: '#e5e7eb', marginBottom: 8 }}>Faturas do mês atual ({startMonth}):</div>
+          {state.data.cardInvoicesByMonth.filter(f => f.invoiceMonth === startMonth).length === 0 ? (
+            <div style={{ color: '#6b7280', fontSize: '0.95rem' }}>Nenhuma fatura encontrada para o mês.</div>
+          ) : (
+            <table style={{ width: '100%', fontSize: '0.97rem', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ color: '#a5b4fc', textAlign: 'left' }}>
+                  <th style={{ padding: '4px 8px' }}>Cartão</th>
+                  <th style={{ padding: '4px 8px' }}>Compras do mês</th>
+                  <th style={{ padding: '4px 8px' }}>Aberto mês anterior</th>
+                  <th style={{ padding: '4px 8px' }}>Total da fatura</th>
+                  <th style={{ padding: '4px 8px' }}>Valor pago</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.data.cardInvoicesByMonth.filter(f => f.invoiceMonth === startMonth).map((f, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #23263a' }}>
+                    <td style={{ padding: '4px 8px', color: '#e5e7eb' }}>
+                      {(f.institutionName || 'Cartão desconhecido')}
+                      {f.cardBrand ? ` / ${f.cardBrand}` : ''}
+                      {f.cardLast4 ? ` / ${f.cardLast4}` : ''}
+                    </td>
+                    <td style={{ padding: '4px 8px', color: '#fbbf24', fontWeight: 600 }}>{formatBRL(Number(f.comprasDoMesMinor) / 100)}</td>
+                    <td style={{ padding: '4px 8px', color: '#fbbf24', fontWeight: 600 }}>{formatBRL(Number(f.abertoAnteriorMinor) / 100)}</td>
+                    <td style={{ padding: '4px 8px', color: '#fbbf24', fontWeight: 700 }}>{formatBRL(Number(f.totalFaturaMinor) / 100)}</td>
+                    <td style={{ padding: '4px 8px', color: '#4ade80', fontWeight: 600 }}>{formatBRL(Number(f.paidAmountMinor) / 100)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '1.5rem', alignItems: 'start' }}>
         {/* Left: Form */}
@@ -330,7 +487,7 @@ export function CashFlow() {
           </Section>
 
           {/* Forecasts */}
-          <Section title="Previsões recorrentes" count={forecasts.length}>
+          <Section title="Previsões recorrentes" count={recurring.length}>
             <div
               style={{
                 padding: '0.6rem 0.75rem',
@@ -393,12 +550,28 @@ export function CashFlow() {
                   placeholder="Valor (R$)"
                   style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', flex: 1 }}
                 />
-                <Button onClick={addForecast} variant="secondary">+ Add</Button>
+                <Button onClick={() => { void saveForecast() }} variant="secondary" disabled={recurringSaving}>
+                  {recurringSaving ? 'Salvando...' : fcEditId ? 'Salvar' : '+ Add'}
+                </Button>
               </div>
+              {fcEditId && (
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <Button onClick={cancelEditForecast} variant="secondary">Cancelar edição</Button>
+                </div>
+              )}
             </div>
-            {forecasts.length === 0
+            {recurringError && <Alert variant="error">{recurringError}</Alert>}
+            {recurringLoading && <Spinner size={20} />}
+            {recurring.length === 0
               ? <EmptyState icon="🔮" title="Nenhuma previsão" description="Adicione receitas ou despesas recorrentes futuras." />
-              : forecasts.map((fc, i) => <ForecastRow key={fc.id} fc={fc} onRemove={() => setForecasts((p) => p.filter((_, j) => j !== i))} />)
+              : recurring.map((fc) => (
+                  <ForecastRow
+                    key={fc.id}
+                    fc={fc}
+                    onEdit={() => startEditForecast(fc)}
+                    onRemove={() => { void removeForecast(fc.id) }}
+                  />
+                ))
             }
           </Section>
         </div>
@@ -437,7 +610,7 @@ export function CashFlow() {
 
               {/* Chart */}
               <Card>
-                <SectionTitle>Receita vs Despesas</SectionTitle>
+                <SectionTitle>Recebido vs Saídas</SectionTitle>
                 <ResponsiveContainer width="100%" height={220}>
                   <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e2130" />
@@ -448,56 +621,72 @@ export function CashFlow() {
                       labelStyle={{ color: '#9ca3af' }}
                       formatter={(v, name) => {
                         const labels: Record<string, string> = {
-                          receita: 'Receita (linha de vida)',
-                          despesaPaga: 'Despesa paga',
-                          despesaPrevista: 'Despesa prevista',
-                          cartaoProjetado: 'Cartão projetado',
+                          recebido: 'Recebido',
+                          pago: 'Pago',
+                          previsto: 'Débitos recorrentes',
+                          cartaoProjetado: 'Cartão em aberto',
+                          saldo: 'Saldo final',
                         }
                         return [formatBRL(Number(v ?? 0) * 100), labels[String(name)] ?? String(name)]
                       }}
                     />
                     <ReferenceLine y={0} stroke="#f87171" strokeDasharray="4 2" />
-                    <Bar dataKey="despesaPaga" name="despesaPaga" fill="#7dd3fc" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="despesaPrevista" name="despesaPrevista" stackId="proj" fill="#ef4444" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="cartaoProjetado" name="cartaoProjetado" stackId="proj" fill="#fb923c" radius={[4, 4, 0, 0]} />
-                    <Line type="monotone" dataKey="receita" name="receita" stroke="#1d4ed8" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                    <Bar dataKey="pago" name="pago" stackId="despesas" fill="#7dd3fc" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="previsto" name="previsto" stackId="despesas" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="cartaoProjetado" name="cartaoProjetado" stackId="despesas" fill="#fb923c" radius={[4, 4, 0, 0]} />
+                    <Line type="monotone" dataKey="recebido" name="recebido" stroke="#1d4ed8" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </Card>
 
-              {/* Monthly table */}
               <Card>
-                <SectionTitle>Detalhe mensal</SectionTitle>
+                <SectionTitle>Débitos recorrentes por mês (marque pago/não cobrado)</SectionTitle>
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
                     <thead>
                       <tr style={{ color: '#6b7280', borderBottom: '1px solid #2a2f45' }}>
                         <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem' }}>Mês</th>
-                        <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }}>Receita</th>
-                        <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }}>Despesa</th>
-                        <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }}>Saldo final</th>
-                        <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem' }}>Estado</th>
+                        <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem' }}>Débito recorrente</th>
+                        <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }}>Valor</th>
+                        <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem' }}>Pago/Não cobrado</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {state.data.monthly.map((m) => {
-                        const closing = Number(m.projectedClosingBalanceMinor)
-                        const paidExpenseMinor = Math.abs(Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor))
-                        return (
-                          <tr key={m.competencyMonth} style={{ borderBottom: '1px solid #1e2130' }}>
-                            <td style={{ padding: '0.45rem 0.5rem', color: '#e5e7eb', fontWeight: 600 }}>{m.competencyMonth}</td>
-                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#4ade80' }}>{formatBRL(m.totalIncomeMinor)}</td>
-                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#f87171' }}>{formatBRL(paidExpenseMinor)}</td>
-                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 700, color: closing >= 0 ? '#4ade80' : '#f87171' }}>
-                              {formatBRL(m.projectedClosingBalanceMinor)}
-                            </td>
-                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
-                              <Badge variant={statusVariant(closing)}>
-                                {closing > 0 ? 'Positivo' : closing < 0 ? 'Negativo' : 'Zero'}
-                              </Badge>
-                            </td>
-                          </tr>
-                        )
+                      {state.data.monthly.flatMap((m) => {
+                        const activeRows = recurringExpenseItems.filter((fc) => appliesRecurringOnMonth(fc, m.competencyMonth))
+                        if (activeRows.length === 0) {
+                          return [
+                            <tr key={`${m.competencyMonth}-empty`} style={{ borderBottom: '1px solid #1e2130' }}>
+                              <td style={{ padding: '0.45rem 0.5rem', color: '#e5e7eb', fontWeight: 600 }}>{m.competencyMonth}</td>
+                              <td colSpan={3} style={{ padding: '0.45rem 0.5rem', color: '#6b7280' }}>Sem débitos recorrentes</td>
+                            </tr>,
+                          ]
+                        }
+
+                        return activeRows.map((fc, idx) => {
+                          const isPaid = fc.paidMonths.includes(m.competencyMonth)
+                          return (
+                            <tr key={`${m.competencyMonth}-${fc.id}`} style={{ borderBottom: '1px solid #1e2130' }}>
+                              <td style={{ padding: '0.45rem 0.5rem', color: '#e5e7eb', fontWeight: idx === 0 ? 600 : 400 }}>{idx === 0 ? m.competencyMonth : ''}</td>
+                              <td style={{ padding: '0.45rem 0.5rem', color: '#e5e7eb' }}>
+                                {fc.description || 'Sem descrição'}
+                                <span style={{ color: '#6b7280', marginLeft: 6 }}>({recurrenceLabel[fc.recurrence ?? 'one-time']})</span>
+                              </td>
+                              <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#f87171' }}>
+                                {formatBRL(fc.amountMinor)}
+                              </td>
+                              <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isPaid}
+                                  onChange={(e) => {
+                                    void setForecastPaidMonth(fc.id, m.competencyMonth, e.target.checked)
+                                  }}
+                                />
+                              </td>
+                            </tr>
+                          )
+                        })
                       })}
                     </tbody>
                   </table>

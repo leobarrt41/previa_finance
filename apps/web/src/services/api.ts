@@ -47,6 +47,9 @@ async function request<T>(
     const body = await res.json().catch(() => ({}))
     throw new ApiError(res.status, getApiErrorMessage(body, res.statusText), body)
   }
+  if (res.status === 204) {
+    return undefined as T
+  }
   return res.json() as Promise<T>
 }
 
@@ -67,6 +70,9 @@ async function requestRaw<T>(
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new ApiError(res.status, getApiErrorMessage(body, res.statusText), body)
+  }
+  if (res.status === 204) {
+    return undefined as T
   }
   return res.json() as Promise<T>
 }
@@ -131,6 +137,12 @@ export interface CashFlowForecast {
   isActive?: boolean
 }
 
+export interface CashFlowRecurringTransaction extends CashFlowForecast {
+  paidMonths: string[]
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
 export interface CashFlowRequest {
   startMonth: string        // YYYY-MM
   months: number            // quantos meses projectar
@@ -153,6 +165,19 @@ export interface MonthlyCashFlow {
 
 export interface CashFlowResponse {
   monthly: MonthlyCashFlow[]
+}
+
+export interface CashFlowRecurringListResponse {
+  items: CashFlowRecurringTransaction[]
+}
+
+export interface CashFlowRecurringUpsertBody {
+  competencyMonth: string
+  amountMinor: number
+  recurrence: 'one-time' | 'monthly' | 'yearly'
+  recurrenceEnd?: string | null
+  description?: string
+  isActive?: boolean
 }
 
 // --- Budget ---
@@ -297,6 +322,8 @@ export interface AccountInvoiceDetails {
     minimumPaymentMinor: number | null
     paidAmountMinor: number
     openAmountMinor: number
+    previousBalanceMinor: number // saldo anterior
+    emAbertoMinor: number // campo calculado para contas
     status: string
     parserStrategy: string | null
     institutionName: string | null
@@ -530,6 +557,32 @@ export const api = {
 
     example: () =>
       request<unknown>('/api/cashflow/example'),
+
+    listRecurringTransactions: () =>
+      request<CashFlowRecurringListResponse>('/api/cashflow/recurring-transactions'),
+
+    createRecurringTransaction: (body: CashFlowRecurringUpsertBody) =>
+      request<CashFlowRecurringTransaction>('/api/cashflow/recurring-transactions', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+
+    updateRecurringTransaction: (id: string, body: Partial<CashFlowRecurringUpsertBody>) =>
+      request<{ ok: boolean }>(`/api/cashflow/recurring-transactions/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+
+    deleteRecurringTransaction: (id: string) =>
+      request<{ ok?: boolean }>(`/api/cashflow/recurring-transactions/${id}`, {
+        method: 'DELETE',
+      }),
+
+    setRecurringMonthStatus: (id: string, competencyMonth: string, isPaid: boolean) =>
+      request<{ ok: boolean }>(`/api/cashflow/recurring-transactions/${id}/month-status`, {
+        method: 'PUT',
+        body: JSON.stringify({ competencyMonth, isPaid }),
+      }),
   },
 
   budget: {

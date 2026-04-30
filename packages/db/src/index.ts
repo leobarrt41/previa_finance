@@ -51,6 +51,18 @@ export type {
   NewSyncRun,
 } from "./schema";
 
+export {
+  cashflowForecasts,
+  cashflowForecastMonthStatus,
+} from './schema/cashflow_forecasts';
+
+export type {
+  CashflowForecast,
+  NewCashflowForecast,
+  CashflowForecastMonthStatus,
+  NewCashflowForecastMonthStatus,
+} from './schema/cashflow_forecasts';
+
 // Drizzle relational query declarations
 export {
   financialConnectionsRelations,

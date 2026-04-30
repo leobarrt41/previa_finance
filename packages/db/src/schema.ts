@@ -258,9 +258,10 @@ export const transactions = mysqlTable(
     competencyMonth: varchar("competency_month", { length: 7 }).notNull(), // YYYY-MM
 
     // -----------------------------------------------------------------------
-    // Description and category
+    // Description, memo and category
     // -----------------------------------------------------------------------
     description: text("description").notNull(),
+    memo: text("memo"),
     normalizedDescription: varchar("normalized_description", { length: 500 }),
     categoryId: varchar("category_id", { length: 128 }),  // @external-fk: categories.id
 

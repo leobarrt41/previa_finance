@@ -4,10 +4,12 @@
 
 import { Router, type Request, type Response } from 'express'
 import multer from 'multer'
-import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, gte, inArray, lte, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import {
   accounts,
+  cardInvoicePayments,
+  cardInvoices,
   cardTransactions,
   categories,
   DATA_STATE_VALUES,
@@ -554,6 +556,7 @@ function parseOfxStatement(buffer: Buffer) {
       id: `row-${parsed.length + 1}`,
       date: dateYmd,
       description,
+      memo: memo || null,
       amountMinor,
       competencyMonth: dateYmd.slice(0, 7),
       movementType,
@@ -930,6 +933,132 @@ router.post('/statement/classify', async (req: Request, res: Response) => {
   res.json({ suggestions })
 })
 
+// ---------------------------------------------------------------------------
+// Invoice reconciliation helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps known institution name fragments found in bank statement descriptions
+ * to the key used in `accounts.institution_name`.
+ * Order matters: more specific patterns first.
+ */
+const INSTITUTION_PATTERNS: Array<{ pattern: RegExp; key: string }> = [
+  { pattern: /BANCO DO BRASIL|PAG\s*BB\b/i, key: 'Banco do Brasil' },
+  { pattern: /ITAU\s+UNIBANCO|ITAU\b|ITAÚ/i, key: 'Itaú' },
+  { pattern: /BRADESCO/i, key: 'Bradesco' },
+  { pattern: /NUBANK|NU PAG/i, key: 'Nubank' },
+  { pattern: /SANTANDER/i, key: 'Santander' },
+  { pattern: /CAIXA|C\.E\.F/i, key: 'Caixa' },
+  { pattern: /BTG/i, key: 'BTG' },
+  { pattern: /\bINTER\b/i, key: 'Inter' },
+  { pattern: /\bC6\b/i, key: 'C6' },
+  { pattern: /PICPAY/i, key: 'PicPay' },
+  { pattern: /SICOOB/i, key: 'Sicoob' },
+  { pattern: /SICREDI/i, key: 'Sicredi' },
+  { pattern: /XP INVESTIMENTOS|XP INC/i, key: 'XP' },
+]
+
+const CARD_PAYMENT_PATTERN = /PAG(AMENTO)?\s+(FATURA|CART[AÃ]O|FAT)|FATURA\s+CART[AÃ]O|PAGTO\s+CART[AÃ]O|PAYMENT\s+CREDIT|PAG\s+CARTAO/i
+
+/**
+ * Returns the institution key to look up in `card_invoices` for a given
+ * liability_payment transaction.
+ *
+ * Rule: if another bank is named in the description → that institution.
+ * Otherwise → same institution as the source bank account.
+ */
+function detectInvoiceTargetInstitution(
+  description: string,
+  sourceInstitution: string | null,
+): string | null {
+  if (!CARD_PAYMENT_PATTERN.test(description)) return null
+  for (const { pattern, key } of INSTITUTION_PATTERNS) {
+    if (pattern.test(description)) return key
+  }
+  return sourceInstitution
+}
+
+type DbType = ReturnType<typeof getDatabase>
+
+/**
+ * Allocates a liability_payment transaction to open card invoices.
+ * Oldest-due-date first, partial payments supported.
+ */
+async function reconcileInvoicePayment(
+  db: DbType,
+  userId: number,
+  payment: { id: number; amountMinor: bigint; occurredAt: Date; description: string },
+  sourceInstitution: string | null,
+): Promise<void> {
+  // Payment amount is negative in the bank account → negate to get positive
+  const paymentAmount = payment.amountMinor < 0n ? -payment.amountMinor : payment.amountMinor
+  if (paymentAmount === 0n) return
+
+  const targetInstitution = detectInvoiceTargetInstitution(payment.description, sourceInstitution)
+  if (!targetInstitution) return
+
+  // Skip if this transaction was already reconciled
+  const existing = await db
+    .select({ id: cardInvoicePayments.id })
+    .from(cardInvoicePayments)
+    .where(eq(cardInvoicePayments.transactionId, payment.id))
+    .limit(1)
+  if (existing.length > 0) return
+
+  // ±45 day window around payment date
+  const windowStart = new Date(payment.occurredAt.getTime() - 45 * 24 * 60 * 60 * 1000)
+  const windowEnd = new Date(payment.occurredAt.getTime() + 45 * 24 * 60 * 60 * 1000)
+
+  const openInvoices = await db
+    .select({
+      id: cardInvoices.id,
+      dueDate: cardInvoices.dueDate,
+      openAmountMinor: cardInvoices.openAmountMinor,
+      paidAmountMinor: cardInvoices.paidAmountMinor,
+    })
+    .from(cardInvoices)
+    .innerJoin(accounts, eq(accounts.id, cardInvoices.accountId))
+    .where(
+      and(
+        eq(cardInvoices.userId, userId),
+        gt(cardInvoices.openAmountMinor, 0n),
+        gte(cardInvoices.dueDate, windowStart),
+        lte(cardInvoices.dueDate, windowEnd),
+        sql`LOWER(${accounts.institutionName}) LIKE LOWER(${`%${targetInstitution}%`})`,
+      ),
+    )
+    .orderBy(cardInvoices.dueDate)
+
+  if (openInvoices.length === 0) return
+
+  let remaining = paymentAmount
+  for (const invoice of openInvoices) {
+    if (remaining <= 0n) break
+    const allocate = remaining < invoice.openAmountMinor ? remaining : invoice.openAmountMinor
+
+    await db.insert(cardInvoicePayments).values({
+      userId,
+      cardInvoiceId: invoice.id,
+      transactionId: payment.id,
+      allocatedAmountMinor: allocate,
+      currencyCode: 'BRL',
+      paymentDate: payment.occurredAt,
+    }).onDuplicateKeyUpdate({ set: { allocatedAmountMinor: allocate } })
+
+    const newPaid = invoice.paidAmountMinor + allocate
+    const newOpen = invoice.openAmountMinor - allocate
+    await db.update(cardInvoices)
+      .set({
+        paidAmountMinor: newPaid,
+        openAmountMinor: newOpen,
+        status: newOpen === 0n ? 'PAID' : 'OPEN',
+      })
+      .where(eq(cardInvoices.id, invoice.id))
+
+    remaining -= allocate
+  }
+}
+
 router.post('/statement/import', async (req: Request, res: Response) => {
   const owner = await resolveOwnerId(req.authUser!.clerkUserId)
   const body = statementImportSchema.parse(req.body)
@@ -1020,6 +1149,7 @@ router.post('/statement/import', async (req: Request, res: Response) => {
         occurredAt,
         competencyMonth,
         description: tx.description.trim(),
+        memo: tx.memo ?? null,
         normalizedDescription,
         categoryId: tx.categoryId ?? null,
         installmentNumber: null,
@@ -1099,6 +1229,44 @@ router.post('/statement/import', async (req: Request, res: Response) => {
 
   if (toInsert.length > 0) {
     await db.insert(transactions).values(toInsert)
+
+    // Reconcile liability_payment transactions against open card invoices
+    const liabilityItems = toInsert.filter(tx => tx.movementType === 'liability_payment')
+    if (liabilityItems.length > 0) {
+      try {
+        const fps = liabilityItems.map(tx => tx.fingerprint).filter(Boolean) as string[]
+        const [sourceAcc] = await db
+          .select({ institutionName: accounts.institutionName })
+          .from(accounts)
+          .where(eq(accounts.id, destinationAccountId))
+          .limit(1)
+
+        const insertedPayments = fps.length > 0
+          ? await db
+              .select({
+                id: transactions.id,
+                amountMinor: transactions.amountMinor,
+                occurredAt: transactions.occurredAt,
+                description: transactions.description,
+              })
+              .from(transactions)
+              .where(
+                and(
+                  eq(transactions.userId, owner.id),
+                  eq(transactions.accountId, destinationAccountId),
+                  inArray(transactions.fingerprint, fps),
+                ),
+              )
+          : []
+
+        for (const tx of insertedPayments) {
+          await reconcileInvoicePayment(db, owner.id, tx, sourceAcc?.institutionName ?? null)
+        }
+      } catch (err) {
+        // Reconciliation failure must not roll back the import
+        console.error('[reconcileInvoicePayment] error:', err)
+      }
+    }
   }
 
   res.json({

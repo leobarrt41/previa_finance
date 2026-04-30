@@ -295,6 +295,11 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
     .where(eq(cardTransactions.cardInvoiceId, invoice.id))
     .orderBy(desc(cardTransactions.occurredAt), desc(cardTransactions.id))
 
+
+  // Calcula o valor em aberto para CONTAS: total da fatura - soma das compras/taxas/anuidades do mês
+  const comprasDoMes = transactionRows.reduce((sum, tx) => sum + Number(tx.amountMinor ?? 0), 0)
+  const emAbertoMinor = Number(invoice.totalAmountMinor ?? 0) - comprasDoMes
+
   res.json({
     accountId,
     month,
@@ -314,6 +319,8 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
       minimumPaymentMinor: invoice.minimumPaymentMinor === null ? null : Number(invoice.minimumPaymentMinor),
       paidAmountMinor: Number(invoice.paidAmountMinor ?? 0),
       openAmountMinor: Number(invoice.openAmountMinor ?? 0),
+      previousBalanceMinor: Number(invoice.previousBalanceMinor ?? 0),
+      emAbertoMinor, // campo calculado para CONTAS
       status: invoice.status,
       parserStrategy: invoice.parserStrategy,
       institutionName: invoice.institutionName,
