@@ -1005,9 +1005,11 @@ async function reconcileInvoicePayment(
     .limit(1)
   if (existing.length > 0) return
 
-  // ±45 day window around payment date
-  const windowStart = new Date(payment.occurredAt.getTime() - 45 * 24 * 60 * 60 * 1000)
-  const windowEnd = new Date(payment.occurredAt.getTime() + 45 * 24 * 60 * 60 * 1000)
+  // Janela assimétrica: pagamento ocorre tipicamente antes ou no dia do vencimento.
+  // -60 dias: cobre pagamentos antecipados de faturas em aberto.
+  // +5 dias: tolerância mínima para atraso, evita alocar faturas futuras erradas.
+  const windowStart = new Date(payment.occurredAt.getTime() - 60 * 24 * 60 * 60 * 1000)
+  const windowEnd = new Date(payment.occurredAt.getTime() + 5 * 24 * 60 * 60 * 1000)
 
   const openInvoices = await db
     .select({

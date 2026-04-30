@@ -8,8 +8,8 @@ import { Router, Request, Response } from 'express'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import { CashFlowEngine, CashFlowInput } from '@previa/core'
-import { transactions, cardInvoices, cardTransactions, cashflowForecasts, cashflowForecastMonthStatus } from '@previa/db'
-import { and, eq, inArray, gte, lte, sql } from 'drizzle-orm'
+import { transactions, accounts, cardInvoices, cardTransactions, cashflowForecasts, cashflowForecastMonthStatus } from '@previa/db'
+import { and, eq, inArray, gte, lte, sql, leftJoin } from 'drizzle-orm'
 import { createError } from '../middlewares/errorHandler.js'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
@@ -670,14 +670,16 @@ router.post('/projection', async (req: Request, res: Response) => {
           id: cardInvoices.id,
           accountId: cardInvoices.accountId,
           invoiceMonth: cardInvoices.invoiceMonth,
-          institutionName: cardInvoices.institutionName,
-          cardBrand: cardInvoices.cardBrand,
-          cardLast4: cardInvoices.cardLast4,
+          // Fix: COALESCE com accounts para quando institutionName não está na fatura (ex: import OFX)
+          institutionName: sql<string | null>`COALESCE(${cardInvoices.institutionName}, ${accounts.institutionName})`,
+          cardBrand: sql<string | null>`COALESCE(${cardInvoices.cardBrand}, ${accounts.cardBrand})`,
+          cardLast4: sql<string | null>`COALESCE(${cardInvoices.cardLast4}, ${accounts.cardLast4})`,
           totalAmountMinor: cardInvoices.totalAmountMinor,
           paidAmountMinor: cardInvoices.paidAmountMinor,
           openAmountMinor: cardInvoices.openAmountMinor,
         })
         .from(cardInvoices)
+        .leftJoin(accounts, eq(accounts.id, cardInvoices.accountId))
         .where(
           and(
             eq(cardInvoices.userId, owner.id),
@@ -723,7 +725,9 @@ router.post('/projection', async (req: Request, res: Response) => {
         // Fatura anterior (mesmo cartão)
         const prevMonth = getPreviousMonth(inv.invoiceMonth)
         const prevInv = invoices.find(i => i.accountId === inv.accountId && i.invoiceMonth === prevMonth)
-        const abertoAnterior = prevInv ? (BigInt(prevInv.totalAmountMinor) - BigInt(prevInv.paidAmountMinor)) : 0n
+        // Fix: usar openAmountMinor directamente em vez de recalcular total - paid
+        // (evita cascata do bug de paidAmountMinor inflado pela janela ±45 dias)
+        const abertoAnterior = prevInv ? toBigInt(prevInv.openAmountMinor ?? 0n) : 0n
         const totalFatura = purchasesMinor + abertoAnterior
         return {
           invoiceMonth: inv.invoiceMonth,
