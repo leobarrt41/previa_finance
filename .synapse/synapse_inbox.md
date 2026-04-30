@@ -627,3 +627,34 @@ PRIORIDADE: Alta
 STATUS: Concluído
 
 ---
+
+## [2026-04-30 20:15]
+ID: 20260430-2015-cashflow-cartao-desconhecido
+SOURCE: previa_finance/manus
+CATEGORIA: Bug
+TITULO: Painel de faturas exibia Cartao desconhecido para faturas importadas via OFX
+DESCRICAO: A query do cardInvoicesPanel em apps/api/src/routes/cashflow.ts buscava institutionName, cardBrand e cardLast4 directamente de card_invoices. Quando a fatura era criada a partir de um import OFX, esses campos ficavam NULL na tabela. Solucao aplicada: adicionado LEFT JOIN accounts e COALESCE(card_invoices.institution_name, accounts.institution_name) para os 3 campos de identidade. Arquivo alterado: apps/api/src/routes/cashflow.ts. Commit: 98c687e.
+TAGS: cashflow,cartao,institutionName,cardBrand,cardLast4,ofx,bugfix
+PRIORIDADE: Alta
+STATUS: Concluido
+---
+## [2026-04-30 20:15]
+ID: 20260430-2015-reconcile-janela-assimetrica
+SOURCE: previa_finance/manus
+CATEGORIA: Bug
+TITULO: Janela de +-45 dias em reconcileInvoicePayment alocava pagamentos em faturas erradas
+DESCRICAO: A funcao reconcileInvoicePayment em apps/api/src/routes/transactions.ts usava janela simetrica de +-45 dias. Isso permitia que um pagamento de marco fosse alocado numa fatura de janeiro ainda em aberto, inflando paidAmountMinor. Solucao aplicada: janela corrigida para assimetrica de -60 / +5 dias. Arquivo alterado: apps/api/src/routes/transactions.ts. Commit: 98c687e.
+TAGS: cashflow,reconciliacao,cardInvoicePayments,paidAmountMinor,bugfix,janela
+PRIORIDADE: Alta
+STATUS: Concluido
+---
+## [2026-04-30 20:15]
+ID: 20260430-2015-cashflow-aberto-anterior-cascata
+SOURCE: previa_finance/manus
+CATEGORIA: Bug
+TITULO: Calculo de abertoAnterior usava totalAmountMinor - paidAmountMinor (cascata do bug de janela)
+DESCRICAO: O campo abertoAnterior no cardInvoicesPanel era calculado como BigInt(prevInv.totalAmountMinor) - BigInt(prevInv.paidAmountMinor). Como paidAmountMinor podia estar inflado pelo bug da janela +-45 dias, o resultado propagava erro para o totalFatura do mes seguinte. Solucao aplicada: abertoAnterior passou a usar openAmountMinor directamente. Arquivo alterado: apps/api/src/routes/cashflow.ts. Commit: 98c687e.
+TAGS: cashflow,abertoAnterior,openAmountMinor,totalFatura,bugfix,cascata
+PRIORIDADE: Alta
+STATUS: Concluido
+---
