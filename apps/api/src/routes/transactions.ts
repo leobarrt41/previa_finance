@@ -958,7 +958,8 @@ const INSTITUTION_PATTERNS: Array<{ pattern: RegExp; key: string }> = [
   { pattern: /XP INVESTIMENTOS|XP INC/i, key: 'XP' },
 ]
 
-const CARD_PAYMENT_PATTERN = /PAG(AMENTO)?\s+(FATURA|CART[AÃ]O|FAT)|FATURA\s+CART[AÃ]O|PAGTO\s+CART[AÃ]O|PAYMENT\s+CREDIT|PAG\s+CARTAO/i
+const CARD_PAYMENT_PATTERN =
+  /PAG(AMENTO)?\s+(FATURA|CART[A\u00c3]O|FAT)|FATURA\s+CART[A\u00c3]O|PAGTO\s+CART[A\u00c3]O(\s+CR[E\u00c9]DITO)?|PAYMENT\s+CREDIT|PAG\s+CARTAO|PAGTO\s+CART\b/i
 
 /**
  * Returns the institution key to look up in `card_invoices` for a given
@@ -1011,6 +1012,19 @@ async function reconcileInvoicePayment(
   const windowStart = new Date(payment.occurredAt.getTime() - 60 * 24 * 60 * 60 * 1000)
   const windowEnd = new Date(payment.occurredAt.getTime() + 5 * 24 * 60 * 60 * 1000)
 
+  // When targetInstitution == sourceInstitution the payment description is generic
+  // (e.g. "Pagto cartão crédito" from BB) and does not name the card institution.
+  // In that case we search ALL open invoices within the window and use the payment
+  // amount as the matching signal (exact match first, then oldest-due-date order).
+  const isGenericPayment = targetInstitution === sourceInstitution
+
+  const baseConditions = and(
+    eq(cardInvoices.userId, userId),
+    gt(cardInvoices.openAmountMinor, 0n),
+    gte(cardInvoices.dueDate, windowStart),
+    lte(cardInvoices.dueDate, windowEnd),
+  )
+
   const openInvoices = await db
     .select({
       id: cardInvoices.id,
@@ -1021,20 +1035,28 @@ async function reconcileInvoicePayment(
     .from(cardInvoices)
     .innerJoin(accounts, eq(accounts.id, cardInvoices.accountId))
     .where(
-      and(
-        eq(cardInvoices.userId, userId),
-        gt(cardInvoices.openAmountMinor, 0n),
-        gte(cardInvoices.dueDate, windowStart),
-        lte(cardInvoices.dueDate, windowEnd),
-        sql`LOWER(${accounts.institutionName}) LIKE LOWER(${`%${targetInstitution}%`})`,
-      ),
+      isGenericPayment
+        ? baseConditions
+        : and(
+            baseConditions,
+            sql`LOWER(${accounts.institutionName}) LIKE LOWER(${`%${targetInstitution}%`})`,
+          ),
     )
     .orderBy(cardInvoices.dueDate)
 
   if (openInvoices.length === 0) return
 
+  // For generic payments: prefer invoices whose openAmountMinor exactly matches
+  // the payment amount (most likely the correct fatura). Sort exact matches first.
+  const sortedInvoices = isGenericPayment
+    ? [
+        ...openInvoices.filter((inv) => inv.openAmountMinor === paymentAmount),
+        ...openInvoices.filter((inv) => inv.openAmountMinor !== paymentAmount),
+      ]
+    : openInvoices
+
   let remaining = paymentAmount
-  for (const invoice of openInvoices) {
+  for (const invoice of sortedInvoices) {
     if (remaining <= 0n) break
     const allocate = remaining < invoice.openAmountMinor ? remaining : invoice.openAmountMinor
 
