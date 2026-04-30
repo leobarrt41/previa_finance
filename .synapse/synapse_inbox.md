@@ -658,3 +658,13 @@ TAGS: cashflow,abertoAnterior,openAmountMinor,totalFatura,bugfix,cascata
 PRIORIDADE: Alta
 STATUS: Concluido
 ---
+## [2026-04-30 21:00]
+ID: 20260430-2100-reconcile-pagamento-generico-bb
+SOURCE: previa_finance/manus
+CATEGORIA: Bug
+TITULO: Pagamento generico do BB nao reconciliava com fatura do Itau
+DESCRICAO: O OFX do Banco do Brasil registra o pagamento de fatura como "Pagto cartao credito" sem nomear a instituicao destino. Dois problemas: (1) CARD_PAYMENT_PATTERN nao reconhecia o texto "Pagto cartao credito" (faltava a variante "PAGTO CART\b"), entao a transacao nunca era classificada como liability_payment e a reconcileInvoicePayment nunca era chamada; (2) mesmo corrigindo o pattern, a funcao filtrava faturas por accounts.institutionName LIKE '%Banco do Brasil%', nao encontrando a fatura do Itau. Solucao em 2 partes: (1) CARD_PAYMENT_PATTERN expandido com "PAGTO CART\b" e "PAGTO CARTAO CREDITO"; (2) reconcileInvoicePayment detecta pagamentos genericos (targetInstitution == sourceInstitution) e busca todas as faturas em aberto na janela, priorizando match exato por valor (openAmountMinor == paymentAmount). Arquivo alterado: apps/api/src/routes/transactions.ts. Commit: fe2b7d4.
+TAGS: cashflow,reconciliacao,cardInvoicePayments,CARD_PAYMENT_PATTERN,bb,itau,pagamento-generico,bugfix
+PRIORIDADE: Alta
+STATUS: Concluido
+---
