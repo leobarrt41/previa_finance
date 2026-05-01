@@ -690,3 +690,14 @@ DESCRIÇÃO: Removido o formulário manual de faturas da tela de CashFlow em `ap
 TAGS: cashflow,frontend,faturas,ux,refactor  
 PRIORIDADE: Média  
 STATUS: Concluido
+
+## [2026-05-01 15:38]
+
+ID: 20260501-1538-cashflow-blue-from-invoice-payments  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Bug  
+TÍTULO: Azul do CashFlow não usava os pagamentos conciliados do extrato  
+DESCRIÇÃO: A projeção do CashFlow estava alimentando `totalLiabilityPaymentMinor` apenas com transações de tipo `liability_payment`, embora o motor `CashFlowEngine` já aceite `invoicePayments`. Como a associação correta entre extrato e fatura é materializada em `card_invoice_payments`, o azul podia ficar zerado mesmo com a fatura paga no extrato importado. Solução aplicada: `apps/api/src/routes/cashflow.ts` passou a ler `card_invoice_payments.paymentDate` e `allocatedAmountMinor`, mapear o mês de competência e enviar esses eventos como `invoicePayments` para o engine. Build da API validado com sucesso.  
+TAGS: cashflow,extrato,card_invoice_payments,liability_payment,bugfix  
+PRIORIDADE: Alta  
+STATUS: Concluido
