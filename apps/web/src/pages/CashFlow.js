@@ -35,13 +35,13 @@ function sumPendingRecurringExpenseMinor(recurring, month) {
 function toChartData(monthly, recurring, cardTotalsByMonth = new Map()) {
     return monthly.map((m) => {
         const pendingRecurringExpenseMinor = sumPendingRecurringExpenseMinor(recurring, m.competencyMonth);
-        const paidMinor = Math.abs(Number(m.totalLiabilityPaymentMinor));
+        const statementOutflowMinor = Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor);
         const cardTotalMinor = cardTotalsByMonth.get(m.competencyMonth) ?? Number(m.debtOpenMinor);
         return {
             month: m.competencyMonth,
             saldo: Number(m.projectedClosingBalanceMinor) / 100,
             recebido: Number(m.totalIncomeMinor) / 100,
-            pago: paidMinor / 100,
+            pago: statementOutflowMinor / 100,
             previsto: pendingRecurringExpenseMinor / 100,
             cartaoProjetado: cardTotalMinor / 100,
         };
@@ -285,7 +285,7 @@ export function CashFlow() {
                                         ].map(({ label, value, color }) => (_jsxs("div", { style: { background: '#141624', border: '1px solid #2a2f45', borderRadius: 10, padding: '0.75rem', textAlign: 'center' }, children: [_jsx("p", { style: { fontSize: '0.72rem', color: '#6b7280', marginBottom: 4 }, children: label }), _jsx("p", { style: { fontSize: '1rem', fontWeight: 800, color }, children: formatBRL(value) })] }, label))) }), _jsxs(Card, { children: [_jsx(SectionTitle, { children: "Recebido vs Sa\u00EDdas" }), _jsx(ResponsiveContainer, { width: "100%", height: 220, children: _jsxs(ComposedChart, { data: chartData, margin: { top: 4, right: 8, left: 0, bottom: 0 }, children: [_jsx(CartesianGrid, { strokeDasharray: "3 3", stroke: "#1e2130" }), _jsx(XAxis, { dataKey: "month", tick: { fill: '#6b7280', fontSize: 11 } }), _jsx(YAxis, { tick: { fill: '#6b7280', fontSize: 11 }, tickFormatter: (v) => `R$${(v / 1000).toFixed(0)}k` }), _jsx(Tooltip, { contentStyle: { background: '#1e2130', border: '1px solid #2a2f45', borderRadius: 8 }, labelStyle: { color: '#9ca3af' }, formatter: (v, name) => {
                                                                 const labels = {
                                                                     recebido: 'Recebido',
-                                                                    pago: 'Pagamento de fatura',
+                                                                    pago: 'Saídas do extrato',
                                                                     previsto: 'Débitos recorrentes',
                                                                     cartaoProjetado: 'Faturas do cartão',
                                                                     saldo: 'Saldo final',

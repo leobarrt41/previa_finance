@@ -712,3 +712,14 @@ DESCRIÇÃO: O gráfico do CashFlow só considerava azul claro quando a transaç
 TAGS: cashflow,pix,transferencia,liability_payment,extrato,bugfix  
 PRIORIDADE: Alta  
 STATUS: Concluido
+
+## [2026-05-01 18:28]
+
+ID: 20260501-1828-cashflow-blue-statement-outflows  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Bug  
+TÍTULO: Barra azul do CashFlow deve representar saídas do extrato  
+DESCRIÇÃO: Ajustada a série azul do gráfico de CashFlow para somar todas as saídas reais do extrato no mês (`totalExpenseMinor + totalLiabilityPaymentMinor`), mantendo fora os movimentos neutros de investimento como `Rende Fácil`. Isso alinha a barra azul com o que saiu efetivamente da conta, sem tocar na lógica do laranja. Build do front validado com sucesso.  
+TAGS: cashflow,extrato,saidas,liability_payment,frontend,bugfix  
+PRIORIDADE: Alta  
+STATUS: Concluido

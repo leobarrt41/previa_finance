@@ -65,14 +65,14 @@ function toChartData(
 ) {
   return monthly.map((m) => {
     const pendingRecurringExpenseMinor = sumPendingRecurringExpenseMinor(recurring, m.competencyMonth)
-    const paidMinor = Math.abs(Number(m.totalLiabilityPaymentMinor))
+    const statementOutflowMinor = Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)
     const cardTotalMinor = cardTotalsByMonth.get(m.competencyMonth) ?? Number(m.debtOpenMinor)
 
     return {
       month: m.competencyMonth,
       saldo: Number(m.projectedClosingBalanceMinor) / 100,
       recebido: Number(m.totalIncomeMinor) / 100,
-      pago: paidMinor / 100,
+      pago: statementOutflowMinor / 100,
       previsto: pendingRecurringExpenseMinor / 100,
       cartaoProjetado: cardTotalMinor / 100,
     }
@@ -239,7 +239,6 @@ export function CashFlow() {
     acc.set(row.invoiceMonth, current + Number(row.totalFaturaMinor || 0))
     return acc
   }, new Map<string, number>())
-
   // Validation
   function validate(): boolean {
     const e: Record<string, string> = {}
@@ -587,7 +586,7 @@ export function CashFlow() {
                       formatter={(v, name) => {
                         const labels: Record<string, string> = {
                           recebido: 'Recebido',
-                          pago: 'Pagamento de fatura',
+                          pago: 'Saídas do extrato',
                           previsto: 'Débitos recorrentes',
                           cartaoProjetado: 'Faturas do cartão',
                           saldo: 'Saldo final',
