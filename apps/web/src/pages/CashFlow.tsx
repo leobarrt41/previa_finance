@@ -48,6 +48,38 @@ function minor(brl: string): number {
   return isNaN(n) ? 0 : Math.round(n * 100)
 }
 
+const manualProjectionStorageKey = 'previa_finance.cashflow.manual_projections.v1'
+
+function loadManualProjections(): CashFlowTransaction[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(manualProjectionStorageKey)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((item): CashFlowTransaction | null => {
+        if (!item || typeof item !== 'object') return null
+        const tx = item as Partial<CashFlowTransaction>
+        if (typeof tx.id !== 'string') return null
+        if (typeof tx.competencyMonth !== 'string') return null
+        if (typeof tx.description !== 'string') return null
+        if (typeof tx.amountMinor !== 'number') return null
+        if (tx.type !== 'income' && tx.type !== 'expense') return null
+        return {
+          id: tx.id,
+          competencyMonth: tx.competencyMonth,
+          amountMinor: tx.amountMinor,
+          type: tx.type,
+          description: tx.description,
+        }
+      })
+      .filter((tx): tx is CashFlowTransaction => tx !== null)
+  } catch {
+    return []
+  }
+}
+
 function sumPendingRecurringExpenseMinor(recurring: CashFlowRecurringTransaction[], month: string): number {
   return recurring.reduce((sum, forecast) => {
     if (forecast.amountMinor >= 0) return sum
@@ -206,7 +238,7 @@ export function CashFlow() {
   const [txAmount, setTxAmount] = useState('')
   const [txMonth, setTxMonth] = useState(now)
   const [txType, setTxType] = useState<'income' | 'expense'>('income')
-  const [transactions, setTransactions] = useState<CashFlowTransaction[]>([])
+  const [transactions, setTransactions] = useState<CashFlowTransaction[]>(() => loadManualProjections())
   const [txEditId, setTxEditId] = useState<string | null>(null)
 
   // Forecast form
@@ -244,6 +276,11 @@ export function CashFlow() {
   useEffect(() => {
     void loadRecurring()
   }, [loadRecurring])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(manualProjectionStorageKey, JSON.stringify(transactions))
+  }, [transactions])
 
   const cardInvoicesByMonth = state.status === 'success' ? state.data.cardInvoicesByMonth ?? [] : []
   const currentCardInvoiceRows = cardInvoicesByMonth.filter((f) => f.invoiceMonth === startMonth)

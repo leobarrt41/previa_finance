@@ -19,6 +19,46 @@ function minor(brl) {
     const n = parseFloat(brl.replace(',', '.'));
     return isNaN(n) ? 0 : Math.round(n * 100);
 }
+const manualProjectionStorageKey = 'previa_finance.cashflow.manual_projections.v1';
+function loadManualProjections() {
+    if (typeof window === 'undefined')
+        return [];
+    try {
+        const raw = window.localStorage.getItem(manualProjectionStorageKey);
+        if (!raw)
+            return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed))
+            return [];
+        return parsed
+            .map((item) => {
+            if (!item || typeof item !== 'object')
+                return null;
+            const tx = item;
+            if (typeof tx.id !== 'string')
+                return null;
+            if (typeof tx.competencyMonth !== 'string')
+                return null;
+            if (typeof tx.description !== 'string')
+                return null;
+            if (typeof tx.amountMinor !== 'number')
+                return null;
+            if (tx.type !== 'income' && tx.type !== 'expense')
+                return null;
+            return {
+                id: tx.id,
+                competencyMonth: tx.competencyMonth,
+                amountMinor: tx.amountMinor,
+                type: tx.type,
+                description: tx.description,
+            };
+        })
+            .filter((tx) => tx !== null);
+    }
+    catch {
+        return [];
+    }
+}
 function sumPendingRecurringExpenseMinor(recurring, month) {
     return recurring.reduce((sum, forecast) => {
         if (forecast.amountMinor >= 0)
@@ -110,7 +150,7 @@ export function CashFlow() {
     const [txAmount, setTxAmount] = useState('');
     const [txMonth, setTxMonth] = useState(now);
     const [txType, setTxType] = useState('income');
-    const [transactions, setTransactions] = useState([]);
+    const [transactions, setTransactions] = useState(() => loadManualProjections());
     const [txEditId, setTxEditId] = useState(null);
     // Forecast form
     const [fcDesc, setFcDesc] = useState('');
@@ -143,6 +183,11 @@ export function CashFlow() {
     useEffect(() => {
         void loadRecurring();
     }, [loadRecurring]);
+    useEffect(() => {
+        if (typeof window === 'undefined')
+            return;
+        window.localStorage.setItem(manualProjectionStorageKey, JSON.stringify(transactions));
+    }, [transactions]);
     const cardInvoicesByMonth = state.status === 'success' ? state.data.cardInvoicesByMonth ?? [] : [];
     const currentCardInvoiceRows = cardInvoicesByMonth.filter((f) => f.invoiceMonth === startMonth);
     const cardTotalsByMonth = cardInvoicesByMonth.reduce((acc, row) => {

@@ -638,6 +638,17 @@ TAGS: cashflow,cartao,institutionName,cardBrand,cardLast4,ofx,bugfix
 PRIORIDADE: Alta
 STATUS: Concluido
 
+## [2026-05-01 19:35]
+
+ID: 20260501-1935-cashflow-manual-projections-persist  
+SOURCE: previa_finance/copilot  
+CATEGORIA: UX  
+TÍTULO: Projecções avulsas do CashFlow passaram a persistir  
+DESCRIÇÃO: A lista de projecções avulsas removíveis do CashFlow deixou de viver apenas em memória e agora é salva em `localStorage` no browser. Com isso, o usuário mantém os itens entre recarregamentos, sem transformar essas projeções em recorrentes do backend.  
+TAGS: cashflow,localstorage,persistencia,projecao,frontend  
+PRIORIDADE: Media  
+STATUS: Concluido
+
 ## [2026-05-01 19:22]
 
 ID: 20260501-1922-cashflow-projection-labels  
