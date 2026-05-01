@@ -638,6 +638,17 @@ TAGS: cashflow,cartao,institutionName,cardBrand,cardLast4,ofx,bugfix
 PRIORIDADE: Alta
 STATUS: Concluido
 
+## [2026-05-01 19:22]
+
+ID: 20260501-1922-cashflow-projection-labels  
+SOURCE: previa_finance/copilot  
+CATEGORIA: UX  
+TÍTULO: Projecções avulsas ficaram explícitas como removíveis  
+DESCRIÇÃO: A secção manual do CashFlow foi renomeada para deixar claro que as projeções avulsas podem ser editadas ou removidas direto na tela. A cópia também foi ajustada para reforçar que valores positivos sobem a linha azul de recebido, enquanto o azul claro continua reservado para saídas do extrato.  
+TAGS: cashflow,ux,labels,projecao,frontend  
+PRIORIDADE: Media  
+STATUS: Concluido
+
 ## [2026-05-01 19:12]
 
 ID: 20260501-1912-cashflow-projections-vs-statement  

@@ -482,7 +482,7 @@ export function CashFlow() {
           </Card>
 
           {/* Projecções avulsas */}
-          <Section title="Projecções avulsas" count={transactions.length}>
+          <Section title="Projecções avulsas removíveis" count={transactions.length}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.75rem' }}>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <select value={txType} onChange={(e) => setTxType(e.target.value as 'income' | 'expense')} style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem' }}>
@@ -501,7 +501,7 @@ export function CashFlow() {
               )}
             </div>
             {transactions.length === 0
-              ? <EmptyState icon="💸" title="Nenhuma projecção" description="Adicione receitas e despesas acima. Elas entram no vermelho, não no azul." />
+              ? <EmptyState icon="💸" title="Nenhuma projecção avulsa" description="Adicione receitas e despesas acima. Receita sobe a linha azul; despesa entra no vermelho." />
               : transactions.map((tx, i) => (
                   <TransactionRow
                     key={tx.id}
