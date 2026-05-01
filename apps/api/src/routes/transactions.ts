@@ -75,6 +75,7 @@ const updateTransactionSchema = createTransactionSchema.partial().extend({
 const statementRowSchema = z.object({
   date: z.string().min(1),
   description: z.string().trim().min(1).max(4000),
+  memo: z.string().trim().max(4000).nullable().optional(),
   amountMinor: z.number().int(),
   competencyMonth: z.string().regex(/^\d{4}-\d{2}$/).optional(),
   categoryId: z.string().trim().min(1).max(128).nullable().optional(),

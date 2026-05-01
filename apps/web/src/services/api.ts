@@ -125,6 +125,9 @@ export interface CashFlowCardInvoice {
   dueMonth: string
   amountMinor: number
   paidMinor?: number
+  previousBalanceMinor?: number
+  totalAmountMinor?: number
+  openAmountMinor?: number
 }
 
 export interface CashFlowForecast {
@@ -165,6 +168,20 @@ export interface MonthlyCashFlow {
 
 export interface CashFlowResponse {
   monthly: MonthlyCashFlow[]
+  cardInvoicesByMonth?: Array<{
+    invoiceMonth: string
+    institutionName?: string | null
+    cardBrand?: string | null
+    cardLast4?: string | null
+    comprasDoMesMinor: string
+    abertoAnteriorMinor: string
+    totalFaturaAnteriorMinor?: string
+    totalFaturaMinor: string
+    totalAmountMinor: string
+    previousBalanceMinor?: string
+    paidAmountMinor: string
+    openAmountMinor: string
+  }>
 }
 
 export interface CashFlowRecurringListResponse {

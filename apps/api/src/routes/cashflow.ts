@@ -9,7 +9,7 @@ import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import { CashFlowEngine, CashFlowInput } from '@previa/core'
 import { transactions, accounts, cardInvoices, cardTransactions, cashflowForecasts, cashflowForecastMonthStatus } from '@previa/db'
-import { and, eq, inArray, gte, lte, sql, leftJoin } from 'drizzle-orm'
+import { and, eq, inArray, gte, lte, sql } from 'drizzle-orm'
 import { createError } from '../middlewares/errorHandler.js'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
@@ -658,11 +658,21 @@ router.post('/projection', async (req: Request, res: Response) => {
 
     // Processar projeção
     const projection = CashFlowEngine.project(input)
-    
-
 
     // Novo painel: compras do mês, aberto anterior, total fatura
-    let cardInvoicesPanel = []
+    let cardInvoicesPanel: Array<{
+      invoiceMonth: string
+      institutionName: string | null
+      cardBrand: string | null
+      cardLast4: string | null
+      comprasDoMesMinor: string
+      abertoAnteriorMinor: string
+      totalFaturaMinor: string
+      totalAmountMinor: string
+      previousBalanceMinor: string
+      paidAmountMinor: string
+      openAmountMinor: string
+    }> = []
     if (useDbCardInvoices) {
       // Buscar todas as faturas do período
       const invoices = await db
@@ -675,6 +685,7 @@ router.post('/projection', async (req: Request, res: Response) => {
           cardBrand: sql<string | null>`COALESCE(${cardInvoices.cardBrand}, ${accounts.cardBrand})`,
           cardLast4: sql<string | null>`COALESCE(${cardInvoices.cardLast4}, ${accounts.cardLast4})`,
           totalAmountMinor: cardInvoices.totalAmountMinor,
+          previousBalanceMinor: cardInvoices.previousBalanceMinor,
           paidAmountMinor: cardInvoices.paidAmountMinor,
           openAmountMinor: cardInvoices.openAmountMinor,
         })
@@ -688,12 +699,10 @@ router.post('/projection', async (req: Request, res: Response) => {
           ),
         )
 
-      // Buscar todas as compras do período agrupadas por fatura
-      const purchasesByInvoice = new Map()
       const purchases = await db
         .select({
           cardInvoiceId: cardTransactions.cardInvoiceId,
-          sumPurchases: sql`SUM(${cardTransactions.amountMinor})`,
+          sumPurchases: sql<string>`SUM(${cardTransactions.amountMinor})`,
         })
         .from(cardTransactions)
         .where(
@@ -704,31 +713,15 @@ router.post('/projection', async (req: Request, res: Response) => {
           ),
         )
         .groupBy(cardTransactions.cardInvoiceId)
+      const purchasesByInvoice = new Map<string, bigint>()
       for (const row of purchases) {
-        purchasesByInvoice.set(String(row.cardInvoiceId), BigInt(row.sumPurchases))
-      }
-
-      // Buscar fatura anterior para cada fatura
-      const invoicesByAccountAndMonth = new Map()
-      for (const inv of invoices) {
-        invoicesByAccountAndMonth.set(`${inv.accountId}:${inv.invoiceMonth}`, inv)
-      }
-
-      function getPreviousMonth(month: string) {
-        const [y, m] = month.split('-').map(Number)
-        const d = new Date(Date.UTC(y, m - 2, 1))
-        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+        purchasesByInvoice.set(String(row.cardInvoiceId), toBigInt(row.sumPurchases))
       }
 
       cardInvoicesPanel = invoices.map(inv => {
+        const totalFatura = toBigInt(inv.totalAmountMinor ?? 0n)
+        const abertoAnterior = toBigInt(inv.previousBalanceMinor ?? 0n)
         const purchasesMinor = purchasesByInvoice.get(String(inv.id)) ?? 0n
-        // Fatura anterior (mesmo cartão)
-        const prevMonth = getPreviousMonth(inv.invoiceMonth)
-        const prevInv = invoices.find(i => i.accountId === inv.accountId && i.invoiceMonth === prevMonth)
-        // Fix: usar openAmountMinor directamente em vez de recalcular total - paid
-        // (evita cascata do bug de paidAmountMinor inflado pela janela ±45 dias)
-        const abertoAnterior = prevInv ? toBigInt(prevInv.openAmountMinor ?? 0n) : 0n
-        const totalFatura = purchasesMinor + abertoAnterior
         return {
           invoiceMonth: inv.invoiceMonth,
           institutionName: inv.institutionName,
@@ -736,8 +729,10 @@ router.post('/projection', async (req: Request, res: Response) => {
           cardLast4: inv.cardLast4,
           comprasDoMesMinor: purchasesMinor.toString(),
           abertoAnteriorMinor: abertoAnterior.toString(),
+          totalFaturaAnteriorMinor: abertoAnterior.toString(),
           totalFaturaMinor: totalFatura.toString(),
           totalAmountMinor: inv.totalAmountMinor?.toString() ?? '0',
+          previousBalanceMinor: inv.previousBalanceMinor?.toString() ?? '0',
           paidAmountMinor: inv.paidAmountMinor?.toString() ?? '0',
           openAmountMinor: inv.openAmountMinor?.toString() ?? '0',
         }

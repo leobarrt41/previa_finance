@@ -245,6 +245,7 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
       minimumPaymentMinor: cardInvoices.minimumPaymentMinor,
       paidAmountMinor: cardInvoices.paidAmountMinor,
       openAmountMinor: cardInvoices.openAmountMinor,
+      previousBalanceMinor: cardInvoices.previousBalanceMinor,
       status: cardInvoices.status,
       parserStrategy: cardInvoices.parserStrategy,
       institutionName: cardInvoices.institutionName,

@@ -59,19 +59,23 @@ function sumPendingRecurringExpenseMinor(recurring: CashFlowRecurringTransaction
   }, 0)
 }
 
-function toChartData(monthly: MonthlyCashFlow[], recurring: CashFlowRecurringTransaction[]) {
+function toChartData(
+  monthly: MonthlyCashFlow[],
+  recurring: CashFlowRecurringTransaction[],
+  cardTotalsByMonth = new Map<string, number>(),
+) {
   return monthly.map((m) => {
-    const totalExpenseMinor = Math.abs(Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor))
     const pendingRecurringExpenseMinor = sumPendingRecurringExpenseMinor(recurring, m.competencyMonth)
-    const paidMinor = Math.max(0, totalExpenseMinor - pendingRecurringExpenseMinor)
+    const paidMinor = Math.abs(Number(m.totalLiabilityPaymentMinor))
+    const cardTotalMinor = cardTotalsByMonth.get(m.competencyMonth) ?? Number(m.debtOpenMinor)
 
     return {
-    month: m.competencyMonth,
-    saldo: Number(m.projectedClosingBalanceMinor) / 100,
-    recebido: Number(m.totalIncomeMinor) / 100,
-    pago: paidMinor / 100,
-    previsto: pendingRecurringExpenseMinor / 100,
-    cartaoProjetado: Number(m.debtOpenMinor) / 100,
+      month: m.competencyMonth,
+      saldo: Number(m.projectedClosingBalanceMinor) / 100,
+      recebido: Number(m.totalIncomeMinor) / 100,
+      pago: paidMinor / 100,
+      previsto: pendingRecurringExpenseMinor / 100,
+      cartaoProjetado: cardTotalMinor / 100,
     }
   })
 }
@@ -250,6 +254,14 @@ export function CashFlow() {
     void loadRecurring()
   }, [loadRecurring])
 
+  const cardInvoicesByMonth = state.status === 'success' ? state.data.cardInvoicesByMonth ?? [] : []
+  const currentCardInvoiceRows = cardInvoicesByMonth.filter((f) => f.invoiceMonth === startMonth)
+  const cardTotalsByMonth = cardInvoicesByMonth.reduce((acc, row) => {
+    const current = acc.get(row.invoiceMonth) ?? 0
+    acc.set(row.invoiceMonth, current + Number(row.totalFaturaMinor || 0))
+    return acc
+  }, new Map<string, number>())
+
   // Validation
   function validate(): boolean {
     const e: Record<string, string> = {}
@@ -370,7 +382,10 @@ export function CashFlow() {
     })
   }
 
-  const chartData = state.status === 'success' ? toChartData(state.data.monthly, recurring) : []
+  const chartData =
+    state.status === 'success'
+      ? toChartData(state.data.monthly, recurring, cardTotalsByMonth)
+      : []
   const recurringExpenseItems = recurring.filter((item) => item.amountMinor < 0)
 
   return (
@@ -396,31 +411,33 @@ export function CashFlow() {
           border: '1px solid #23263a',
         }}>
           <div style={{ fontWeight: 700, color: '#e5e7eb', marginBottom: 8 }}>Faturas do mês atual ({startMonth}):</div>
-          {state.data.cardInvoicesByMonth.filter(f => f.invoiceMonth === startMonth).length === 0 ? (
+          {currentCardInvoiceRows.length === 0 ? (
             <div style={{ color: '#6b7280', fontSize: '0.95rem' }}>Nenhuma fatura encontrada para o mês.</div>
           ) : (
             <table style={{ width: '100%', fontSize: '0.97rem', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ color: '#a5b4fc', textAlign: 'left' }}>
                   <th style={{ padding: '4px 8px' }}>Cartão</th>
+                  <th style={{ padding: '4px 8px' }}>Total da fatura anterior</th>
+                  <th style={{ padding: '4px 8px' }}>Pago na fatura anterior</th>
                   <th style={{ padding: '4px 8px' }}>Compras do mês</th>
-                  <th style={{ padding: '4px 8px' }}>Aberto mês anterior</th>
                   <th style={{ padding: '4px 8px' }}>Total da fatura</th>
-                  <th style={{ padding: '4px 8px' }}>Valor pago</th>
                 </tr>
               </thead>
               <tbody>
-                {state.data.cardInvoicesByMonth.filter(f => f.invoiceMonth === startMonth).map((f, i) => (
+                {currentCardInvoiceRows.map((f, i) => (
                   <tr key={i} style={{ borderBottom: '1px solid #23263a' }}>
                     <td style={{ padding: '4px 8px', color: '#e5e7eb' }}>
                       {(f.institutionName || 'Cartão desconhecido')}
                       {f.cardBrand ? ` / ${f.cardBrand}` : ''}
                       {f.cardLast4 ? ` / ${f.cardLast4}` : ''}
                     </td>
-                    <td style={{ padding: '4px 8px', color: '#fbbf24', fontWeight: 600 }}>{formatBRL(Number(f.comprasDoMesMinor) / 100)}</td>
-                    <td style={{ padding: '4px 8px', color: '#fbbf24', fontWeight: 600 }}>{formatBRL(Number(f.abertoAnteriorMinor) / 100)}</td>
-                    <td style={{ padding: '4px 8px', color: '#fbbf24', fontWeight: 700 }}>{formatBRL(Number(f.totalFaturaMinor) / 100)}</td>
-                    <td style={{ padding: '4px 8px', color: '#4ade80', fontWeight: 600 }}>{formatBRL(Number(f.paidAmountMinor) / 100)}</td>
+                    <td style={{ padding: '4px 8px', color: '#fbbf24', fontWeight: 600 }}>
+                      {formatBRL(Number(f.totalFaturaAnteriorMinor ?? f.abertoAnteriorMinor))}
+                    </td>
+                    <td style={{ padding: '4px 8px', color: '#4ade80', fontWeight: 600 }}>{formatBRL(Number(f.paidAmountMinor))}</td>
+                    <td style={{ padding: '4px 8px', color: '#fbbf24', fontWeight: 600 }}>{formatBRL(Number(f.comprasDoMesMinor))}</td>
+                    <td style={{ padding: '4px 8px', color: '#fbbf24', fontWeight: 700 }}>{formatBRL(Number(f.totalFaturaMinor))}</td>
                   </tr>
                 ))}
               </tbody>
@@ -622,9 +639,9 @@ export function CashFlow() {
                       formatter={(v, name) => {
                         const labels: Record<string, string> = {
                           recebido: 'Recebido',
-                          pago: 'Pago',
+                          pago: 'Pagamento de fatura',
                           previsto: 'Débitos recorrentes',
-                          cartaoProjetado: 'Cartão em aberto',
+                          cartaoProjetado: 'Faturas do cartão',
                           saldo: 'Saldo final',
                         }
                         return [formatBRL(Number(v ?? 0) * 100), labels[String(name)] ?? String(name)]
