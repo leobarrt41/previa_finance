@@ -33,17 +33,19 @@ function sumPendingRecurringExpenseMinor(recurring, month) {
     }, 0);
 }
 function toChartData(monthly, recurring, cardTotalsByMonth = new Map()) {
+    const activeMonth = currentMonth();
     return monthly.map((m) => {
         const pendingRecurringExpenseMinor = sumPendingRecurringExpenseMinor(recurring, m.competencyMonth);
         const statementOutflowMinor = Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor);
         const cardTotalMinor = cardTotalsByMonth.get(m.competencyMonth) ?? Number(m.debtOpenMinor);
+        const orangeMinor = m.competencyMonth < activeMonth ? 0 : cardTotalMinor;
         return {
             month: m.competencyMonth,
             saldo: Number(m.projectedClosingBalanceMinor) / 100,
             recebido: Number(m.totalIncomeMinor) / 100,
             pago: statementOutflowMinor / 100,
             previsto: pendingRecurringExpenseMinor / 100,
-            cartaoProjetado: cardTotalMinor / 100,
+            cartaoProjetado: orangeMinor / 100,
         };
     });
 }

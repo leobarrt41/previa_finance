@@ -723,3 +723,14 @@ DESCRIÇÃO: Ajustada a série azul do gráfico de CashFlow para somar todas as 
 TAGS: cashflow,extrato,saidas,liability_payment,frontend,bugfix  
 PRIORIDADE: Alta  
 STATUS: Concluido
+
+## [2026-05-01 18:36]
+
+ID: 20260501-1836-cashflow-orange-history-cutoff  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Bug  
+TÍTULO: Laranja histórico não deve aparecer em meses anteriores ao mês corrente  
+DESCRIÇÃO: Ajustado o gráfico de CashFlow para zerar a série laranja (`cartaoProjetado`) em meses anteriores ao mês corrente. Isso evita mostrar fatura em aberto em abril quando o sistema já está em maio, mantendo o aberto visível apenas do mês corrente em diante. O azul continua vindo das saídas reais do extrato. Build do front validado com sucesso.  
+TAGS: cashflow,cartaoProjetado,mescorrente,frontend,bugfix  
+PRIORIDADE: Alta  
+STATUS: Concluido
