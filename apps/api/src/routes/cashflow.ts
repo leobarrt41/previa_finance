@@ -490,6 +490,13 @@ router.post('/projection', async (req: Request, res: Response) => {
           }
         })
 
+    const statementOutflowByMonth = new Map<string, bigint>()
+    for (const tx of normalizedTransactions) {
+      if (tx.type !== 'expense' && tx.type !== 'liability_payment') continue
+      const current = statementOutflowByMonth.get(tx.competencyMonth) ?? 0n
+      statementOutflowByMonth.set(tx.competencyMonth, current + absMinor(toBigInt(tx.amountMinor)))
+    }
+
     const normalizedCardInvoices = useDbCardInvoices
       ? dbCardInvoices
           .map((ci) => {
@@ -747,6 +754,7 @@ router.post('/projection', async (req: Request, res: Response) => {
         totalIncomeMinor: month.totalIncomeMinor.toString(),
         totalExpenseMinor: month.totalExpenseMinor.toString(),
         totalLiabilityPaymentMinor: month.totalLiabilityPaymentMinor.toString(),
+        statementOutflowMinor: (statementOutflowByMonth.get(month.competencyMonth) ?? 0n).toString(),
         totalCommittedMinor: month.totalCommittedMinor.toString(),
         projectedClosingBalanceMinor: month.projectedClosingBalanceMinor.toString(),
         debtOpenMinor: month.debtOpenMinor.toString()
@@ -822,6 +830,7 @@ router.get('/example', (req: Request, res: Response) => {
           totalIncomeMinor: "500000", 
           totalExpenseMinor: "150000",
           totalLiabilityPaymentMinor: "0",
+          statementOutflowMinor: "150000",
           totalCommittedMinor: "0",
           projectedClosingBalanceMinor: "450000",
           debtOpenMinor: "0"

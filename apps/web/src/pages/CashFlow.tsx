@@ -67,7 +67,7 @@ function toChartData(
 
   return monthly.map((m) => {
     const pendingRecurringExpenseMinor = sumPendingRecurringExpenseMinor(recurring, m.competencyMonth)
-    const statementOutflowMinor = Number(m.totalExpenseMinor) + Number(m.totalLiabilityPaymentMinor)
+    const statementOutflowMinor = Number(m.statementOutflowMinor ?? 0)
     const cardTotalMinor = cardTotalsByMonth.get(m.competencyMonth) ?? Number(m.debtOpenMinor)
     const orangeMinor = m.competencyMonth < activeMonth ? 0 : cardTotalMinor
 

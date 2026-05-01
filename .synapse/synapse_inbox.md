@@ -637,6 +637,17 @@ DESCRICAO: A query do cardInvoicesPanel em apps/api/src/routes/cashflow.ts busca
 TAGS: cashflow,cartao,institutionName,cardBrand,cardLast4,ofx,bugfix
 PRIORIDADE: Alta
 STATUS: Concluido
+
+## [2026-05-01 18:58]
+
+ID: 20260501-1858-cashflow-blue-statement-only  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Bug  
+TÍTULO: Azul do CashFlow deve vir só do extrato real  
+DESCRIÇÃO: A série azul deixou de depender de `totalExpenseMinor` da projeção e passou a usar um agregado explícito de `statementOutflowMinor`, calculado apenas a partir das transações reais do extrato (`expense` + `liability_payment`). Isso impede que o azul herde previsões recorrentes em meses futuros e preserva o comportamento de abril aparecer azul só em abril.  
+TAGS: cashflow,azul,extrato,statement,frontend,bugfix  
+PRIORIDADE: Alta  
+STATUS: Concluido
 ---
 ## [2026-04-30 20:15]
 ID: 20260430-2015-reconcile-janela-assimetrica
@@ -732,5 +743,16 @@ CATEGORIA: Bug
 TÍTULO: Laranja histórico não deve aparecer em meses anteriores ao mês corrente  
 DESCRIÇÃO: Ajustado o gráfico de CashFlow para zerar a série laranja (`cartaoProjetado`) em meses anteriores ao mês corrente. Isso evita mostrar fatura em aberto em abril quando o sistema já está em maio, mantendo o aberto visível apenas do mês corrente em diante. O azul continua vindo das saídas reais do extrato. Build do front validado com sucesso.  
 TAGS: cashflow,cartaoProjetado,mescorrente,frontend,bugfix  
+PRIORIDADE: Alta  
+STATUS: Concluido
+
+## [2026-05-01 18:42]
+
+ID: 20260501-1842-cashflow-blue-current-month-only  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Bug  
+TÍTULO: Azul do CashFlow só deve aparecer até o mês corrente  
+DESCRIÇÃO: Ajustada a série azul do gráfico para considerar as saídas reais do extrato apenas até o mês corrente. Meses futuros de projeção não recebem barra azul, evitando duplicar valores que já aparecem no vermelho como débitos recorrentes. O laranja histórico segue cortado nos meses anteriores ao mês corrente. Build do front validado com sucesso.  
+TAGS: cashflow,azul,mescorrente,projecao,frontend,bugfix  
 PRIORIDADE: Alta  
 STATUS: Concluido

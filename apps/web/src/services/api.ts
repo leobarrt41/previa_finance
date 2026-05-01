@@ -161,6 +161,7 @@ export interface MonthlyCashFlow {
   totalIncomeMinor: string
   totalExpenseMinor: string
   totalLiabilityPaymentMinor: string
+  statementOutflowMinor?: string
   totalCommittedMinor: string
   projectedClosingBalanceMinor: string
   debtOpenMinor: string
