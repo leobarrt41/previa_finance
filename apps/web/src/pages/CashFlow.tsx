@@ -112,7 +112,15 @@ function appliesRecurringOnMonth(fc: CashFlowRecurringTransaction, month: string
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
-function TransactionRow({ tx, onRemove }: { tx: CashFlowTransaction; onRemove: () => void }) {
+function TransactionRow({
+  tx,
+  onRemove,
+  onEdit,
+}: {
+  tx: CashFlowTransaction
+  onRemove: () => void
+  onEdit: () => void
+}) {
   const isIncome = tx.type === 'income'
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: '1px solid #1e2130', fontSize: '0.85rem' }}>
@@ -124,6 +132,7 @@ function TransactionRow({ tx, onRemove }: { tx: CashFlowTransaction; onRemove: (
         <span style={{ color: isIncome ? '#4ade80' : '#f87171', fontWeight: 600 }}>
           {isIncome ? '+' : '-'} {formatBRL(tx.amountMinor)}
         </span>
+        <button onClick={onEdit} style={{ background: 'none', border: 'none', color: '#93c5fd', cursor: 'pointer', fontSize: '0.8rem' }}>editar</button>
         <button onClick={onRemove} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1rem' }}>×</button>
       </div>
     </div>
@@ -198,6 +207,7 @@ export function CashFlow() {
   const [txMonth, setTxMonth] = useState(now)
   const [txType, setTxType] = useState<'income' | 'expense'>('income')
   const [transactions, setTransactions] = useState<CashFlowTransaction[]>([])
+  const [txEditId, setTxEditId] = useState<string | null>(null)
 
   // Forecast form
   const [fcDesc, setFcDesc] = useState('')
@@ -253,14 +263,40 @@ export function CashFlow() {
     return Object.keys(e).length === 0
   }
 
-  function addTransaction() {
+  function saveTransaction() {
     if (!txDesc.trim() || !txAmount) return
-    setTransactions((prev) => [
-      ...prev,
-      { id: `tx-${Date.now()}`, competencyMonth: txMonth, amountMinor: minor(txAmount), type: txType, description: txDesc },
-    ])
+    const nextTx: CashFlowTransaction = {
+      id: txEditId ?? `tx-${Date.now()}`,
+      competencyMonth: txMonth,
+      amountMinor: minor(txAmount),
+      type: txType,
+      description: txDesc,
+    }
+    setTransactions((prev) => {
+      if (!txEditId) return [...prev, nextTx]
+      return prev.map((tx) => (tx.id === txEditId ? nextTx : tx))
+    })
+    setTxEditId(null)
     setTxDesc('')
     setTxAmount('')
+    setTxMonth(now)
+    setTxType('income')
+  }
+
+  function startEditTransaction(tx: CashFlowTransaction) {
+    setTxEditId(tx.id)
+    setTxDesc(tx.description)
+    setTxAmount((Math.abs(tx.amountMinor) / 100).toFixed(2))
+    setTxMonth(tx.competencyMonth)
+    setTxType((tx.type === 'income' ? 'income' : 'expense'))
+  }
+
+  function cancelEditTransaction() {
+    setTxEditId(null)
+    setTxDesc('')
+    setTxAmount('')
+    setTxMonth(now)
+    setTxType('income')
   }
 
   async function saveForecast() {
@@ -331,7 +367,14 @@ export function CashFlow() {
         startMonth,
         months: parseInt(months),
         openingBalanceMinor: minor(openingBalance),
-        transactions,
+        extraForecasts: transactions.map((tx) => ({
+          id: tx.id,
+          competencyMonth: tx.competencyMonth,
+          amountMinor: tx.type === 'expense' ? -Math.abs(tx.amountMinor) : Math.abs(tx.amountMinor),
+          recurrence: 'one-time',
+          description: tx.description,
+          isActive: true,
+        })),
       })
     } catch (err) {
       setRecurringError(err instanceof Error ? err.message : 'Falha ao atualizar status mensal')
@@ -346,7 +389,14 @@ export function CashFlow() {
       startMonth,
       months: parseInt(months),
       openingBalanceMinor: minor(openingBalance),
-      transactions,
+      extraForecasts: transactions.map((tx) => ({
+        id: tx.id,
+        competencyMonth: tx.competencyMonth,
+        amountMinor: tx.type === 'expense' ? -Math.abs(tx.amountMinor) : Math.abs(tx.amountMinor),
+        recurrence: 'one-time',
+        description: tx.description,
+        isActive: true,
+      })),
     })
   }
 
@@ -431,8 +481,8 @@ export function CashFlow() {
             </form>
           </Card>
 
-          {/* Transacções */}
-          <Section title="Transacções" count={transactions.length}>
+          {/* Projecções avulsas */}
+          <Section title="Projecções avulsas" count={transactions.length}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.75rem' }}>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <select value={txType} onChange={(e) => setTxType(e.target.value as 'income' | 'expense')} style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem' }}>
@@ -444,12 +494,22 @@ export function CashFlow() {
               <input value={txDesc} onChange={(e) => setTxDesc(e.target.value)} placeholder="Descrição (ex: Salário)" style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', width: '100%', boxSizing: 'border-box' }} />
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <input value={txAmount} onChange={(e) => setTxAmount(e.target.value)} type="number" step="0.01" placeholder="Valor (R$)" style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', flex: 1 }} />
-                <Button onClick={addTransaction} variant="secondary">+ Add</Button>
+                <Button onClick={saveTransaction} variant="secondary">{txEditId ? 'Salvar' : '+ Add'}</Button>
               </div>
+              {txEditId && (
+                <Button onClick={cancelEditTransaction} variant="secondary">Cancelar edição</Button>
+              )}
             </div>
             {transactions.length === 0
-              ? <EmptyState icon="💸" title="Nenhuma transacção" description="Adicione receitas e despesas acima." />
-              : transactions.map((tx, i) => <TransactionRow key={tx.id} tx={tx} onRemove={() => setTransactions((p) => p.filter((_, j) => j !== i))} />)
+              ? <EmptyState icon="💸" title="Nenhuma projecção" description="Adicione receitas e despesas acima. Elas entram no vermelho, não no azul." />
+              : transactions.map((tx, i) => (
+                  <TransactionRow
+                    key={tx.id}
+                    tx={tx}
+                    onEdit={() => startEditTransaction(tx)}
+                    onRemove={() => setTransactions((p) => p.filter((_, j) => j !== i))}
+                  />
+                ))
             }
           </Section>
 

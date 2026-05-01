@@ -150,6 +150,17 @@ const CashFlowRequestSchema = z.object({
     type: z.enum(['income', 'expense', 'transfer', 'card_purchase', 'liability_payment']),
     description: z.string().optional()
   })).optional(),
+
+  // Projeções avulsas opcionais (não são extrato)
+  extraForecasts: z.array(z.object({
+    id: z.string(),
+    competencyMonth: z.string().regex(/^\d{4}-\d{2}$/, 'Format must be YYYY-MM'),
+    amountMinor: z.union([z.number(), z.bigint()]),
+    recurrence: z.enum(['one-time', 'monthly', 'yearly']).optional(),
+    recurrenceEnd: z.string().optional(),
+    description: z.string().optional(),
+    isActive: z.boolean().default(true)
+  })).optional(),
   
   // Faturas de cartão opcionais
   cardInvoices: z.array(z.object({
@@ -652,6 +663,13 @@ router.post('/projection', async (req: Request, res: Response) => {
           ...f,
           amountMinor: BigInt(f.amountMinor),
         }))
+
+    const extraForecasts = (data.extraForecasts ?? []).map((f) => ({
+      ...f,
+      amountMinor: BigInt(f.amountMinor),
+      recurrence: f.recurrence ?? 'one-time',
+      recurrenceEnd: f.recurrenceEnd ?? null,
+    }))
     
     // Converter para formato do CashFlowEngine
     const input: CashFlowInput = {
@@ -660,7 +678,7 @@ router.post('/projection', async (req: Request, res: Response) => {
       currentMonth: data.startMonth,
       transactions: normalizedTransactions,
       cardInvoices: finalCardInvoices,
-      forecasts: normalizedForecasts,
+      forecasts: [...normalizedForecasts, ...extraForecasts],
     }
 
     // Processar projeção

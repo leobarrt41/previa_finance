@@ -638,6 +638,17 @@ TAGS: cashflow,cartao,institutionName,cardBrand,cardLast4,ofx,bugfix
 PRIORIDADE: Alta
 STATUS: Concluido
 
+## [2026-05-01 19:12]
+
+ID: 20260501-1912-cashflow-projections-vs-statement  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Bug  
+TÍTULO: Projeções avulsas do CashFlow não devem contaminar o azul  
+DESCRIÇÃO: A entrada manual do lado esquerdo passou a ser tratada como projeção avulsa editável, com mês ajustável e persistência até o usuário alterar/remover. No backend, essas projeções entram por `extraForecasts`, enquanto a barra azul segue apenas as transações reais do extrato (`statementOutflowMinor`). Isso evita misturar previsão com extrato e mantém o vermelho para despesas projetadas.  
+TAGS: cashflow,projecao,extrato,azul,frontend,bugfix  
+PRIORIDADE: Alta  
+STATUS: Concluido
+
 ## [2026-05-01 18:58]
 
 ID: 20260501-1858-cashflow-blue-statement-only  

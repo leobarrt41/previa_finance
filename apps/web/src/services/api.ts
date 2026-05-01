@@ -153,6 +153,7 @@ export interface CashFlowRequest {
   transactions?: CashFlowTransaction[]
   cardInvoices?: CashFlowCardInvoice[]
   forecasts?: CashFlowForecast[]
+  extraForecasts?: CashFlowForecast[]
 }
 
 export interface MonthlyCashFlow {
