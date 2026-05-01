@@ -83,9 +83,6 @@ function TransactionRow({ tx, onRemove }) {
     const isIncome = tx.type === 'income';
     return (_jsxs("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: '1px solid #1e2130', fontSize: '0.85rem' }, children: [_jsxs("div", { children: [_jsx("span", { style: { color: '#e5e7eb' }, children: tx.description }), _jsx("span", { style: { color: '#4b5563', marginLeft: 8 }, children: tx.competencyMonth })] }), _jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8 }, children: [_jsxs("span", { style: { color: isIncome ? '#4ade80' : '#f87171', fontWeight: 600 }, children: [isIncome ? '+' : '-', " ", formatBRL(tx.amountMinor)] }), _jsx("button", { onClick: onRemove, style: { background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1rem' }, children: "\u00D7" })] })] }));
 }
-function InvoiceRow({ inv, onRemove }) {
-    return (_jsxs("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: '1px solid #1e2130', fontSize: '0.85rem' }, children: [_jsxs("div", { children: [_jsxs("span", { style: { color: '#e5e7eb' }, children: ["Fatura ", inv.competencyMonth] }), _jsxs("span", { style: { color: '#4b5563', marginLeft: 8 }, children: ["\u2192 vence ", inv.dueMonth] })] }), _jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8 }, children: [_jsx("span", { style: { color: '#fbbf24', fontWeight: 600 }, children: formatBRL(inv.amountMinor) }), _jsx("button", { onClick: onRemove, style: { background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1rem' }, children: "\u00D7" })] })] }));
-}
 function ForecastRow({ fc, onRemove, onEdit, }) {
     return (_jsxs("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: '1px solid #1e2130', fontSize: '0.85rem' }, children: [_jsxs("div", { children: [_jsx("span", { style: { color: '#e5e7eb' }, children: fc.description || '—' }), _jsx("span", { style: { color: '#4b5563', marginLeft: 8 }, children: fc.competencyMonth }), fc.recurrenceEnd && (_jsxs("span", { style: { color: '#4b5563', marginLeft: 4 }, children: ["\u2192 ", fc.recurrenceEnd] }))] }), _jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8 }, children: [!fc.isActive && _jsx(Badge, { variant: "yellow", children: "Inativa" }), _jsx(Badge, { variant: "blue", children: recurrenceLabel[fc.recurrence ?? 'one-time'] }), _jsx("span", { style: { color: fc.amountMinor >= 0 ? '#4ade80' : '#f87171', fontWeight: 600 }, children: formatBRL(fc.amountMinor) }), _jsx("button", { onClick: onEdit, style: { background: 'none', border: 'none', color: '#93c5fd', cursor: 'pointer', fontSize: '0.8rem' }, children: "editar" }), _jsx("button", { onClick: onRemove, style: { background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1rem' }, children: "\u00D7" })] })] }));
 }
@@ -112,11 +109,6 @@ export function CashFlow() {
     const [txMonth, setTxMonth] = useState(now);
     const [txType, setTxType] = useState('income');
     const [transactions, setTransactions] = useState([]);
-    // Invoice form
-    const [invMonth, setInvMonth] = useState(now);
-    const [invDue, setInvDue] = useState('');
-    const [invAmount, setInvAmount] = useState('');
-    const [invoices, setInvoices] = useState([]);
     // Forecast form
     const [fcDesc, setFcDesc] = useState('');
     const [fcType, setFcType] = useState('expense');
@@ -177,16 +169,6 @@ export function CashFlow() {
         ]);
         setTxDesc('');
         setTxAmount('');
-    }
-    function addInvoice() {
-        if (!invAmount || !invDue)
-            return;
-        setInvoices((prev) => [
-            ...prev,
-            { id: `inv-${Date.now()}`, competencyMonth: invMonth, dueMonth: invDue, amountMinor: minor(invAmount), paidMinor: 0 },
-        ]);
-        setInvAmount('');
-        setInvDue('');
     }
     async function saveForecast() {
         if (!fcAmount)
@@ -256,7 +238,6 @@ export function CashFlow() {
                 months: parseInt(months),
                 openingBalanceMinor: minor(openingBalance),
                 transactions,
-                cardInvoices: invoices,
             });
         }
         catch (err) {
@@ -273,7 +254,6 @@ export function CashFlow() {
             months: parseInt(months),
             openingBalanceMinor: minor(openingBalance),
             transactions,
-            cardInvoices: invoices,
         });
     }
     const chartData = state.status === 'success'
@@ -288,9 +268,7 @@ export function CashFlow() {
                     border: '1px solid #23263a',
                 }, children: [_jsxs("div", { style: { fontWeight: 700, color: '#e5e7eb', marginBottom: 8 }, children: ["Faturas do m\u00EAs atual (", startMonth, "):"] }), currentCardInvoiceRows.length === 0 ? (_jsx("div", { style: { color: '#6b7280', fontSize: '0.95rem' }, children: "Nenhuma fatura encontrada para o m\u00EAs." })) : (_jsxs("table", { style: { width: '100%', fontSize: '0.97rem', borderCollapse: 'collapse' }, children: [_jsx("thead", { children: _jsxs("tr", { style: { color: '#a5b4fc', textAlign: 'left' }, children: [_jsx("th", { style: { padding: '4px 8px' }, children: "Cart\u00E3o" }), _jsx("th", { style: { padding: '4px 8px' }, children: "Total da fatura anterior" }), _jsx("th", { style: { padding: '4px 8px' }, children: "Pago na fatura anterior" }), _jsx("th", { style: { padding: '4px 8px' }, children: "Compras do m\u00EAs" }), _jsx("th", { style: { padding: '4px 8px' }, children: "Total da fatura" })] }) }), _jsx("tbody", { children: currentCardInvoiceRows.map((f, i) => (_jsxs("tr", { style: { borderBottom: '1px solid #23263a' }, children: [_jsxs("td", { style: { padding: '4px 8px', color: '#e5e7eb' }, children: [(f.institutionName || 'Cartão desconhecido'), f.cardBrand ? ` / ${f.cardBrand}` : '', f.cardLast4 ? ` / ${f.cardLast4}` : ''] }), _jsx("td", { style: { padding: '4px 8px', color: '#fbbf24', fontWeight: 600 }, children: formatBRL(Number(f.totalFaturaAnteriorMinor ?? f.abertoAnteriorMinor)) }), _jsx("td", { style: { padding: '4px 8px', color: '#4ade80', fontWeight: 600 }, children: formatBRL(Number(f.paidAmountMinor)) }), _jsx("td", { style: { padding: '4px 8px', color: '#fbbf24', fontWeight: 600 }, children: formatBRL(Number(f.comprasDoMesMinor)) }), _jsx("td", { style: { padding: '4px 8px', color: '#fbbf24', fontWeight: 700 }, children: formatBRL(Number(f.totalFaturaMinor)) })] }, i))) })] }))] })), _jsxs("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '1.5rem', alignItems: 'start' }, children: [_jsxs("div", { style: { display: 'flex', flexDirection: 'column', gap: '1rem' }, children: [_jsxs(Card, { children: [_jsx(SectionTitle, { children: "Par\u00E2metros" }), _jsxs("form", { onSubmit: handleSubmit, style: { display: 'flex', flexDirection: 'column', gap: '0.75rem' }, children: [_jsx(Input, { label: "M\u00EAs inicial (YYYY-MM)", value: startMonth, onChange: (e) => setStartMonth(e.target.value), placeholder: "2026-05", error: errors.startMonth }), _jsx(Input, { label: "Meses a projectar", type: "number", min: 1, max: 24, value: months, onChange: (e) => setMonths(e.target.value), error: errors.months }), _jsx(Input, { label: "Saldo inicial (R$)", type: "number", step: "0.01", value: openingBalance, onChange: (e) => setOpeningBalance(e.target.value), placeholder: "1000.00", error: errors.openingBalance }), _jsx(Button, { type: "submit", fullWidth: true, disabled: state.status === 'loading', children: state.status === 'loading' ? 'Calculando...' : 'Calcular projecção' })] })] }), _jsxs(Section, { title: "Transac\u00E7\u00F5es", count: transactions.length, children: [_jsxs("div", { style: { display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.75rem' }, children: [_jsxs("div", { style: { display: 'flex', gap: '0.5rem' }, children: [_jsxs("select", { value: txType, onChange: (e) => setTxType(e.target.value), style: { background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem' }, children: [_jsx("option", { value: "income", children: "Receita" }), _jsx("option", { value: "expense", children: "Despesa" })] }), _jsx("input", { value: txMonth, onChange: (e) => setTxMonth(e.target.value), placeholder: "YYYY-MM", style: { background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', width: 90 } })] }), _jsx("input", { value: txDesc, onChange: (e) => setTxDesc(e.target.value), placeholder: "Descri\u00E7\u00E3o (ex: Sal\u00E1rio)", style: { background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', width: '100%', boxSizing: 'border-box' } }), _jsxs("div", { style: { display: 'flex', gap: '0.5rem' }, children: [_jsx("input", { value: txAmount, onChange: (e) => setTxAmount(e.target.value), type: "number", step: "0.01", placeholder: "Valor (R$)", style: { background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', flex: 1 } }), _jsx(Button, { onClick: addTransaction, variant: "secondary", children: "+ Add" })] })] }), transactions.length === 0
                                         ? _jsx(EmptyState, { icon: "\uD83D\uDCB8", title: "Nenhuma transac\u00E7\u00E3o", description: "Adicione receitas e despesas acima." })
-                                        : transactions.map((tx, i) => _jsx(TransactionRow, { tx: tx, onRemove: () => setTransactions((p) => p.filter((_, j) => j !== i)) }, tx.id))] }), _jsxs(Section, { title: "Faturas de cart\u00E3o", count: invoices.length, children: [_jsxs("div", { style: { display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.75rem' }, children: [_jsxs("div", { style: { display: 'flex', gap: '0.5rem' }, children: [_jsx("input", { value: invMonth, onChange: (e) => setInvMonth(e.target.value), placeholder: "M\u00EAs compra", style: { background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', flex: 1 } }), _jsx("input", { value: invDue, onChange: (e) => setInvDue(e.target.value), placeholder: "M\u00EAs vencimento", style: { background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', flex: 1 } })] }), _jsxs("div", { style: { display: 'flex', gap: '0.5rem' }, children: [_jsx("input", { value: invAmount, onChange: (e) => setInvAmount(e.target.value), type: "number", step: "0.01", placeholder: "Total fatura (R$)", style: { background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', flex: 1 } }), _jsx(Button, { onClick: addInvoice, variant: "secondary", children: "+ Add" })] })] }), invoices.length === 0
-                                        ? _jsx(EmptyState, { icon: "\uD83D\uDCB3", title: "Nenhuma fatura", description: "Adicione faturas de cart\u00E3o acima." })
-                                        : invoices.map((inv, i) => _jsx(InvoiceRow, { inv: inv, onRemove: () => setInvoices((p) => p.filter((_, j) => j !== i)) }, inv.id))] }), _jsxs(Section, { title: "Previs\u00F5es recorrentes", count: recurring.length, children: [_jsx("div", { style: {
+                                        : transactions.map((tx, i) => _jsx(TransactionRow, { tx: tx, onRemove: () => setTransactions((p) => p.filter((_, j) => j !== i)) }, tx.id))] }), _jsxs(Section, { title: "Previs\u00F5es recorrentes", count: recurring.length, children: [_jsx("div", { style: {
                                             padding: '0.6rem 0.75rem',
                                             background: '#1a2a3a',
                                             borderLeft: '3px solid #6366f1',

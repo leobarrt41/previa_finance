@@ -679,3 +679,14 @@ DESCRIÇÃO: Definida a regra operacional para este repositório: antes de criar
 TAGS: synapse,processo,commit,memoria-operacional  
 PRIORIDADE: Média  
 STATUS: Concluido
+
+## [2026-05-01 15:31]
+
+ID: 20260501-1531-cashflow-remove-manual-invoices  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Tarefa  
+TÍTULO: Remover janela manual de faturas do CashFlow  
+DESCRIÇÃO: Removido o formulário manual de faturas da tela de CashFlow em `apps/web/src/pages/CashFlow.tsx`. A entrada de faturas agora fica restrita ao fluxo real de importação/persistência em `card_invoices` e `card_transactions`; a projeção do CashFlow continua lendo as faturas importadas da API. O `CashFlow.js` gerado também foi recompilado para refletir a remoção.  
+TAGS: cashflow,frontend,faturas,ux,refactor  
+PRIORIDADE: Média  
+STATUS: Concluido

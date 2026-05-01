@@ -24,7 +24,6 @@ import {
   buildMonthRange,
   currentMonth,
   type CashFlowTransaction,
-  type CashFlowCardInvoice,
   type CashFlowRecurringTransaction,
   type MonthlyCashFlow,
   type CashFlowResponse,
@@ -128,21 +127,6 @@ function TransactionRow({ tx, onRemove }: { tx: CashFlowTransaction; onRemove: (
   )
 }
 
-function InvoiceRow({ inv, onRemove }: { inv: CashFlowCardInvoice; onRemove: () => void }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: '1px solid #1e2130', fontSize: '0.85rem' }}>
-      <div>
-        <span style={{ color: '#e5e7eb' }}>Fatura {inv.competencyMonth}</span>
-        <span style={{ color: '#4b5563', marginLeft: 8 }}>→ vence {inv.dueMonth}</span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ color: '#fbbf24', fontWeight: 600 }}>{formatBRL(inv.amountMinor)}</span>
-        <button onClick={onRemove} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1rem' }}>×</button>
-      </div>
-    </div>
-  )
-}
-
 function ForecastRow({
   fc,
   onRemove,
@@ -212,12 +196,6 @@ export function CashFlow() {
   const [txType, setTxType] = useState<'income' | 'expense'>('income')
   const [transactions, setTransactions] = useState<CashFlowTransaction[]>([])
 
-  // Invoice form
-  const [invMonth, setInvMonth] = useState(now)
-  const [invDue, setInvDue] = useState('')
-  const [invAmount, setInvAmount] = useState('')
-  const [invoices, setInvoices] = useState<CashFlowCardInvoice[]>([])
-
   // Forecast form
   const [fcDesc, setFcDesc] = useState('')
   const [fcType, setFcType] = useState<'income' | 'expense'>('expense')
@@ -281,16 +259,6 @@ export function CashFlow() {
     ])
     setTxDesc('')
     setTxAmount('')
-  }
-
-  function addInvoice() {
-    if (!invAmount || !invDue) return
-    setInvoices((prev) => [
-      ...prev,
-      { id: `inv-${Date.now()}`, competencyMonth: invMonth, dueMonth: invDue, amountMinor: minor(invAmount), paidMinor: 0 },
-    ])
-    setInvAmount('')
-    setInvDue('')
   }
 
   async function saveForecast() {
@@ -362,7 +330,6 @@ export function CashFlow() {
         months: parseInt(months),
         openingBalanceMinor: minor(openingBalance),
         transactions,
-        cardInvoices: invoices,
       })
     } catch (err) {
       setRecurringError(err instanceof Error ? err.message : 'Falha ao atualizar status mensal')
@@ -378,7 +345,6 @@ export function CashFlow() {
       months: parseInt(months),
       openingBalanceMinor: minor(openingBalance),
       transactions,
-      cardInvoices: invoices,
     })
   }
 
@@ -401,7 +367,7 @@ export function CashFlow() {
         </p>
       </div>
 
-      {/* Painel de faturas/cartões do mês atual - NOVO LAYOUT */}
+      {/* Painel de faturas/cartões do mês atual */}
       {state.status === 'success' && state.data.cardInvoicesByMonth && (
         <div style={{
           background: '#181c2a',
@@ -482,24 +448,6 @@ export function CashFlow() {
             {transactions.length === 0
               ? <EmptyState icon="💸" title="Nenhuma transacção" description="Adicione receitas e despesas acima." />
               : transactions.map((tx, i) => <TransactionRow key={tx.id} tx={tx} onRemove={() => setTransactions((p) => p.filter((_, j) => j !== i))} />)
-            }
-          </Section>
-
-          {/* Faturas */}
-          <Section title="Faturas de cartão" count={invoices.length}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.75rem' }}>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <input value={invMonth} onChange={(e) => setInvMonth(e.target.value)} placeholder="Mês compra" style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', flex: 1 }} />
-                <input value={invDue} onChange={(e) => setInvDue(e.target.value)} placeholder="Mês vencimento" style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', flex: 1 }} />
-              </div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <input value={invAmount} onChange={(e) => setInvAmount(e.target.value)} type="number" step="0.01" placeholder="Total fatura (R$)" style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem', flex: 1 }} />
-                <Button onClick={addInvoice} variant="secondary">+ Add</Button>
-              </div>
-            </div>
-            {invoices.length === 0
-              ? <EmptyState icon="💳" title="Nenhuma fatura" description="Adicione faturas de cartão acima." />
-              : invoices.map((inv, i) => <InvoiceRow key={inv.id} inv={inv} onRemove={() => setInvoices((p) => p.filter((_, j) => j !== i))} />)
             }
           </Section>
 
