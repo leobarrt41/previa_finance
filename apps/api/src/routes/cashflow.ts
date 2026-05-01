@@ -8,7 +8,7 @@ import { Router, Request, Response } from 'express'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import { CashFlowEngine, CashFlowInput } from '@previa/core'
-import { transactions, accounts, cardInvoices, cardTransactions, cardInvoicePayments, cashflowForecasts, cashflowForecastMonthStatus } from '@previa/db'
+import { transactions, accounts, cardInvoices, cardTransactions, cashflowForecasts, cashflowForecastMonthStatus } from '@previa/db'
 import { and, eq, inArray, gte, lte, sql } from 'drizzle-orm'
 import { createError } from '../middlewares/errorHandler.js'
 import { getDatabase } from '../config/database.js'
@@ -436,16 +436,6 @@ router.post('/projection', async (req: Request, res: Response) => {
           .groupBy(cardTransactions.cardInvoiceId)
       : []
 
-    const dbInvoicePayments = useDbCardInvoices
-      ? await db
-          .select({
-            competencyMonth: sql<string>`DATE_FORMAT(${cardInvoicePayments.paymentDate}, '%Y-%m')`,
-            amountMinor: cardInvoicePayments.allocatedAmountMinor,
-          })
-          .from(cardInvoicePayments)
-          .where(eq(cardInvoicePayments.userId, owner.id))
-      : []
-
     const dbInstallments = useDbCardInvoices
       ? await db
           .select({
@@ -523,14 +513,6 @@ router.post('/projection', async (req: Request, res: Response) => {
           amountMinor: BigInt(ci.amountMinor),
           paidMinor: ci.paidMinor !== undefined ? BigInt(ci.paidMinor) : undefined,
         }))
-
-    const normalizedInvoicePayments = useDbCardInvoices
-      ? dbInvoicePayments.map((payment) => ({
-          id: randomUUID(),
-          competencyMonth: payment.competencyMonth,
-          amountMinor: toBigInt(payment.amountMinor),
-        }))
-      : []
 
     const inferredPaidCardInvoices = useDbCardInvoices
       ? (() => {
@@ -671,7 +653,6 @@ router.post('/projection', async (req: Request, res: Response) => {
       currentMonth: data.startMonth,
       transactions: normalizedTransactions,
       cardInvoices: finalCardInvoices,
-      invoicePayments: normalizedInvoicePayments,
       forecasts: normalizedForecasts,
     }
 

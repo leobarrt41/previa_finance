@@ -444,6 +444,28 @@ function isCashNeutralSweep(description: string): boolean {
     || normalized.includes('fundo')
 }
 
+function isLikelyCardPayment(description: string): boolean {
+  const normalized = normalizeText(description)
+  if (CARD_PAYMENT_PATTERN.test(description)) return true
+
+  const hasTransferMarker =
+    normalized.includes('pix')
+    || normalized.includes('ted')
+    || normalized.includes('doc')
+    || normalized.includes('transferencia')
+    || normalized.includes('transfer')
+    || normalized.includes('transf')
+
+  if (!hasTransferMarker) return false
+
+  return normalized.includes('cartao')
+    || normalized.includes('fatura')
+    || normalized.includes('pagto')
+    || normalized.includes('pgto')
+    || normalized.includes('pagamento')
+    || normalized.includes('credito')
+}
+
 function isNonTransactionalDescription(description: string): boolean {
   const normalized = normalizeText(description)
   return normalized.includes('saldo do dia')
@@ -494,9 +516,11 @@ function parseCsvStatement(buffer: Buffer) {
 
     if (amountMinor === 0) continue
 
-    const movementType = isCashNeutralSweep(description)
-      ? 'transfer'
-      : (amountMinor < 0 ? 'expense' : 'income')
+    const movementType = amountMinor < 0 && isLikelyCardPayment(description)
+      ? 'liability_payment'
+      : isCashNeutralSweep(description)
+        ? 'transfer'
+        : (amountMinor < 0 ? 'expense' : 'income')
 
     parsed.push({
       id: `row-${parsed.length + 1}`,
@@ -549,9 +573,11 @@ function parseOfxStatement(buffer: Buffer) {
     const amountMinor = parseCurrencyToMinor(amountRaw)
     if (amountMinor === 0) continue
 
-    const movementType = isCashNeutralSweep(description)
-      ? 'transfer'
-      : (amountMinor < 0 ? 'expense' : 'income')
+    const movementType = amountMinor < 0 && isLikelyCardPayment(description)
+      ? 'liability_payment'
+      : isCashNeutralSweep(description)
+        ? 'transfer'
+        : (amountMinor < 0 ? 'expense' : 'income')
 
     parsed.push({
       id: `row-${parsed.length + 1}`,

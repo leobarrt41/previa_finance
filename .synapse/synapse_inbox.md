@@ -701,3 +701,14 @@ DESCRIÇÃO: A projeção do CashFlow estava alimentando `totalLiabilityPaymentM
 TAGS: cashflow,extrato,card_invoice_payments,liability_payment,bugfix  
 PRIORIDADE: Alta  
 STATUS: Concluido
+
+## [2026-05-01 15:52]
+
+ID: 20260501-1552-cashflow-blue-pix-transfer  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Bug  
+TÍTULO: PIX e transferências de pagamento de fatura não entravam no azul  
+DESCRIÇÃO: O gráfico do CashFlow só considerava azul claro quando a transação já chegava como `liability_payment`. Na prática, pagamentos de fatura via PIX/TED/transferência podiam entrar na importação como `expense` ou `transfer`, ficando fora da série azul. Solução aplicada: `apps/api/src/routes/transactions.ts` ganhou uma heurística adicional que classifica como `liability_payment` descrições com indícios de pagamento de fatura usando PIX/TED/transferência, e `apps/api/src/routes/cashflow.ts` deixou de somar um caminho paralelo de `invoicePayments` para evitar contagem dupla. Build da API validado com sucesso.  
+TAGS: cashflow,pix,transferencia,liability_payment,extrato,bugfix  
+PRIORIDADE: Alta  
+STATUS: Concluido
