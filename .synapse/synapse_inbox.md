@@ -668,3 +668,14 @@ TAGS: cashflow,reconciliacao,cardInvoicePayments,CARD_PAYMENT_PATTERN,bb,itau,pa
 PRIORIDADE: Alta
 STATUS: Concluido
 ---
+
+## [2026-05-01 13:58]
+
+ID: 20260501-1358-synapse-before-commit  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Decisão  
+TÍTULO: Atualizar synapse_inbox antes de commitar  
+DESCRIÇÃO: Definida a regra operacional para este repositório: antes de criar um commit com mudanças relevantes, atualizar o arquivo `.synapse/synapse_inbox.md` no padrão append-only para registrar a motivacao, a correção aplicada e o contexto do trabalho. Isso garante memoria duravel e evita perder o histórico operacional entre sessões.  
+TAGS: synapse,processo,commit,memoria-operacional  
+PRIORIDADE: Média  
+STATUS: Concluido
