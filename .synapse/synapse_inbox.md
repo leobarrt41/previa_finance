@@ -789,3 +789,50 @@ DESCRIÇÃO: Ajustada a série azul do gráfico para considerar as saídas reais
 TAGS: cashflow,azul,mescorrente,projecao,frontend,bugfix  
 PRIORIDADE: Alta  
 STATUS: Concluido
+
+---
+## [2026-05-02] Avaliadores IA + Notas Fiscais — Rebase sobre 3351f6c
+
+### Contexto
+Trabalho anterior foi feito sobre versão desatualizada do cashflow.ts.
+O Codex subiu a versão correta (commit 3351f6c) e o Manus refez tudo sobre essa base.
+
+### O que foi implementado (commit 3fb0823)
+
+#### 3 Telas de Avaliação com IA
+- **Orçamento (`/budget`):** Avaliação 100% automática. Removidos campos manuais. IA analisa renda, faturas, extratos e categorias. Exibe gauge de comprometimento, diagnóstico, alertas e recomendações.
+- **Avaliador de Gastos (`/assess/spending`):** Tela dedicada. Seleção de categoria (pré-selecionável via `?categoryId=` na URL). Histórico, tendência, risco, impacto na renda.
+- **Avaliador de Dívidas (`/assess/debt`):** Faturas em aberto, parcelas futuras, risco de atraso, pressão sobre renda.
+- **API:** `apps/api/src/routes/assess.ts` — 3 endpoints com chamadas reais a `POST /v1/chat/completions` (mesmo padrão de invoices.ts).
+
+#### Módulo receipt_documents (Notas Fiscais)
+- **Migration:** `packages/db/migrations/0009_receipt_documents.sql`
+- **Schema Drizzle:** `packages/db/src/schema/receipt_documents.ts`
+- **API:** `apps/api/src/routes/receiptDocuments.ts` — CRUD + reconciliação manual
+- **Tela:** `/receipt-documents` com botão rápido (FAB) para uso no estabelecimento
+
+#### Integração no CashFlow (SEM alterar o CashFlowEngine)
+- Notas `projected` com `expectedInvoiceMonth` → injetadas como `cardInvoice` sintética → **barra laranja**
+- Notas `projected` sem `expectedInvoiceMonth` (débito) → injetadas como `expense` → **barra vermelha**
+- Notas `reconciled` → ignoradas (dado real assume o controle)
+- Injeção feita em `cashflow.ts` (API), NUNCA no CashFlowEngine
+
+#### Reconciliação Automática
+- **Cartão:** `invoices.ts` — após insert de `card_transactions`, cruza notas por `amount_minor` + `merchant_name` fuzzy (8 chars) + `purchase_month`
+- **Débito:** `transactions.ts` — após insert de `transactions`, mesmo critério
+- Best-effort: não bloqueia o import em caso de erro
+
+#### Menu e Navegação
+- Layout: "Notas Fiscais 🧾", "Aval. Gastos 📊", "Aval. Dívidas 💳"
+- Botão "Avaliar" em cada categoria → `/assess/spending?categoryId=...`
+
+### Migrations pendentes em produção
+```bash
+mysql -u root previa_finance < packages/db/migrations/0009_receipt_documents.sql
+```
+
+### Regras respeitadas
+- CashFlowEngine NÃO foi alterado
+- Lógica azul/laranja intacta
+- Sem .env commitado
+- git pull feito antes de iniciar o trabalho (base 3351f6c)
