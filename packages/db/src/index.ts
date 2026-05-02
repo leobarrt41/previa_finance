@@ -56,6 +56,8 @@ export {
   cashflowForecastMonthStatus,
 } from './schema/cashflow_forecasts';
 
+export { receiptDocuments } from './schema/receipt_documents';
+
 export type {
   CashflowForecast,
   NewCashflowForecast,

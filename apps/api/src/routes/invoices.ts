@@ -20,7 +20,7 @@ import multer from 'multer'
 import { z } from 'zod'
 import { parseBBInvoice, invoiceToForecast } from '@previa/parser-bb'
 import { parseItauInvoice, itauInvoiceToForecast, isItauInvoice } from '@previa/parser-itau'
-import { accounts, categories, cardInvoices, cardTransactions } from '@previa/db'
+import { accounts, categories, cardInvoices, cardTransactions, receiptDocuments } from '@previa/db'
 import { buildFingerprintFromRaw } from '@previa/core'
 import { eq, and, desc, sql } from 'drizzle-orm'
 import { getDatabase } from '../config/database.js'
@@ -690,6 +690,59 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           skipped++
         }
       }
+    }
+
+    // -------------------------------------------------------------------------
+    // Reconciliação automática de receipt_documents (cartão)
+    // Cruza notas projetadas com card_transactions recém-inseridas
+    // Critério: amount_minor igual + merchant_name fuzzy (8 chars) + purchase_month
+    // Best-effort: não bloqueia o import em caso de erro
+    // -------------------------------------------------------------------------
+    try {
+      const projectedNotes = await db
+        .select()
+        .from(receiptDocuments)
+        .where(
+          and(
+            eq(receiptDocuments.ownerId, owner.id),
+            eq(receiptDocuments.dataState, 'projected'),
+          )
+        )
+
+      if (projectedNotes.length > 0) {
+        const newCardTxs = await db
+          .select()
+          .from(cardTransactions)
+          .where(eq(cardTransactions.cardInvoiceId, cardInvoiceId))
+
+        const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8)
+
+        for (const note of projectedNotes) {
+          if (!note.expectedInvoiceMonth) continue
+          const match = newCardTxs.find((ct) => {
+            const amtOk = BigInt(ct.amountMinor ?? 0) === BigInt(note.amountMinor ?? 0)
+            const merchantOk = note.merchantName
+              ? normalize(ct.normalizedDescription ?? ct.description ?? '') === normalize(note.merchantName)
+              : true
+            const monthOk = ct.competencyMonth === note.purchaseMonth
+            return amtOk && (merchantOk || monthOk)
+          })
+          if (match) {
+            await db
+              .update(receiptDocuments)
+              .set({
+                dataState: 'reconciled',
+                cardTransactionId: match.id,
+                reconcileSource: 'invoice_import',
+                reconciledAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(eq(receiptDocuments.id, note.id))
+          }
+        }
+      }
+    } catch (reconcileErr) {
+      console.warn('[invoices/import] receipt reconciliation error (non-blocking):', reconcileErr)
     }
 
     res.json({

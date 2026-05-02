@@ -8,6 +8,9 @@ import { Accounts } from './pages/Accounts'
 import { AccountDetail } from './pages/AccountDetail'
 import { InvoiceUpload } from './pages/InvoiceUpload'
 import { StatementUpload } from './pages/StatementUpload'
+import { SpendingAssessor } from './pages/SpendingAssessor'
+import { DebtAssessor } from './pages/DebtAssessor'
+import ReceiptDocuments from './pages/ReceiptDocuments'
 
 export default function App() {
   return (
@@ -22,6 +25,9 @@ export default function App() {
           <Route path="/categories" element={<Categories />} />
           <Route path="/statements/upload" element={<StatementUpload />} />
           <Route path="/invoices/upload" element={<InvoiceUpload />} />
+          <Route path="/assess/spending" element={<SpendingAssessor />} />
+          <Route path="/assess/debt" element={<DebtAssessor />} />
+          <Route path="/receipt-documents" element={<ReceiptDocuments />} />
         </Routes>
       </Layout>
     </BrowserRouter>

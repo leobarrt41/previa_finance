@@ -10,6 +10,9 @@ const NAV_ITEMS = [
   { to: '/statements/upload', label: 'Upload Extrato', icon: '🧾' },
   { to: '/invoices/upload', label: 'Upload Fatura',   icon: '📤' },
   { to: '/categories',      label: 'Categorias',      icon: '🏷️' },
+  { to: '/assess/spending',  label: 'Aval. Gastos',    icon: '📊' },
+  { to: '/assess/debt',      label: 'Aval. Dívidas',   icon: '💳' },
+  { to: '/receipt-documents', label: 'Notas Fiscais',   icon: '🧾' },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {

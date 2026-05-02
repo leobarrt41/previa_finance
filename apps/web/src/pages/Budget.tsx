@@ -1,15 +1,16 @@
 /**
- * Budget.tsx — Tela de Análise de Orçamento
+ * Budget.tsx — Avaliação Automática de Orçamento com IA
  *
- * Contratos de API:
- *   POST /api/budget/analyze-transaction  — impacto de uma transacção
- *   POST /api/budget/analysis             — visão geral do orçamento
- *   GET  /api/categories                  — lista de categorias
+ * Sem campos manuais. A avaliação é feita automaticamente com base em:
+ *   - Renda/salário (transactions income)
+ *   - Faturas (card_invoices)
+ *   - Extratos (transactions)
+ *   - Classificação em categorias
+ *   - Contexto do mês
  *
- * Todos os contratos mapeados directamente de apps/api/src/routes/budget.ts
- * e apps/api/src/routes/categories.ts.
+ * Contrato de API: POST /api/assess/budget
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
 import {
   BarChart,
   Bar,
@@ -24,21 +25,14 @@ import {
   api,
   formatBRL,
   currentMonth,
-  type Category,
-  type BudgetItem,
-  type SpendingItem,
-  type TransactionAnalysisResponse,
-  type BudgetAnalysisResponse,
+  type BudgetAssessResult,
 } from '../services/api'
-import { useAsync } from '../hooks/useAsync'
 import {
   Card,
   Badge,
   Button,
-  Input,
   Select,
   Alert,
-  EmptyState,
   Spinner,
   SectionTitle,
 } from '../components/ui'
@@ -46,481 +40,294 @@ import {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function minor(brl: string): number {
-  const n = parseFloat(brl.replace(',', '.'))
-  return isNaN(n) ? 0 : Math.round(n * 100)
-}
-
-function utilizationColor(pct: number): string {
-  if (pct >= 100) return '#f87171'
-  if (pct >= 80) return '#fbbf24'
-  return '#4ade80'
-}
-
-function statusVariant(status: string): 'green' | 'yellow' | 'red' | 'gray' {
-  if (status === 'seguro' || status === 'ok') return 'green'
-  if (status === 'atenção' || status === 'alerta') return 'yellow'
-  if (status === 'excedido' || status === 'crítico') return 'red'
+function riskVariant(level?: string): 'green' | 'yellow' | 'red' | 'gray' {
+  if (level === 'baixo') return 'green'
+  if (level === 'moderado') return 'yellow'
+  if (level === 'alto' || level === 'crítico') return 'red'
   return 'gray'
 }
 
+function riskLabel(level?: string): string {
+  if (!level) return '—'
+  return level.charAt(0).toUpperCase() + level.slice(1)
+}
+
+function commitmentColor(pct: number): string {
+  if (pct >= 90) return '#f87171'
+  if (pct >= 70) return '#fbbf24'
+  if (pct >= 50) return '#fb923c'
+  return '#4ade80'
+}
+
+function buildMonthOptions(): { value: string; label: string }[] {
+  const opts = []
+  const now = new Date()
+  for (let i = 0; i < 6; i++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1))
+    const val = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+    const label = d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    opts.push({ value: val, label: label.charAt(0).toUpperCase() + label.slice(1) })
+  }
+  return opts
+}
+
 // ---------------------------------------------------------------------------
-// Main page
+// Gauge visual de comprometimento
+// ---------------------------------------------------------------------------
+function CommitmentGauge({ pct }: { pct: number }) {
+  const clamped = Math.min(100, Math.max(0, pct))
+  const color = commitmentColor(clamped)
+  return (
+    <div style={{ textAlign: 'center', padding: '1rem 0' }}>
+      <div style={{ position: 'relative', display: 'inline-block', width: 160, height: 90 }}>
+        <svg width="160" height="90" viewBox="0 0 160 90">
+          <path d="M 15 80 A 65 65 0 0 1 145 80" fill="none" stroke="#1e2130" strokeWidth="14" strokeLinecap="round" />
+          <path
+            d="M 15 80 A 65 65 0 0 1 145 80"
+            fill="none"
+            stroke={color}
+            strokeWidth="14"
+            strokeLinecap="round"
+            strokeDasharray={`${(clamped / 100) * 204} 204`}
+          />
+        </svg>
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, textAlign: 'center' }}>
+          <span style={{ fontSize: '1.6rem', fontWeight: 800, color }}>{clamped}%</span>
+          <div style={{ fontSize: '0.7rem', color: '#6b7280' }}>comprometido</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Componente principal
 // ---------------------------------------------------------------------------
 export function Budget() {
-  const now = currentMonth()
+  const monthOptions = buildMonthOptions()
+  const [selectedMonth, setSelectedMonth] = useState(currentMonth())
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<BudgetAssessResult | null>(null)
 
-  // Categories
-  const [categories, setCategories] = useState<Category[]>([])
-  useEffect(() => {
-    api.categories.list().then(setCategories).catch(() => {})
-  }, [])
+  async function handleAnalyze() {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await api.assess.budget(selectedMonth)
+      setResult(data)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Erro ao avaliar orçamento')
+    } finally {
+      setLoading(false)
+    }
+  }
 
-  // --- Transaction analysis form ---
-  const [txAmount, setTxAmount] = useState('')
-  const [txCategory, setTxCategory] = useState('')
-  const [txDesc, setTxDesc] = useState('')
-  const [txMerchant, setTxMerchant] = useState('')
-  const [txMonth, setTxMonth] = useState(now)
-
-  // Budget items for the transaction analysis
-  const [budgets, setBudgets] = useState<BudgetItem[]>([])
-  const [spending, setSpending] = useState<SpendingItem[]>([])
-  const [budgetAmount, setBudgetAmount] = useState('')
-  const [spentAmount, setSpentAmount] = useState('')
-
-  const [txErrors, setTxErrors] = useState<Record<string, string>>({})
-
-  const analyzeFn = useCallback(
-    (body: Parameters<typeof api.budget.analyzeTransaction>[0]) =>
-      api.budget.analyzeTransaction(body),
-    [],
+  const ai = result?.ai
+  const commitmentPct = ai?.commitmentPct ?? (
+    result && result.incomeMinor > 0
+      ? Math.round(result.totalCommittedMinor / result.incomeMinor * 100)
+      : 0
   )
-  const { state: txState, execute: executeTx } = useAsync<
-    Parameters<typeof api.budget.analyzeTransaction>[0],
-    TransactionAnalysisResponse
-  >(analyzeFn)
 
-  // --- Budget overview form ---
-  const [overviewMonth, setOverviewMonth] = useState(now)
-  const [overviewBudgets, setOverviewBudgets] = useState<BudgetItem[]>([])
-  const [overviewSpending, setOverviewSpending] = useState<SpendingItem[]>([])
-  const [obCat, setObCat] = useState('')
-  const [obBudget, setObBudget] = useState('')
-  const [obSpent, setObSpent] = useState('')
-
-  const overviewFn = useCallback(
-    (body: Parameters<typeof api.budget.analysis>[0]) =>
-      api.budget.analysis(body),
-    [],
+  const availableMinor = ai?.availableMinor ?? (
+    result ? result.incomeMinor - result.totalCommittedMinor : 0
   )
-  const { state: ovState, execute: executeOverview } = useAsync<
-    Parameters<typeof api.budget.analysis>[0],
-    BudgetAnalysisResponse
-  >(overviewFn)
 
-  // ---------------------------------------------------------------------------
-  // Transaction analysis handlers
-  // ---------------------------------------------------------------------------
-  function addBudgetForTx() {
-    if (!txCategory || !budgetAmount) return
-    const cat = categories.find((c) => c.id === txCategory)
-    setBudgets((p) => [
-      ...p.filter((b) => b.categoryId !== txCategory),
-      {
-        categoryId: txCategory,
-        categoryName: cat?.name ?? txCategory,
-        budgetAmountMinor: minor(budgetAmount),
-        period: 'monthly',
-      },
-    ])
-    setSpending((p) => [
-      ...p.filter((s) => s.categoryId !== txCategory),
-      {
-        categoryId: txCategory,
-        categoryName: cat?.name ?? txCategory,
-        currentPeriodSpentMinor: minor(spentAmount),
-        transactionCount: 1,
-      },
-    ])
-    setBudgetAmount('')
-    setSpentAmount('')
-  }
+  const chartData = result?.categoryBreakdown
+    .filter(c => c.amountMinor > 0)
+    .slice(0, 8)
+    .map(c => ({
+      name: c.categoryId,
+      valor: Math.round(c.amountMinor / 100),
+      pct: c.pctOfIncome,
+    })) ?? []
 
-  function validateTx(): boolean {
-    const e: Record<string, string> = {}
-    if (!txAmount) e.txAmount = 'Informe o valor'
-    if (!txCategory) e.txCategory = 'Seleccione a categoria'
-    if (!txDesc.trim()) e.txDesc = 'Informe a descrição'
-    if (budgets.length === 0) e.budgets = 'Adicione ao menos um orçamento'
-    setTxErrors(e)
-    return Object.keys(e).length === 0
-  }
-
-  function handleTxSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!validateTx()) return
-    executeTx({
-      amountMinor: minor(txAmount),
-      categoryId: txCategory,
-      description: txDesc,
-      merchantName: txMerchant || undefined,
-      currentMonth: txMonth,
-      budgets,
-      spending,
-    })
-  }
-
-  // ---------------------------------------------------------------------------
-  // Budget overview handlers
-  // ---------------------------------------------------------------------------
-  function addOverviewItem() {
-    if (!obCat || !obBudget) return
-    const cat = categories.find((c) => c.id === obCat)
-    setOverviewBudgets((p) => [
-      ...p.filter((b) => b.categoryId !== obCat),
-      { categoryId: obCat, categoryName: cat?.name ?? obCat, budgetAmountMinor: minor(obBudget), period: 'monthly' },
-    ])
-    setOverviewSpending((p) => [
-      ...p.filter((s) => s.categoryId !== obCat),
-      { categoryId: obCat, categoryName: cat?.name ?? obCat, currentPeriodSpentMinor: minor(obSpent), transactionCount: 1 },
-    ])
-    setObBudget('')
-    setObSpent('')
-  }
-
-  function handleOverviewSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (overviewBudgets.length === 0) return
-    executeOverview({ currentMonth: overviewMonth, budgets: overviewBudgets, spending: overviewSpending })
-  }
-
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
   return (
-    <div style={{ maxWidth: 960 }}>
-      {/* Header */}
-      <div style={{ marginBottom: '1.5rem' }}>
-        <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#e5e7eb', margin: 0 }}>
-          🎯 Análise de Orçamento
-        </h1>
-        <p style={{ color: '#6b7280', marginTop: '0.3rem', fontSize: '0.85rem' }}>
-          Simule o impacto de uma transacção e visualize o estado do seu orçamento mensal.
-        </p>
-      </div>
+    <div style={{ maxWidth: 900, margin: '0 auto' }}>
+      <SectionTitle>Orçamento</SectionTitle>
+      <p style={{ color: '#9ca3af', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+        Avaliação automática com base na sua renda, extratos, faturas e categorias do mês.
+      </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-
-        {/* ---- Left column ---- */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-
-          {/* Transaction analysis form */}
-          <Card>
-            <SectionTitle>Simular impacto de transacção</SectionTitle>
-            <form onSubmit={handleTxSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
-              <Input
-                label="Valor (R$)"
-                type="number"
-                step="0.01"
-                value={txAmount}
-                onChange={(e) => setTxAmount(e.target.value)}
-                placeholder="150.00"
-                error={txErrors.txAmount}
-              />
-              <Select
-                label="Categoria"
-                value={txCategory}
-                onChange={(e) => setTxCategory(e.target.value)}
-                error={txErrors.txCategory}
-              >
-                <option value="">Seleccione...</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </Select>
-              <Input
-                label="Descrição"
-                value={txDesc}
-                onChange={(e) => setTxDesc(e.target.value)}
-                placeholder="Compra no supermercado"
-                error={txErrors.txDesc}
-              />
-              <Input
-                label="Estabelecimento (opcional)"
-                value={txMerchant}
-                onChange={(e) => setTxMerchant(e.target.value)}
-                placeholder="Supermercado Extra"
-              />
-              <Input
-                label="Mês de referência"
-                value={txMonth}
-                onChange={(e) => setTxMonth(e.target.value)}
-                placeholder="YYYY-MM"
-              />
-
-              {/* Budget for this category */}
-              <div style={{ borderTop: '1px solid #1e2130', paddingTop: '0.75rem' }}>
-                <p style={{ fontSize: '0.78rem', color: '#6b7280', marginBottom: '0.5rem' }}>
-                  Orçamento da categoria (para cálculo de impacto)
-                </p>
-                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                  <Input
-                    label="Orçamento (R$)"
-                    type="number"
-                    step="0.01"
-                    value={budgetAmount}
-                    onChange={(e) => setBudgetAmount(e.target.value)}
-                    placeholder="500.00"
-                  />
-                  <Input
-                    label="Já gasto (R$)"
-                    type="number"
-                    step="0.01"
-                    value={spentAmount}
-                    onChange={(e) => setSpentAmount(e.target.value)}
-                    placeholder="350.00"
-                  />
-                </div>
-                <Button onClick={addBudgetForTx} variant="secondary" fullWidth>
-                  + Definir orçamento
-                </Button>
-                {txErrors.budgets && (
-                  <span style={{ fontSize: '0.75rem', color: '#f87171' }}>{txErrors.budgets}</span>
-                )}
-                {budgets.map((b) => (
-                  <div key={b.categoryId} style={{ fontSize: '0.78rem', color: '#9ca3af', marginTop: 4 }}>
-                    {b.categoryName}: {formatBRL(b.budgetAmountMinor)} / gasto: {formatBRL(spending.find((s) => s.categoryId === b.categoryId)?.currentPeriodSpentMinor ?? 0)}
-                  </div>
-                ))}
-              </div>
-
-              <Button type="submit" fullWidth disabled={txState.status === 'loading'}>
-                {txState.status === 'loading' ? 'Analisando...' : 'Analisar impacto'}
-              </Button>
-            </form>
-          </Card>
-
-          {/* Budget overview form */}
-          <Card>
-            <SectionTitle>Visão geral do orçamento</SectionTitle>
-            <form onSubmit={handleOverviewSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
-              <Input
-                label="Mês"
-                value={overviewMonth}
-                onChange={(e) => setOverviewMonth(e.target.value)}
-                placeholder="YYYY-MM"
-              />
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <Select
-                  label="Categoria"
-                  value={obCat}
-                  onChange={(e) => setObCat(e.target.value)}
-                >
-                  <option value="">Seleccione...</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </Select>
-              </div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <Input
-                  label="Orçamento (R$)"
-                  type="number"
-                  step="0.01"
-                  value={obBudget}
-                  onChange={(e) => setObBudget(e.target.value)}
-                  placeholder="500.00"
-                />
-                <Input
-                  label="Gasto (R$)"
-                  type="number"
-                  step="0.01"
-                  value={obSpent}
-                  onChange={(e) => setObSpent(e.target.value)}
-                  placeholder="350.00"
-                />
-              </div>
-              <Button onClick={addOverviewItem} variant="secondary" fullWidth>
-                + Adicionar categoria
-              </Button>
-              {overviewBudgets.length > 0 && (
-                <div style={{ fontSize: '0.78rem', color: '#9ca3af' }}>
-                  {overviewBudgets.map((b) => (
-                    <div key={b.categoryId}>{b.categoryName}: {formatBRL(b.budgetAmountMinor)}</div>
-                  ))}
-                </div>
-              )}
-              <Button type="submit" fullWidth disabled={ovState.status === 'loading'}>
-                {ovState.status === 'loading' ? 'Calculando...' : 'Ver visão geral'}
-              </Button>
-            </form>
-          </Card>
+      {/* Controles */}
+      <Card style={{ marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <label style={{ display: 'block', fontSize: '0.8rem', color: '#9ca3af', marginBottom: 4 }}>
+              Mês de referência
+            </label>
+            <select
+              value={selectedMonth}
+              onChange={e => setSelectedMonth(e.target.value)}
+              style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.55rem 0.85rem', color: '#e5e7eb', fontSize: '0.9rem', width: '100%' }}
+            >
+              {buildMonthOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+          <Button onClick={handleAnalyze} disabled={loading} variant="primary">
+            {loading ? 'Analisando...' : '🤖 Avaliar com IA'}
+          </Button>
         </div>
+      </Card>
 
-        {/* ---- Right column: Results ---- */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      {error && <Alert variant="error" style={{ marginBottom: '1rem' }}>{error}</Alert>}
+      {loading && (
+        <div style={{ textAlign: 'center', padding: '3rem' }}>
+          <Spinner />
+          <p style={{ color: '#9ca3af', marginTop: '1rem' }}>A IA está analisando seus dados financeiros...</p>
+        </div>
+      )}
 
-          {/* Transaction analysis result */}
-          {txState.status === 'idle' && (
-            <EmptyState icon="🎯" title="Simule uma transacção" description="O impacto no orçamento aparecerá aqui." />
-          )}
-          {txState.status === 'loading' && (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
-              <Spinner size={36} />
-            </div>
-          )}
-          {txState.status === 'error' && (
-            <Alert variant="error"><strong>Erro:</strong> {txState.message}</Alert>
-          )}
-          {txState.status === 'success' && (
+      {result && !loading && (
+        <>
+          {/* Gauge + Pode gastar? */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
             <Card>
-              <SectionTitle>Resultado da simulação</SectionTitle>
-
-              {/* Budget impact */}
-              {txState.data.budgetImpact && (
-                <div style={{ marginBottom: '1rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                    <span style={{ fontSize: '0.82rem', color: '#9ca3af' }}>Utilização antes</span>
-                    <Badge variant={statusVariant(txState.data.budgetImpact.statusBefore.status)}>
-                      {txState.data.budgetImpact.utilizationBefore.toFixed(1)}%
-                    </Badge>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                    <span style={{ fontSize: '0.82rem', color: '#9ca3af' }}>Utilização depois</span>
-                    <Badge variant={statusVariant(txState.data.budgetImpact.statusAfter.status)}>
-                      {txState.data.budgetImpact.utilizationAfter.toFixed(1)}%
-                    </Badge>
-                  </div>
-                  {/* Progress bar */}
-                  <div style={{ background: '#1e2130', borderRadius: 6, height: 8, overflow: 'hidden', marginBottom: '0.5rem' }}>
-                    <div
-                      style={{
-                        width: `${Math.min(txState.data.budgetImpact.utilizationAfter, 100)}%`,
-                        height: '100%',
-                        background: utilizationColor(txState.data.budgetImpact.utilizationAfter),
-                        borderRadius: 6,
-                        transition: 'width 0.4s',
-                      }}
-                    />
-                  </div>
-                  <p style={{ fontSize: '0.82rem', color: '#9ca3af', marginBottom: '0.75rem' }}>
-                    {txState.data.budgetImpact.message}
-                  </p>
+              <div style={{ fontSize: '0.8rem', color: '#9ca3af', marginBottom: 4 }}>Comprometimento da renda</div>
+              <CommitmentGauge pct={commitmentPct} />
+              <div style={{ textAlign: 'center', marginTop: 4 }}>
+                <Badge variant={riskVariant(ai?.riskLevel)}>
+                  Risco {riskLabel(ai?.riskLevel)}
+                </Badge>
+              </div>
+            </Card>
+            <Card>
+              <div style={{ fontSize: '0.8rem', color: '#9ca3af', marginBottom: 8 }}>Pode gastar?</div>
+              {ai?.canSpend !== undefined && (
+                <div style={{
+                  fontSize: '2rem',
+                  fontWeight: 800,
+                  color: ai.canSpend ? '#4ade80' : '#f87171',
+                  marginBottom: 8,
+                }}>
+                  {ai.canSpend ? '✓ Sim' : '✗ Não'}
                 </div>
               )}
+              <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: 4 }}>Sobra disponível</div>
+              <div style={{
+                fontSize: '1.4rem',
+                fontWeight: 700,
+                color: availableMinor >= 0 ? '#4ade80' : '#f87171',
+              }}>
+                {formatBRL(availableMinor)}
+              </div>
+            </Card>
+          </div>
 
-              {/* Warnings */}
-              {txState.data.warnings.length > 0 && (
-                <div style={{ marginBottom: '0.75rem' }}>
-                  {txState.data.warnings.map((w, i) => (
-                    <Alert key={i} variant="warning">{w}</Alert>
-                  ))}
-                </div>
-              )}
+          {/* Métricas */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+            {[
+              { label: 'Renda', value: result.incomeMinor, color: '#4ade80' },
+              { label: 'Gastos', value: result.expenseMinor, color: '#f87171' },
+              { label: 'Dívida em aberto', value: result.openDebtMinor, color: '#fbbf24' },
+              { label: availableMinor >= 0 ? 'Sobra' : 'Déficit', value: Math.abs(availableMinor), color: availableMinor >= 0 ? '#4ade80' : '#f87171' },
+            ].map(m => (
+              <Card key={m.label}>
+                <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>{m.label}</div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: m.color }}>{formatBRL(m.value)}</div>
+              </Card>
+            ))}
+          </div>
 
-              {/* Insights */}
-              {txState.data.insights.length > 0 && (
-                <div style={{ marginBottom: '0.75rem' }}>
-                  <p style={{ fontSize: '0.78rem', color: '#6b7280', marginBottom: '0.4rem', fontWeight: 600 }}>
-                    INSIGHTS
-                  </p>
-                  {txState.data.insights.map((ins, i) => (
-                    <Alert key={i} variant="info">{ins}</Alert>
-                  ))}
-                </div>
-              )}
-
-              {/* Recommendations */}
-              {txState.data.recommendations.length > 0 && (
-                <div>
-                  <p style={{ fontSize: '0.78rem', color: '#6b7280', marginBottom: '0.4rem', fontWeight: 600 }}>
-                    RECOMENDAÇÕES
-                  </p>
-                  {txState.data.recommendations.map((r, i) => (
-                    <Alert key={i} variant="success">{r}</Alert>
-                  ))}
-                </div>
-              )}
+          {/* Diagnóstico da IA */}
+          {ai?.diagnosis && (
+            <Card style={{ marginBottom: '1.5rem', borderLeft: '3px solid #6366f1' }}>
+              <div style={{ fontSize: '0.8rem', color: '#6366f1', marginBottom: 6, fontWeight: 600 }}>
+                🤖 Diagnóstico
+              </div>
+              <p style={{ color: '#e5e7eb', fontSize: '0.9rem', lineHeight: 1.6, margin: 0 }}>
+                {ai.diagnosis}
+              </p>
             </Card>
           )}
 
-          {/* Budget overview result */}
-          {ovState.status === 'success' && (
-            <Card>
-              <SectionTitle>Visão geral — {overviewMonth}</SectionTitle>
-
-              {/* Summary */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
-                {[
-                  { label: 'Total orçado', value: ovState.data.totalBudgetMinor, color: '#60a5fa' },
-                  { label: 'Total gasto', value: ovState.data.totalSpentMinor, color: '#f87171' },
-                  { label: 'Restante', value: ovState.data.totalRemainingMinor, color: '#4ade80' },
-                ].map(({ label, value, color }) => (
-                  <div key={label} style={{ textAlign: 'center' }}>
-                    <p style={{ fontSize: '0.72rem', color: '#6b7280', marginBottom: 2 }}>{label}</p>
-                    <p style={{ fontSize: '0.95rem', fontWeight: 700, color }}>{formatBRL(value)}</p>
-                  </div>
-                ))}
+          {/* Gráfico de categorias */}
+          {chartData.length > 0 && (
+            <Card style={{ marginBottom: '1.5rem' }}>
+              <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: '1rem' }}>
+                Categorias mais impactantes (% da renda)
               </div>
-
-              {/* Bar chart */}
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart
-                  data={ovState.data.budgetStatuses.map((s) => ({
-                    name: s.categoryName,
-                    orçado: Number(s.budgetAmountMinor) / 100,
-                    gasto: Number(s.spentMinor) / 100,
-                    pct: s.utilizationPercent,
-                  }))}
-                  margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
-                >
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={chartData} layout="vertical" margin={{ left: 40, right: 20 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e2130" />
-                  <XAxis dataKey="name" tick={{ fill: '#6b7280', fontSize: 10 }} />
-                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => `R$${v}`} />
+                  <XAxis type="number" tick={{ fill: '#6b7280', fontSize: 11 }} tickFormatter={v => `${v}%`} />
+                  <YAxis type="category" dataKey="name" tick={{ fill: '#9ca3af', fontSize: 11 }} width={80} />
                   <Tooltip
-                    contentStyle={{ background: '#1e2130', border: '1px solid #2a2f45', borderRadius: 8 }}
-                    formatter={(v) => [formatBRL(Number(v ?? 0) * 100)]}
+                    contentStyle={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8 }}
+                    formatter={(v: unknown) => [`${(v as number)}%`, 'da renda']}
                   />
-                  <Bar dataKey="orçado" fill="#2a2f45" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="gasto" radius={[4, 4, 0, 0]}>
-                    {ovState.data.budgetStatuses.map((s, i) => (
-                      <Cell key={i} fill={utilizationColor(s.utilizationPercent)} />
+                  <Bar dataKey="pct" radius={[0, 4, 4, 0]}>
+                    {chartData.map((entry, i) => (
+                      <Cell key={i} fill={commitmentColor(entry.pct)} />
                     ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
+            </Card>
+          )}
 
-              {/* Status table */}
-              <div style={{ marginTop: '0.75rem' }}>
-                {ovState.data.budgetStatuses.map((s) => (
-                  <div
-                    key={s.categoryId}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '0.4rem 0',
-                      borderBottom: '1px solid #1e2130',
-                      fontSize: '0.82rem',
-                    }}
-                  >
-                    <span style={{ color: '#e5e7eb' }}>{s.categoryName}</span>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <span style={{ color: '#6b7280' }}>{s.utilizationPercent.toFixed(0)}%</span>
-                      <Badge variant={statusVariant(s.status)}>{s.status}</Badge>
-                    </div>
+          {/* Alertas */}
+          {ai?.alerts && ai.alerts.length > 0 && (
+            <Card style={{ marginBottom: '1.5rem' }}>
+              <div style={{ fontSize: '0.85rem', color: '#fbbf24', marginBottom: '0.75rem', fontWeight: 600 }}>
+                ⚠️ Alertas
+              </div>
+              <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {ai.alerts.map((a, i) => (
+                  <li key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: '0.88rem', color: '#e5e7eb' }}>
+                    <span style={{ color: '#fbbf24', flexShrink: 0 }}>•</span>
+                    {a}
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
+          {/* Recomendações */}
+          {ai?.recommendations && ai.recommendations.length > 0 && (
+            <Card style={{ marginBottom: '1.5rem' }}>
+              <div style={{ fontSize: '0.85rem', color: '#4ade80', marginBottom: '0.75rem', fontWeight: 600 }}>
+                💡 Recomendações
+              </div>
+              <ol style={{ margin: 0, padding: '0 0 0 1.2rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {ai.recommendations.map((r, i) => (
+                  <li key={i} style={{ fontSize: '0.88rem', color: '#e5e7eb', lineHeight: 1.5 }}>
+                    {r}
+                  </li>
+                ))}
+              </ol>
+            </Card>
+          )}
+
+          {/* Histórico */}
+          {result.historicalMonths.length > 0 && (
+            <Card>
+              <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: '0.75rem' }}>
+                Histórico dos últimos meses
+              </div>
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                {result.historicalMonths.map(h => (
+                  <div key={h.month} style={{ flex: 1, minWidth: 120, background: '#0f1117', borderRadius: 8, padding: '0.75rem' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: 4 }}>{h.month}</div>
+                    <div style={{ fontSize: '0.8rem', color: '#4ade80' }}>↑ {formatBRL(h.incomeMinor)}</div>
+                    <div style={{ fontSize: '0.8rem', color: '#f87171' }}>↓ {formatBRL(h.expenseMinor)}</div>
                   </div>
                 ))}
               </div>
             </Card>
           )}
+        </>
+      )}
 
-          {ovState.status === 'error' && (
-            <Alert variant="error"><strong>Erro:</strong> {ovState.message}</Alert>
-          )}
-        </div>
-      </div>
+      {!result && !loading && (
+        <Card style={{ textAlign: 'center', padding: '3rem' }}>
+          <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🎯</div>
+          <p style={{ color: '#9ca3af' }}>
+            Selecione o mês e clique em <strong style={{ color: '#6366f1' }}>Avaliar com IA</strong> para obter um diagnóstico financeiro completo.
+          </p>
+        </Card>
+      )}
     </div>
   )
 }

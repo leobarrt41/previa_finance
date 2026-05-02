@@ -551,6 +551,121 @@ export interface InvoiceClassifyResponse {
   enabled: boolean
 }
 
+// ---------------------------------------------------------------------------
+// Assess types
+// ---------------------------------------------------------------------------
+export interface AssessAIResult {
+  canSpend?: boolean
+  availableMinor?: number
+  commitmentPct?: number
+  riskLevel?: 'baixo' | 'moderado' | 'alto' | 'cr\u00edtico'
+  diagnosis?: string
+  topCategories?: Array<{ categoryId: string; label: string; amountMinor: number; pctOfIncome: number }>
+  trend?: 'crescente' | 'decrescente' | 'est\u00e1vel'
+  trendDescription?: string
+  impactOnIncome?: string
+  historicalComparison?: string
+  topSpends?: string[]
+  debtPressurePct?: number
+  delayRisk?: 'baixo' | 'moderado' | 'alto'
+  delayRiskReason?: string
+  criticalDates?: string[]
+  alerts?: string[]
+  recommendations?: string[]
+}
+
+export interface BudgetAssessResult {
+  month: string
+  incomeMinor: number
+  expenseMinor: number
+  liabilityMinor: number
+  openDebtMinor: number
+  totalCommittedMinor: number
+  categoryBreakdown: Array<{ categoryId: string; amountMinor: number; pctOfIncome: number }>
+  historicalMonths: Array<{ month: string; incomeMinor: number; expenseMinor: number }>
+  ai: AssessAIResult
+}
+
+export interface SpendingAssessResult {
+  categoryId: string
+  month: string
+  currentMonthMinor: number
+  averageHistoricalMinor: number
+  variationPct: number
+  incomeMinor: number
+  impactOnIncomePct: number
+  monthlySummary: Array<{ month: string; totalMinor: number; count: number }>
+  topTransactions: Array<{ description: string | null; amountMinor: number }>
+  ai: AssessAIResult
+}
+
+export interface DebtAssessResult {
+  month: string
+  incomeMinor: number
+  openDebtMinor: number
+  paidThisMonthMinor: number
+  futureInstallmentsMinor: number
+  debtPressurePct: number
+  punctualityPct: number
+  invoiceCount: number
+  openInvoiceCount: number
+  invoicesSummary: Array<{
+    month: string
+    card: string | null
+    brand: string | null
+    last4: string | null
+    status: string | null
+    totalMinor: number
+    openMinor: number
+    paidMinor: number
+    dueDate: string | null
+  }>
+  futureInstallments: Array<{ description: string | null; amountMinor: number; installment: string | null; month: string }>
+  ai: AssessAIResult
+}
+
+// ---------------------------------------------------------------------------
+// Receipt Documents types
+// ---------------------------------------------------------------------------
+export interface ReceiptDocument {
+  id: number
+  userId: string
+  ownerId: number
+  amountMinor: number
+  currencyCode: string
+  purchaseDate: string
+  purchaseMonth: string
+  expectedInvoiceMonth: string | null
+  merchantName: string | null
+  merchantCnpj: string | null
+  merchantDocument: string | null
+  categoryId: string | null
+  accountId: number | null
+  nfeKey: string | null
+  nfeNumber: string | null
+  nfeSeries: string | null
+  rawPayload: unknown | null
+  fileUrl: string | null
+  fileType: string | null
+  installmentTotal: number | null
+  installmentCurrent: number | null
+  dataState: 'projected' | 'reconciled' | 'cancelled'
+  cardTransactionId: number | null
+  transactionId: number | null
+  reconcileSource: string | null
+  reconciledAt: string | null
+  description: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ReceiptDocumentSummary {
+  projected: number
+  reconciled: number
+  cancelled: number
+  total: number
+}
+
 export interface AuthMeResponse {
   clerkUserId: string
   sessionId: string
@@ -675,6 +790,44 @@ export const api = {
         deletedCardTransactions: number
         hasRemainingData: boolean
       }>(`/api/accounts/${accountId}/month/${month}`, { method: 'DELETE' }),
+  },
+
+  assess: {
+    budget: (month: string) =>
+      request<BudgetAssessResult>('/api/assess/budget', {
+        method: 'POST',
+        body: JSON.stringify({ month }),
+      }),
+    spending: (month: string, categoryId: string) =>
+      request<SpendingAssessResult>('/api/assess/spending', {
+        method: 'POST',
+        body: JSON.stringify({ month, categoryId }),
+      }),
+    debt: (month: string, projectionMonths = 3) =>
+      request<DebtAssessResult>('/api/assess/debt', {
+        method: 'POST',
+        body: JSON.stringify({ month, projectionMonths }),
+      }),
+  },
+
+  receiptDocuments: {
+    list: (params?: { month?: string; state?: string; accountId?: number }) => {
+      const qs = new URLSearchParams()
+      if (params?.month)     qs.set('month', params.month)
+      if (params?.state)     qs.set('state', params.state)
+      if (params?.accountId) qs.set('accountId', String(params.accountId))
+      return request<{ data: ReceiptDocument[] }>(`/api/receipt-documents?${qs}`)
+    },
+    summary: (month: string) =>
+      request<ReceiptDocumentSummary>(`/api/receipt-documents/summary/${month}`),
+    create: (body: Partial<ReceiptDocument>) =>
+      request<ReceiptDocument>('/api/receipt-documents', { method: 'POST', body: JSON.stringify(body) }),
+    update: (id: number, body: Partial<ReceiptDocument>) =>
+      request<ReceiptDocument>(`/api/receipt-documents/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    remove: (id: number) =>
+      request<{ ok: boolean }>(`/api/receipt-documents/${id}`, { method: 'DELETE' }),
+    reconcile: (id: number, body: { cardTransactionId?: number; transactionId?: number }) =>
+      request<ReceiptDocument>(`/api/receipt-documents/${id}/reconcile`, { method: 'POST', body: JSON.stringify(body) }),
   },
 
   invoices: {

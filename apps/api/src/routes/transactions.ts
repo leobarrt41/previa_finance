@@ -17,6 +17,7 @@ import {
   MOVEMENT_TYPE_VALUES,
   SOURCE_VALUES,
   transactions,
+  receiptDocuments,
 } from '@previa/db'
 import { buildFingerprintFromRaw, normalizeDescription } from '@previa/core'
 import { getDatabase } from '../config/database.js'
@@ -1317,6 +1318,70 @@ router.post('/statement/import', async (req: Request, res: Response) => {
         // Reconciliation failure must not roll back the import
         console.error('[reconcileInvoicePayment] error:', err)
       }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Reconciliação automática de receipt_documents (débito)
+  // Cruza notas projetadas SEM expectedInvoiceMonth com transactions recém-inseridas
+  // Critério: amount_minor igual + merchant_name fuzzy (8 chars) + competencyMonth
+  // Best-effort: não bloqueia o import em caso de erro
+  // -------------------------------------------------------------------------
+  if (toInsert.length > 0) {
+    try {
+      const projectedDebitNotes = await db
+        .select()
+        .from(receiptDocuments)
+        .where(
+          and(
+            eq(receiptDocuments.ownerId, owner.id),
+            eq(receiptDocuments.dataState, 'projected'),
+          )
+        )
+
+      const debitNotes = projectedDebitNotes.filter((n) => !n.expectedInvoiceMonth)
+
+      if (debitNotes.length > 0) {
+        const insertedFps = toInsert.map((t) => t.fingerprint).filter(Boolean) as string[]
+        const insertedTxs = insertedFps.length > 0
+          ? await db
+              .select()
+              .from(transactions)
+              .where(
+                and(
+                  eq(transactions.userId, owner.id),
+                  inArray(transactions.fingerprint, insertedFps),
+                )
+              )
+          : []
+
+        const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8)
+
+        for (const note of debitNotes) {
+          const match = insertedTxs.find((tx) => {
+            const amtOk = BigInt(tx.amountMinor ?? 0) === BigInt(note.amountMinor ?? 0)
+            const merchantOk = note.merchantName
+              ? normalize(tx.description ?? '') === normalize(note.merchantName)
+              : true
+            const monthOk = tx.competencyMonth === note.purchaseMonth
+            return amtOk && (merchantOk || monthOk)
+          })
+          if (match) {
+            await db
+              .update(receiptDocuments)
+              .set({
+                dataState: 'reconciled',
+                transactionId: match.id,
+                reconcileSource: 'statement_import',
+                reconciledAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(eq(receiptDocuments.id, note.id))
+          }
+        }
+      }
+    } catch (reconcileErr) {
+      console.warn('[transactions/statement] receipt reconciliation error (non-blocking):', reconcileErr)
     }
   }
 

@@ -8,7 +8,7 @@ import { Router, Request, Response } from 'express'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import { CashFlowEngine, CashFlowInput } from '@previa/core'
-import { transactions, accounts, cardInvoices, cardTransactions, cashflowForecasts, cashflowForecastMonthStatus } from '@previa/db'
+import { transactions, accounts, cardInvoices, cardTransactions, cashflowForecasts, cashflowForecastMonthStatus, receiptDocuments } from '@previa/db'
 import { and, eq, inArray, gte, lte, sql } from 'drizzle-orm'
 import { createError } from '../middlewares/errorHandler.js'
 import { getDatabase } from '../config/database.js'
@@ -611,6 +611,63 @@ router.post('/projection', async (req: Request, res: Response) => {
 
     const finalCardInvoices = [...inferredPaidCardInvoices, ...projectedInstallmentInvoices]
 
+    // -------------------------------------------------------------------------
+    // Injectar receipt_documents projected no engine
+    // Cartão (expectedInvoiceMonth preenchido) → cardInvoice sintética (laranja)
+    // Débito (sem expectedInvoiceMonth) → transaction expense (vermelho)
+    // Notas reconciliadas ou canceladas são ignoradas — o dado real já está no banco
+    // -------------------------------------------------------------------------
+    const dbReceiptDocs = useDbTransactions
+      ? await db
+          .select()
+          .from(receiptDocuments)
+          .where(
+            and(
+              eq(receiptDocuments.ownerId, owner.id),
+              eq(receiptDocuments.dataState, 'projected'),
+            )
+          )
+      : []
+
+    const receiptCardInvoices: typeof finalCardInvoices = []
+    const receiptTransactions: typeof normalizedTransactions = []
+
+    for (const doc of dbReceiptDocs) {
+      const amountMinor = BigInt(doc.amountMinor ?? 0)
+      if (amountMinor <= 0n) continue
+
+      if (doc.expectedInvoiceMonth) {
+        // Cartão: entra como cardInvoice sintética no mês da fatura estimada
+        const dueMonth = doc.expectedInvoiceMonth
+        if (dueMonth >= startMonth && dueMonth <= endMonth) {
+          receiptCardInvoices.push({
+            id: `receipt-card-${doc.id}`,
+            competencyMonth: doc.purchaseMonth ?? dueMonth,
+            dueMonth,
+            amountMinor,
+            paidMinor: 0n,
+          })
+        }
+      } else {
+        // Débito: entra como expense no mês da compra
+        const compMonth = doc.purchaseMonth ?? startMonth
+        if (compMonth >= startMonth && compMonth <= endMonth) {
+          receiptTransactions.push({
+            id: `receipt-debit-${doc.id}`,
+            competencyMonth: compMonth,
+            type: 'expense' as const,
+            amountMinor,
+            description: doc.merchantName ?? 'Nota fiscal',
+            categoryId: doc.categoryId ?? null,
+            source: 'manual' as const,
+          })
+        }
+      }
+    }
+
+    const allCardInvoices = [...finalCardInvoices, ...receiptCardInvoices]
+    const allTransactions = [...normalizedTransactions, ...receiptTransactions]
+
     const shouldUsePersistedForecasts = !data.forecasts || data.forecasts.length === 0
 
     const [persistedForecastRows, persistedStatusRows] = shouldUsePersistedForecasts
@@ -676,8 +733,8 @@ router.post('/projection', async (req: Request, res: Response) => {
       openingBalanceMinor: BigInt(data.openingBalanceMinor),
       projectionMonths,
       currentMonth: data.startMonth,
-      transactions: normalizedTransactions,
-      cardInvoices: finalCardInvoices,
+      transactions: allTransactions,
+      cardInvoices: allCardInvoices,
       forecasts: [...normalizedForecasts, ...extraForecasts],
     }
 

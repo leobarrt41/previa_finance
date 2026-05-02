@@ -8,6 +8,7 @@
  *   DELETE /api/categories/:id   — remover
  */
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
 import {
   Card,
@@ -59,6 +60,7 @@ function CategoryRow({
   onDelete: (c: Category) => void
   onAddSub: (parent: Category) => void
 }) {
+  const navigate = useNavigate()
   const hasChildren = cat.children && cat.children.length > 0
   const [open, setOpen] = useState(hasChildren)
 
@@ -107,7 +109,16 @@ function CategoryRow({
           <Badge variant="gray">sistema</Badge>
         )}
 
-        <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 4 }}>
+          {cat.type === 'expense' && (
+            <button
+              onClick={() => navigate(`/assess/spending?categoryId=${cat.id}&categoryName=${encodeURIComponent(cat.name)}`)}
+              title="Avaliar gastos desta categoria"
+              style={{ background: 'none', border: '1px solid #6366f1', borderRadius: 6, color: '#6366f1', cursor: 'pointer', padding: '2px 7px', fontSize: '0.78rem' }}
+            >
+              📊 avaliar
+            </button>
+          )}
           <button
             onClick={() => onAddSub(cat)}
             title="Adicionar subcategoria"

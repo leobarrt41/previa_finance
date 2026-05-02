@@ -10,6 +10,8 @@ import { categoryRouter } from './categories.js'
 import { authRouter } from './auth.js'
 import { invoiceRouter } from './invoices.js'
 import { accountRouter } from './accounts.js'
+import { assessRouter } from './assess.js'
+import { receiptDocumentsRouter } from './receiptDocuments.js'
 
 export function setupRoutes(): Router {
   const router: Router = Router()
@@ -22,11 +24,13 @@ export function setupRoutes(): Router {
       endpoints: {
         auth: '/api/auth',
         cashflow: '/api/cashflow',
-        budget: '/api/budget', 
+        budget: '/api/budget',
         transactions: '/api/transactions',
         accounts: '/api/accounts',
         categories: '/api/categories',
         invoices: '/api/invoices',
+        assess: '/api/assess',
+        receiptDocuments: '/api/receipt-documents',
       }
     })
   })
@@ -39,6 +43,8 @@ export function setupRoutes(): Router {
   router.use('/accounts', accountRouter)
   router.use('/categories', categoryRouter)
   router.use('/invoices', invoiceRouter)
+  router.use('/assess', assessRouter)
+  router.use('/receipt-documents', receiptDocumentsRouter)
 
   return router
 }
