@@ -917,7 +917,17 @@ export const api = {
   },
 
   assess: {
-    budget: (body: { month: string; extraForecasts?: BudgetProjectionItem[]; includeAi?: boolean }) =>
+    budget: (body: {
+      month: string
+      extraForecasts?: BudgetProjectionItem[]
+      includeAi?: boolean
+      purchaseIntent?: {
+        description: string
+        totalAmountMinor: number
+        installments?: number
+        type?: 'credit' | 'debit'
+      }
+    }) =>
       request<BudgetAssessResult>('/api/assess/budget', {
         method: 'POST',
         body: JSON.stringify(body),

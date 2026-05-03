@@ -352,7 +352,7 @@ async function callAI(systemPrompt: string, userPayload: unknown): Promise<Recor
 // POST /api/assess/budget
 // ---------------------------------------------------------------------------
 router.post('/budget', async (req: Request, res: Response) => {
-  const { month, extraForecasts, includeAi } = z.object({
+  const { month, extraForecasts, includeAi, purchaseIntent } = z.object({
     month: z.string().regex(/^\d{4}-\d{2}$/),
     extraForecasts: z.array(z.object({
       id: z.string(),
@@ -364,6 +364,13 @@ router.post('/budget', async (req: Request, res: Response) => {
       isActive: z.boolean().optional(),
     })).optional(),
     includeAi: z.boolean().optional().default(false),
+    /** Intenção de compra: simula o impacto de uma compra à vista ou parcelada no orçamento */
+    purchaseIntent: z.object({
+      description: z.string(),
+      totalAmountMinor: z.number().int().positive(),
+      installments: z.number().int().min(1).max(72).default(1),
+      type: z.enum(['credit', 'debit']).default('credit'),
+    }).optional(),
   }).parse(req.body)
   const db = getDatabase()
   const owner = await resolveOwnerId(req.authUser!.clerkUserId)
@@ -644,6 +651,45 @@ router.post('/budget', async (req: Request, res: Response) => {
     }
   })
 
+  // ---------------------------------------------------------------------------
+  // Intenção de compra: calcula impacto no orçamento
+  // ---------------------------------------------------------------------------
+  const purchaseImpact = purchaseIntent
+    ? (() => {
+        const installments = purchaseIntent.installments ?? 1
+        const monthlyMinor = Math.round(purchaseIntent.totalAmountMinor / installments)
+        // Para crédito parcelado: impacto mensal é a parcela
+        // Para débito ou crédito à vista: impacto é o valor total no mês
+        const impactThisMonthMinor = purchaseIntent.type === 'debit' || installments === 1
+          ? purchaseIntent.totalAmountMinor
+          : monthlyMinor
+        const availableAfterMinor = consideredAvailableMinor - impactThisMonthMinor
+        const committedAfterMinor = consideredCommittedMinor + impactThisMonthMinor
+        const commitmentAfterPct = consideredIncomeMinor > 0
+          ? Math.round(committedAfterMinor / consideredIncomeMinor * 100)
+          : 0
+        const canAfford = availableAfterMinor > 0 && commitmentAfterPct <= 90
+        const riskAfter = riskLevelFromCommitment(commitmentAfterPct)
+        return {
+          description: purchaseIntent.description,
+          totalAmountMinor: purchaseIntent.totalAmountMinor,
+          totalAmountBRL: minorToBRL(purchaseIntent.totalAmountMinor),
+          installments,
+          monthlyMinor,
+          monthlyBRL: minorToBRL(monthlyMinor),
+          type: purchaseIntent.type,
+          impactThisMonthMinor,
+          impactThisMonthBRL: minorToBRL(impactThisMonthMinor),
+          availableAfterMinor,
+          availableAfterBRL: minorToBRL(availableAfterMinor),
+          committedAfterMinor,
+          commitmentAfterPct,
+          canAfford,
+          riskAfter,
+        }
+      })()
+    : null
+
   const systemPrompt = `Você é um consultor financeiro pessoal especializado em finanças domésticas brasileiras.
 Analise os dados financeiros do usuário e responda SOMENTE em JSON com este formato exato:
 {
@@ -654,7 +700,14 @@ Analise os dados financeiros do usuário e responda SOMENTE em JSON com este for
   "diagnosis": "Parágrafo de 2-3 frases descrevendo a situação financeira do mês com valores reais.",
   "topCategories": [{"categoryId":"alimentacao","label":"Alimentação","amountMinor":30000,"pctOfIncome":15}],
   "alerts": ["Alerta específico com valor real"],
-  "recommendations": ["Recomendação acionável e específica 1", "Recomendação 2", "Recomendação 3"]
+  "recommendations": ["Recomendação acionável e específica 1", "Recomendação 2", "Recomendação 3"]${purchaseImpact ? `,
+  "purchaseVerdict": {
+    "canAfford": true,
+    "verdict": "Frase direta: pode ou não pode comprar, e por quê.",
+    "impactSummary": "Explique o impacto da compra no orçamento com valores reais.",
+    "warnings": ["Aviso específico se houver risco"],
+    "alternatives": ["Alternativa concreta se não puder comprar"]
+  }` : ''}
 }
 Regras:
 - canSpend = true se sobra > 10% da renda após gastos + dívidas em aberto
@@ -663,7 +716,9 @@ Regras:
 - riskLevel: baixo (<50%), moderado (50-70%), alto (70-90%), crítico (>90%)
 - diagnosis deve citar valores reais e comparar com histórico e com as previsões do mês
 - Se houver dados reais do mês para renda, gastos ou dívida, não some previsão para esse mesmo bloco; previsão só entra como fallback quando o bloco real estiver ausente
-- recommendations devem ser acionáveis e específicas, nunca genéricas
+- recommendations devem ser acionáveis e específicas, nunca genéricas${purchaseImpact ? `
+- purchaseVerdict é OBRIGATÓRIO quando há intenção de compra: avalie se o usuário pode ou não pode fazer a compra considerando o impacto mensal de ${minorToBRL(purchaseImpact.impactThisMonthMinor)} e a sobra restante de ${minorToBRL(purchaseImpact.availableAfterMinor)}. Seja direto e honesto.
+- Se canAfford for false, sugira alternativas reais (parcelar mais, esperar, economizar em outra categoria)` : ''}
 - Responda em português brasileiro`
 
   const aiPayload = {
@@ -713,6 +768,18 @@ Regras:
       amountMinor: item.amountMinor,
       amountBRL: minorToBRL(item.amountMinor),
     })),
+    purchaseIntent: purchaseImpact ? {
+      description: purchaseImpact.description,
+      totalAmountBRL: purchaseImpact.totalAmountBRL,
+      installments: purchaseImpact.installments,
+      monthlyBRL: purchaseImpact.monthlyBRL,
+      type: purchaseImpact.type,
+      impactThisMonthBRL: purchaseImpact.impactThisMonthBRL,
+      availableAfterBRL: purchaseImpact.availableAfterBRL,
+      commitmentAfterPct: purchaseImpact.commitmentAfterPct,
+      canAfford: purchaseImpact.canAfford,
+      riskAfter: purchaseImpact.riskAfter,
+    } : undefined,
   }
 
   const autoAssessment = buildBudgetAutoAssessment({
@@ -759,6 +826,7 @@ Regras:
     availableMinor: consideredAvailableMinor,
     categoryBreakdown,
     historicalMonths: histSummary,
+    purchaseImpact,
     ai: aiResult,
   })
 })
