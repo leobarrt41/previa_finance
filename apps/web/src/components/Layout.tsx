@@ -4,7 +4,7 @@ import { api } from '../services/api'
 
 const NAV_ITEMS = [
   { to: '/',                label: 'Dashboard',       icon: '🏠' },
-  { to: '/cashflow',        label: 'CashFlow',        icon: '📈' },
+  { to: '/cashflow',        label: 'Fluxo de caixa',  icon: '📈' },
   { to: '/budget',          label: 'Orçamento',       icon: '🎯' },
   { to: '/accounts',        label: 'Contas',          icon: '🏦' },
   { to: '/statements/upload', label: 'Upload Extrato', icon: '🧾' },

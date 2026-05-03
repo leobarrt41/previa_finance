@@ -10,7 +10,7 @@ import { Card, Badge, Button, SectionTitle } from '../components/ui'
 
 const QUICK_ACTIONS = [
   {
-    label: 'Projecção de CashFlow',
+    label: 'Projeção de Fluxo de caixa',
     description: 'Visualize seu saldo mês a mês com base em receitas, despesas e faturas.',
     icon: '📈',
     path: '/cashflow',
@@ -29,7 +29,7 @@ const QUICK_ACTIONS = [
 
 const STATUS_ITEMS = [
   { label: 'Schema do banco',       status: 'v4 implementado',  variant: 'green'  as const },
-  { label: 'Motor de CashFlow',     status: 'Operacional',      variant: 'green'  as const },
+  { label: 'Motor de fluxo de caixa', status: 'Operacional',      variant: 'green'  as const },
   { label: 'Motor de Orçamento',    status: 'Operacional',      variant: 'green'  as const },
   { label: 'Reconciliação',         status: 'Base pronta',      variant: 'yellow' as const },
   { label: 'Open Finance (Pluggy)', status: 'Fase 4',           variant: 'gray'   as const },

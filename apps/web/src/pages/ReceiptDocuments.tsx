@@ -58,6 +58,10 @@ function paymentType(doc: ReceiptDocument): string {
   return 'Débito'
 }
 
+function isRenderableFileUrl(url?: string | null): boolean {
+  return typeof url === 'string' && /^(https?:|data:|blob:)/.test(url)
+}
+
 // ---------------------------------------------------------------------------
 // Form state
 // ---------------------------------------------------------------------------
@@ -125,6 +129,7 @@ export default function ReceiptDocuments() {
   const [form, setForm] = useState<FormState>(emptyForm())
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [scanning, setScanning] = useState(false)
 
   // Expanded card
   const [expandedId, setExpandedId] = useState<number | null>(null)
@@ -220,11 +225,21 @@ export default function ReceiptDocuments() {
   // ---------------------------------------------------------------------------
   // Photo upload (câmera nativa mobile)
   // ---------------------------------------------------------------------------
-  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-    // Por ora guarda o nome local; upload S3 será implementado na próxima fase
-    setForm(f => ({ ...f, fileUrl: file.name, fileType: file.type }))
+    setScanning(true)
+    setSaveError(null)
+    try {
+      await api.receiptDocuments.scan(file)
+      setShowModal(false)
+      setForm(emptyForm())
+      await load()
+    } catch (err: any) {
+      setSaveError(err?.message ?? 'Falha ao ler comprovante')
+    } finally {
+      setScanning(false)
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -271,43 +286,59 @@ export default function ReceiptDocuments() {
             ))}
           </div>
 
-          {/* Campos obrigatórios */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            <Input
-              label="Valor (R$) *"
-              placeholder="0,00"
-              value={form.amountMinor}
-              onChange={e => setForm(f => ({ ...f, amountMinor: e.target.value }))}
-              inputMode="decimal"
-            />
-            <Input
-              label="Estabelecimento"
-              placeholder="Nome do estabelecimento"
-              value={form.merchantName}
-              onChange={e => setForm(f => ({ ...f, merchantName: e.target.value }))}
-            />
-            <Input
-              label="Data da compra *"
-              type="date"
-              value={form.purchaseDate}
-              onChange={e => {
-                const d = e.target.value
-                const pm = d.substring(0, 7)
-                setForm(f => ({ ...f, purchaseDate: d, purchaseMonth: pm }))
-              }}
-            />
-            {form.paymentKind === 'card' && (
-              <Input
-                label="Mês estimado da fatura (YYYY-MM)"
-                placeholder="2026-06"
-                value={form.expectedInvoiceMonth}
-                onChange={e => setForm(f => ({ ...f, expectedInvoiceMonth: e.target.value }))}
+            {/* Upload automático */}
+            <div>
+              <label style={{ fontSize: '0.8rem', color: '#9ca3af', fontWeight: 500, display: 'block', marginBottom: 4 }}>
+                Foto do comprovante ou PDF
+              </label>
+              <input
+                type="file"
+                accept="image/*,application/pdf"
+                capture="environment"
+                onChange={handlePhotoChange}
+                style={{ color: '#e5e7eb', fontSize: '0.85rem' }}
               />
-            )}
+              <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 4, lineHeight: 1.5 }}>
+                Envie a foto ou o PDF. A IA tenta extrair os dados e cadastrar a nota automaticamente.
+              </p>
+            </div>
 
             {/* Campos extras (modo full) */}
             {modalMode === 'full' && (
               <>
+                <Input
+                  label="Valor (R$) *"
+                  placeholder="0,00"
+                  value={form.amountMinor}
+                  onChange={e => setForm(f => ({ ...f, amountMinor: e.target.value }))}
+                  inputMode="decimal"
+                />
+                <Input
+                  label="Estabelecimento"
+                  placeholder="Nome do estabelecimento"
+                  value={form.merchantName}
+                  onChange={e => setForm(f => ({ ...f, merchantName: e.target.value }))}
+                />
+                <Input
+                  label="Data da compra *"
+                  type="date"
+                  value={form.purchaseDate}
+                  onChange={e => {
+                    const d = e.target.value
+                    const pm = d.substring(0, 7)
+                    setForm(f => ({ ...f, purchaseDate: d, purchaseMonth: pm }))
+                  }}
+                />
+                {form.paymentKind === 'card' && (
+                  <Input
+                    label="Mês estimado da fatura (YYYY-MM)"
+                    placeholder="2026-06"
+                    value={form.expectedInvoiceMonth}
+                    onChange={e => setForm(f => ({ ...f, expectedInvoiceMonth: e.target.value }))}
+                  />
+                )}
+
                 <Select
                   label="Categoria"
                   value={form.categoryId}
@@ -364,25 +395,6 @@ export default function ReceiptDocuments() {
                 />
               </>
             )}
-
-            {/* Foto do comprovante */}
-            <div>
-              <label style={{ fontSize: '0.8rem', color: '#9ca3af', fontWeight: 500, display: 'block', marginBottom: 4 }}>
-                Foto do comprovante
-              </label>
-              <input
-                type="file"
-                accept="image/*,application/pdf"
-                capture="environment"
-                onChange={handlePhotoChange}
-                style={{ color: '#e5e7eb', fontSize: '0.85rem' }}
-              />
-              {form.fileUrl && (
-                <p style={{ fontSize: '0.75rem', color: '#22c55e', marginTop: 4 }}>
-                  Arquivo selecionado: {form.fileUrl}
-                </p>
-              )}
-            </div>
           </div>
 
           {saveError && <Alert variant="error" style={{ marginTop: '0.75rem' }}>{saveError}</Alert>}
@@ -394,8 +406,8 @@ export default function ReceiptDocuments() {
                 + Detalhes
               </Button>
             )}
-            <Button onClick={handleSave} disabled={saving} fullWidth>
-              {saving ? 'Salvando...' : 'Salvar Nota'}
+            <Button onClick={handleSave} disabled={saving || scanning} fullWidth>
+              {saving ? 'Salvando...' : scanning ? 'Lendo...' : 'Salvar Nota'}
             </Button>
           </div>
         </div>
@@ -428,8 +440,8 @@ export default function ReceiptDocuments() {
           <option value="reconciled">Reconciliadas</option>
           <option value="cancelled">Canceladas</option>
         </Select>
-        <Button onClick={() => { setModalMode('full'); setShowModal(true) }} variant="secondary">
-          + Nova Nota
+        <Button onClick={() => { setModalMode('quick'); setShowModal(true) }} variant="secondary">
+          + Enviar comprovante
         </Button>
       </div>
 
@@ -460,7 +472,7 @@ export default function ReceiptDocuments() {
           <div style={{ fontSize: '2rem', marginBottom: 8 }}>🧾</div>
           <div>Nenhuma nota registrada para este mês.</div>
           <div style={{ fontSize: '0.85rem', marginTop: 4 }}>
-            Use o botão <strong>+</strong> no canto inferior direito para registrar uma compra no estabelecimento.
+            Use o botão para enviar uma foto ou PDF e deixar a IA cadastrar automaticamente.
           </div>
         </Card>
       )}
@@ -510,10 +522,12 @@ export default function ReceiptDocuments() {
                   {doc.fileUrl && (
                     <div style={{ gridColumn: '1/-1' }}>
                       <strong>Comprovante:</strong>{' '}
-                      {doc.fileType?.startsWith('image/') ? (
+                      {isRenderableFileUrl(doc.fileUrl) && doc.fileType?.startsWith('image/') ? (
                         <img src={doc.fileUrl} alt="comprovante" style={{ maxWidth: 200, borderRadius: 8, marginTop: 4 }} />
-                      ) : (
+                      ) : isRenderableFileUrl(doc.fileUrl) ? (
                         <a href={doc.fileUrl} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>Ver arquivo</a>
+                      ) : (
+                        <span style={{ color: '#9ca3af' }}>{doc.fileUrl}</span>
                       )}
                     </div>
                   )}

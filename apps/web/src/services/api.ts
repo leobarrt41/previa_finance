@@ -149,7 +149,7 @@ export interface CashFlowRecurringTransaction extends CashFlowForecast {
 export interface CashFlowRequest {
   startMonth: string        // YYYY-MM
   months: number            // quantos meses projectar
-  openingBalanceMinor: number
+  openingBalanceMinor?: number
   transactions?: CashFlowTransaction[]
   cardInvoices?: CashFlowCardInvoice[]
   forecasts?: CashFlowForecast[]
@@ -206,6 +206,16 @@ export interface BudgetItem {
   categoryName: string
   budgetAmountMinor: number
   period: 'monthly' | 'yearly'
+}
+
+export interface BudgetProjectionItem {
+  id: string
+  competencyMonth: string
+  amountMinor: number
+  description?: string
+  isActive?: boolean
+  recurrence?: 'one-time' | 'monthly' | 'yearly'
+  recurrenceEnd?: string | null
 }
 
 export interface SpendingItem {
@@ -283,6 +293,11 @@ export interface Category {
   type: 'expense' | 'income' | 'transfer'
   parentId: string | null
   isSystem: boolean
+}
+
+export interface CategoryTreeNode extends Category {
+  sortOrder?: number
+  children?: CategoryTreeNode[]
 }
 
 export interface AccountMonthSummary {
@@ -580,7 +595,18 @@ export interface BudgetAssessResult {
   expenseMinor: number
   liabilityMinor: number
   openDebtMinor: number
+  installmentDebtMinor?: number
+  projectedIncomeMinor?: number
+  projectedExpenseMinor?: number
+  projectedLiabilityMinor?: number
+  usedProjectedIncome?: boolean
+  usedProjectedExpense?: boolean
+  usedProjectedLiability?: boolean
+  consideredIncomeMinor?: number
+  consideredExpenseMinor?: number
+  consideredLiabilityMinor?: number
   totalCommittedMinor: number
+  availableMinor?: number
   categoryBreakdown: Array<{ categoryId: string; amountMinor: number; pctOfIncome: number }>
   historicalMonths: Array<{ month: string; incomeMinor: number; expenseMinor: number }>
   ai: AssessAIResult
@@ -588,37 +614,119 @@ export interface BudgetAssessResult {
 
 export interface SpendingAssessResult {
   categoryId: string
+  subcategoryIds?: string[]
   month: string
   currentMonthMinor: number
   averageHistoricalMinor: number
   variationPct: number
   incomeMinor: number
   impactOnIncomePct: number
-  monthlySummary: Array<{ month: string; totalMinor: number; count: number }>
-  topTransactions: Array<{ description: string | null; amountMinor: number }>
-  ai: AssessAIResult
+  monthlySummary: Array<{ month: string; totalMinor: number; count: number; statementMinor?: number; invoiceMinor?: number }>
+  topTransactions: Array<{ description: string | null; amountMinor: number; source?: 'statement' | 'card_invoice' }>
+  sourceSummary?: {
+    statementMinor: number
+    invoiceMinor: number
+  }
+  categoryBreakdown?: Array<{
+    categoryId: string
+    label: string
+    amountMinor: number
+    pctOfTotal: number
+  }>
+  subcategoryBreakdown?: Array<{
+    categoryId: string
+    label: string
+    amountMinor: number
+    pctWithinCategory: number
+    pctOfTotal: number
+  }>
+  invoiceContext?: Array<{
+    invoiceMonth: string
+    dueDate: string | null
+    status: string | null
+    totalAmountMinor: number | null
+    openAmountMinor: number | null
+    paidAmountMinor: number | null
+    institutionName: string | null
+    cardBrand: string | null
+    cardLast4: string | null
+  }>
+  ai?: AssessAIResult | null
+}
+
+export interface SpendingOverviewResult {
+  month: string
+  totalMinor: number
+  sourceSummary: {
+    statementMinor: number
+    invoiceMinor: number
+  }
+  categoryBreakdown: Array<{
+    categoryId: string
+    label: string
+    amountMinor: number
+    pctOfTotal: number
+  }>
 }
 
 export interface DebtAssessResult {
   month: string
   incomeMinor: number
+  projectedIncomeMinor?: number
+  consideredIncomeMinor?: number
+  usedProjectedIncome?: boolean
+  statementExpenseMinor?: number
+  statementExpenseBRL?: string
+  statementOutflowMinor?: number
+  statementOutflowBRL?: string
   openDebtMinor: number
   paidThisMonthMinor: number
+  paidAllocatedToPreviousInvoiceMinor?: number
+  paidThisMonthFromStatementMinor?: number
   futureInstallmentsMinor: number
+  totalDebtExposureMinor?: number
   debtPressurePct: number
   punctualityPct: number
   invoiceCount: number
   openInvoiceCount: number
   invoicesSummary: Array<{
+    id: number
     month: string
     card: string | null
     brand: string | null
     last4: string | null
     status: string | null
     totalMinor: number
+    previousMinor: number
+    purchasesMinor: number
     openMinor: number
     paidMinor: number
     dueDate: string | null
+  }>
+  cashflowInvoicesSummary?: Array<{
+    id: number
+    month: string
+    card: string | null
+    brand: string | null
+    last4: string | null
+    previousMinor: number
+    previousBRL: string
+    purchasesMinor: number
+    purchasesBRL: string
+    totalMinor: number
+    totalBRL: string
+    paidMinor: number
+    paidBRL: string
+    openMinor: number
+    openBRL: string
+    dueDate: string | null
+  }>
+  pendingCashflowForecasts?: Array<{
+    description: string | null
+    amountMinor: number
+    amountBRL: string
+    kind: 'income' | 'expense'
+    month: string
   }>
   futureInstallments: Array<{ description: string | null; amountMinor: number; installment: string | null; month: string }>
   ai: AssessAIResult
@@ -664,6 +772,22 @@ export interface ReceiptDocumentSummary {
   reconciled: number
   cancelled: number
   total: number
+}
+
+export interface ReceiptDocumentScanResponse {
+  data: ReceiptDocument
+  extracted?: {
+    merchantName?: string | null
+    merchantCnpj?: string | null
+    amountMinor?: number | null
+    purchaseDate?: string | null
+    purchaseMonth?: string | null
+    expectedInvoiceMonth?: string | null
+    nfeKey?: string | null
+    description?: string | null
+    paymentKind?: 'card' | 'debit' | 'unknown'
+    confidence?: number
+  }
 }
 
 export interface AuthMeResponse {
@@ -756,7 +880,7 @@ export const api = {
 
   categories: {
     list: () => request<Category[]>('/api/categories'),
-    tree: () => request<Category[]>('/api/categories/tree'),
+    tree: () => request<CategoryTreeNode[]>('/api/categories/tree'),
     create: (body: { name: string; type: 'expense' | 'income'; parentId?: string | null; sortOrder?: number }) =>
       request<Category>('/api/categories', { method: 'POST', body: JSON.stringify(body) }),
     update: (id: string, body: { name?: string; type?: 'expense' | 'income'; parentId?: string | null; sortOrder?: number }) =>
@@ -793,15 +917,25 @@ export const api = {
   },
 
   assess: {
-    budget: (month: string) =>
+    budget: (body: { month: string; extraForecasts?: BudgetProjectionItem[]; includeAi?: boolean }) =>
       request<BudgetAssessResult>('/api/assess/budget', {
         method: 'POST',
-        body: JSON.stringify({ month }),
+        body: JSON.stringify(body),
       }),
-    spending: (month: string, categoryId: string) =>
+    spendingOverview: (month: string) =>
+      request<SpendingOverviewResult>('/api/assess/spending', {
+        method: 'POST',
+        body: JSON.stringify({ month, includeAi: false }),
+      }),
+    spendingPreview: (month: string, categoryId: string, subcategoryIds: string[] = []) =>
       request<SpendingAssessResult>('/api/assess/spending', {
         method: 'POST',
-        body: JSON.stringify({ month, categoryId }),
+        body: JSON.stringify({ month, categoryId, subcategoryIds, includeAi: false }),
+      }),
+    spending: (month: string, categoryId: string, subcategoryIds: string[] = []) =>
+      request<SpendingAssessResult>('/api/assess/spending', {
+        method: 'POST',
+        body: JSON.stringify({ month, categoryId, subcategoryIds, includeAi: true }),
       }),
     debt: (month: string, projectionMonths = 3) =>
       request<DebtAssessResult>('/api/assess/debt', {
@@ -811,6 +945,14 @@ export const api = {
   },
 
   receiptDocuments: {
+    scan: (file: File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return requestRaw<ReceiptDocumentScanResponse>('/api/receipt-documents/scan', {
+        method: 'POST',
+        body: form,
+      })
+    },
     list: (params?: { month?: string; state?: string; accountId?: number }) => {
       const qs = new URLSearchParams()
       if (params?.month)     qs.set('month', params.month)

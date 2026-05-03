@@ -14,24 +14,159 @@
  *   GET    /api/receipt-documents/summary/:month — totais por estado
  */
 import { Router, Request, Response } from 'express'
-import { getDatabase } from '../db.js'
+import multer from 'multer'
+import { spawn } from 'node:child_process'
+import { getDatabase } from '../config/database.js'
 import { receiptDocuments } from '@previa/db'
 import { eq, and, sql } from 'drizzle-orm'
-import { requireAuth } from '../middleware/auth.js'
+import { requireClerkAuth } from '../middlewares/auth.js'
+import { resolveOwnerId } from '../services/ownerStore.js'
+import { config } from '../config/env.js'
 
-export const receiptDocumentsRouter = Router()
-receiptDocumentsRouter.use(requireAuth)
+export const receiptDocumentsRouter: Router = Router()
+receiptDocumentsRouter.use(requireClerkAuth)
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+})
+
+type ReceiptExtractionAIResult = {
+  merchantName?: string | null
+  merchantCnpj?: string | null
+  amountMinor?: number | null
+  purchaseDate?: string | null
+  purchaseMonth?: string | null
+  expectedInvoiceMonth?: string | null
+  nfeKey?: string | null
+  description?: string | null
+  paymentKind?: 'card' | 'debit' | 'unknown'
+  confidence?: number
+}
+
+function monthFromDate(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`
+}
+
+function addMonths(month: string, delta: number): string {
+  const [y, m] = month.split('-').map(Number)
+  const d = new Date(Date.UTC(y, m - 1 + delta, 1))
+  return monthFromDate(d)
+}
+
+function parseDateLike(value: unknown): Date | null {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+async function extractPdfText(buffer: Buffer): Promise<string> {
+  return await new Promise<string>((resolve) => {
+    const child = spawn('pdftotext', ['-', '-'])
+    let stdout = ''
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8') })
+    child.on('error', () => resolve(''))
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(stdout.trim())
+      } else {
+        resolve('')
+      }
+    })
+    child.stdin.write(buffer)
+    child.stdin.end()
+  })
+}
+
+async function callReceiptExtractionAI(payload: unknown): Promise<ReceiptExtractionAIResult> {
+  if (!config.ai.apiKey) {
+    throw new Error('AI não configurada para extrair notas')
+  }
+
+  const input = payload as {
+    filename?: string
+    mimeType?: string
+    source?: { kind?: 'pdf' | 'image'; text?: string; imageUrl?: string }
+  }
+  const userContent =
+    input.source?.kind === 'image' && input.source.imageUrl
+      ? [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              filename: input.filename,
+              mimeType: input.mimeType,
+              source: { kind: 'image' },
+            }),
+          },
+          {
+            type: 'image_url',
+            image_url: { url: input.source.imageUrl },
+          },
+        ]
+      : JSON.stringify({
+          filename: input.filename,
+          mimeType: input.mimeType,
+          source: {
+            kind: 'pdf',
+            text: input.source?.text ?? '',
+          },
+        })
+
+  const response = await fetch(`${config.ai.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.ai.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.ai.model,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Você extrai dados de notas fiscais e comprovantes brasileiros. Responda SOMENTE JSON com os campos merchantName, merchantCnpj, amountMinor, purchaseDate, purchaseMonth, expectedInvoiceMonth, nfeKey, description, paymentKind e confidence. amountMinor deve ser inteiro em centavos. paymentKind deve ser card, debit ou unknown. purchaseDate deve ser YYYY-MM-DD quando possível.',
+        },
+        {
+          role: 'user',
+          content: userContent,
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(30000),
+  })
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`Falha ao extrair nota (${response.status}): ${text}`)
+  }
+
+  const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
+  const content = json.choices?.[0]?.message?.content ?? '{}'
+  try {
+    return JSON.parse(content) as ReceiptExtractionAIResult
+  } catch {
+    return {}
+  }
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-function getOwner(req: Request): { userId: string; ownerId: number } {
-  const auth = (req as any).auth
-  return { userId: auth.userId, ownerId: auth.ownerId }
+async function getOwner(req: Request): Promise<{ userId: string; ownerId: number }> {
+  const clerkUserId = req.authUser?.clerkUserId
+  if (!clerkUserId) {
+    throw new Error('Missing authenticated user')
+  }
+
+  const owner = await resolveOwnerId(clerkUserId)
+  return { userId: clerkUserId, ownerId: owner.id }
 }
 
 // ── GET /api/receipt-documents ───────────────────────────────────────────────
 receiptDocumentsRouter.get('/', async (req: Request, res: Response) => {
   try {
-    const { userId, ownerId } = getOwner(req)
+    const { userId, ownerId } = await getOwner(req)
     const db = await getDatabase()
     const { month, state, accountId } = req.query
 
@@ -55,7 +190,7 @@ receiptDocumentsRouter.get('/', async (req: Request, res: Response) => {
 // ── GET /api/receipt-documents/summary/:month ────────────────────────────────
 receiptDocumentsRouter.get('/summary/:month', async (req: Request, res: Response) => {
   try {
-    const { ownerId } = getOwner(req)
+    const { ownerId } = await getOwner(req)
     const db = await getDatabase()
     const { month } = req.params
 
@@ -90,7 +225,7 @@ receiptDocumentsRouter.get('/summary/:month', async (req: Request, res: Response
 // ── POST /api/receipt-documents ──────────────────────────────────────────────
 receiptDocumentsRouter.post('/', async (req: Request, res: Response) => {
   try {
-    const { userId, ownerId } = getOwner(req)
+    const { userId, ownerId } = await getOwner(req)
     const db = await getDatabase()
     const {
       amountMinor, purchaseDate, purchaseMonth, expectedInvoiceMonth,
@@ -136,10 +271,88 @@ receiptDocumentsRouter.post('/', async (req: Request, res: Response) => {
   }
 })
 
+// ── POST /api/receipt-documents/scan ────────────────────────────────────────
+receiptDocumentsRouter.post('/scan', upload.single('file'), async (req: Request, res: Response) => {
+  try {
+    const { userId, ownerId } = await getOwner(req)
+    const db = await getDatabase()
+    if (!req.file) {
+      return res.status(400).json({ error: 'Envie uma foto ou PDF no campo "file".' })
+    }
+
+    const mimeType = req.file.mimetype || 'application/octet-stream'
+    const isPdf = mimeType === 'application/pdf' || req.file.originalname.toLowerCase().endsWith('.pdf')
+
+    let textContext = ''
+    if (isPdf) {
+      textContext = await extractPdfText(req.file.buffer)
+    }
+
+    const aiPayload = {
+      filename: req.file.originalname,
+      mimeType,
+      source: isPdf
+        ? {
+            kind: 'pdf',
+            text: textContext.slice(0, 12000),
+          }
+        : {
+            kind: 'image',
+            imageUrl: `data:${mimeType};base64,${req.file.buffer.toString('base64')}`,
+          },
+    }
+
+    const extracted = await callReceiptExtractionAI(aiPayload)
+
+    const parsedPurchaseDate = parseDateLike(extracted.purchaseDate) ?? new Date()
+    const purchaseMonth = extracted.purchaseMonth?.match(/^\d{4}-\d{2}$/)
+      ? extracted.purchaseMonth
+      : monthFromDate(parsedPurchaseDate)
+    const paymentKind = extracted.paymentKind ?? 'unknown'
+    const expectedInvoiceMonth = extracted.expectedInvoiceMonth?.match(/^\d{4}-\d{2}$/)
+      ? extracted.expectedInvoiceMonth
+      : paymentKind === 'card'
+        ? addMonths(purchaseMonth, 1)
+        : null
+    const amountMinor = Number(extracted.amountMinor ?? 0)
+
+    if (!amountMinor || amountMinor <= 0) {
+      return res.status(400).json({ error: 'Não foi possível extrair o valor da nota.' })
+    }
+
+    const [result] = await db.insert(receiptDocuments).values({
+      userId,
+      ownerId,
+      amountMinor,
+      purchaseDate: parsedPurchaseDate,
+      purchaseMonth,
+      expectedInvoiceMonth,
+      merchantName: extracted.merchantName || null,
+      merchantCnpj: extracted.merchantCnpj || null,
+      categoryId: null,
+      accountId: null,
+      nfeKey: extracted.nfeKey || null,
+      fileUrl: req.file.originalname,
+      fileType: mimeType,
+      description: extracted.description || extracted.merchantName || null,
+      dataState: 'projected',
+    })
+
+    const [created] = await db.select().from(receiptDocuments).where(eq(receiptDocuments.id, (result as any).insertId))
+
+    res.status(201).json({
+      data: created,
+      extracted,
+    })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ── PUT /api/receipt-documents/:id ──────────────────────────────────────────
 receiptDocumentsRouter.put('/:id', async (req: Request, res: Response) => {
   try {
-    const { ownerId } = getOwner(req)
+    const { ownerId } = await getOwner(req)
     const db = await getDatabase()
     const id = Number(req.params.id)
 
@@ -186,7 +399,7 @@ receiptDocumentsRouter.put('/:id', async (req: Request, res: Response) => {
 // ── DELETE /api/receipt-documents/:id ───────────────────────────────────────
 receiptDocumentsRouter.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const { ownerId } = getOwner(req)
+    const { ownerId } = await getOwner(req)
     const db = await getDatabase()
     const id = Number(req.params.id)
 
@@ -210,7 +423,7 @@ receiptDocumentsRouter.delete('/:id', async (req: Request, res: Response) => {
 // ── POST /api/receipt-documents/:id/reconcile ────────────────────────────────
 receiptDocumentsRouter.post('/:id/reconcile', async (req: Request, res: Response) => {
   try {
-    const { ownerId } = getOwner(req)
+    const { ownerId } = await getOwner(req)
     const db = await getDatabase()
     const id = Number(req.params.id)
     const { cardTransactionId, transactionId } = req.body

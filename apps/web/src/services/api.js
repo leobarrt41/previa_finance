@@ -168,6 +168,53 @@ export const api = {
         updateBankTransactionCategory: (transactionId, categoryId) => request(`/api/accounts/bank-transactions/${transactionId}/category`, { method: 'PATCH', body: JSON.stringify({ categoryId }) }),
         deleteByMonth: (accountId, month) => request(`/api/accounts/${accountId}/month/${month}`, { method: 'DELETE' }),
     },
+    assess: {
+        budget: (body) => request('/api/assess/budget', {
+            method: 'POST',
+            body: JSON.stringify(body),
+        }),
+        spendingOverview: (month) => request('/api/assess/spending', {
+            method: 'POST',
+            body: JSON.stringify({ month, includeAi: false }),
+        }),
+        spendingPreview: (month, categoryId, subcategoryIds = []) => request('/api/assess/spending', {
+            method: 'POST',
+            body: JSON.stringify({ month, categoryId, subcategoryIds, includeAi: false }),
+        }),
+        spending: (month, categoryId, subcategoryIds = []) => request('/api/assess/spending', {
+            method: 'POST',
+            body: JSON.stringify({ month, categoryId, subcategoryIds, includeAi: true }),
+        }),
+        debt: (month, projectionMonths = 3) => request('/api/assess/debt', {
+            method: 'POST',
+            body: JSON.stringify({ month, projectionMonths }),
+        }),
+    },
+    receiptDocuments: {
+        scan: (file) => {
+            const form = new FormData();
+            form.append('file', file);
+            return requestRaw('/api/receipt-documents/scan', {
+                method: 'POST',
+                body: form,
+            });
+        },
+        list: (params) => {
+            const qs = new URLSearchParams();
+            if (params?.month)
+                qs.set('month', params.month);
+            if (params?.state)
+                qs.set('state', params.state);
+            if (params?.accountId)
+                qs.set('accountId', String(params.accountId));
+            return request(`/api/receipt-documents?${qs}`);
+        },
+        summary: (month) => request(`/api/receipt-documents/summary/${month}`),
+        create: (body) => request('/api/receipt-documents', { method: 'POST', body: JSON.stringify(body) }),
+        update: (id, body) => request(`/api/receipt-documents/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+        remove: (id) => request(`/api/receipt-documents/${id}`, { method: 'DELETE' }),
+        reconcile: (id, body) => request(`/api/receipt-documents/${id}/reconcile`, { method: 'POST', body: JSON.stringify(body) }),
+    },
     invoices: {
         /** Upload a PDF invoice and receive extracted transactions for preview. */
         parse: (file, options = {}) => {

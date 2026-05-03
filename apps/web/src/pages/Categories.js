@@ -9,6 +9,7 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
  *   DELETE /api/categories/:id   — remover
  */
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { Card, Badge, Button, Input, Select, Alert, Spinner, EmptyState, } from '../components/ui';
 // ---------------------------------------------------------------------------
@@ -24,6 +25,7 @@ function typeVariant(type) {
 // Sub-components
 // ---------------------------------------------------------------------------
 function CategoryRow({ cat, onEdit, onDelete, onAddSub, }) {
+    const navigate = useNavigate();
     const hasChildren = cat.children && cat.children.length > 0;
     const [open, setOpen] = useState(hasChildren);
     // Keep parent expanded whenever it gains children after reload/create.
@@ -46,7 +48,7 @@ function CategoryRow({ cat, onEdit, onDelete, onAddSub, }) {
                             fontSize: '0.85rem',
                             width: 20,
                             flexShrink: 0,
-                        }, children: hasChildren ? (open ? '▾' : '▸') : '·' }), _jsx("span", { style: { flex: 1, fontSize: '0.88rem', color: '#e5e7eb', fontWeight: 600 }, children: cat.name }), _jsx(Badge, { variant: typeVariant(cat.type), children: typeLabel(cat.type) }), cat.isSystem && (_jsx(Badge, { variant: "gray", children: "sistema" })), _jsxs("div", { style: { display: 'flex', gap: 4 }, children: [_jsx("button", { onClick: () => onAddSub(cat), title: "Adicionar subcategoria", style: { background: 'none', border: '1px solid #2a2f45', borderRadius: 6, color: '#6366f1', cursor: 'pointer', padding: '2px 7px', fontSize: '0.78rem' }, children: "+ sub" }), _jsx("button", { onClick: () => onEdit(cat), title: "Editar", style: { background: 'none', border: '1px solid #2a2f45', borderRadius: 6, color: '#9ca3af', cursor: 'pointer', padding: '2px 7px', fontSize: '0.78rem' }, children: "\u270E" }), !cat.isSystem && (_jsx("button", { onClick: () => onDelete(cat), title: "Remover", style: { background: 'none', border: '1px solid #2a2f45', borderRadius: 6, color: '#f87171', cursor: 'pointer', padding: '2px 7px', fontSize: '0.78rem' }, children: "\u00D7" }))] })] }), open && hasChildren && (_jsx("div", { style: { paddingLeft: '1.5rem', borderLeft: '2px solid #1e2130', marginLeft: '1.25rem' }, children: cat.children.map((child) => (_jsxs("div", { style: {
+                        }, children: hasChildren ? (open ? '▾' : '▸') : '·' }), _jsx("span", { style: { flex: 1, fontSize: '0.88rem', color: '#e5e7eb', fontWeight: 600 }, children: cat.name }), _jsx(Badge, { variant: typeVariant(cat.type), children: typeLabel(cat.type) }), cat.isSystem && (_jsx(Badge, { variant: "gray", children: "sistema" })), _jsxs("div", { style: { display: 'flex', gap: 4 }, children: [cat.type === 'expense' && (_jsx("button", { onClick: () => navigate(`/assess/spending?categoryId=${cat.id}&categoryName=${encodeURIComponent(cat.name)}`), title: "Avaliar gastos desta categoria", style: { background: 'none', border: '1px solid #6366f1', borderRadius: 6, color: '#6366f1', cursor: 'pointer', padding: '2px 7px', fontSize: '0.78rem' }, children: "\uD83D\uDCCA avaliar" })), _jsx("button", { onClick: () => onAddSub(cat), title: "Adicionar subcategoria", style: { background: 'none', border: '1px solid #2a2f45', borderRadius: 6, color: '#6366f1', cursor: 'pointer', padding: '2px 7px', fontSize: '0.78rem' }, children: "+ sub" }), _jsx("button", { onClick: () => onEdit(cat), title: "Editar", style: { background: 'none', border: '1px solid #2a2f45', borderRadius: 6, color: '#9ca3af', cursor: 'pointer', padding: '2px 7px', fontSize: '0.78rem' }, children: "\u270E" }), !cat.isSystem && (_jsx("button", { onClick: () => onDelete(cat), title: "Remover", style: { background: 'none', border: '1px solid #2a2f45', borderRadius: 6, color: '#f87171', cursor: 'pointer', padding: '2px 7px', fontSize: '0.78rem' }, children: "\u00D7" }))] })] }), open && hasChildren && (_jsx("div", { style: { paddingLeft: '1.5rem', borderLeft: '2px solid #1e2130', marginLeft: '1.25rem' }, children: cat.children.map((child) => (_jsxs("div", { style: {
                         display: 'flex',
                         alignItems: 'center',
                         padding: '0.45rem 0.75rem',

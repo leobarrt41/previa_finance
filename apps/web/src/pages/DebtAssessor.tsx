@@ -47,6 +47,21 @@ export function DebtAssessor() {
   const totalPressurePct = result?.debtPressurePct ?? 0
   const openPressurePct = result?.debtPressurePct ?? 0
   const pressureColor = totalPressurePct >= 40 ? '#f87171' : totalPressurePct >= 25 ? '#fbbf24' : '#4ade80'
+  const consideredIncome = result?.consideredIncomeMinor ?? result?.incomeMinor ?? 0
+  const projectedIncome = result?.projectedIncomeMinor ?? 0
+  const usedProjectedIncome = result?.usedProjectedIncome ?? false
+  const paidAllocated = result?.paidAllocatedToPreviousInvoiceMinor ?? 0
+  const paidStatement = result?.paidThisMonthFromStatementMinor ?? 0
+  const selectedMonthIsCurrentOrFuture = selectedMonth >= currentMonth()
+  const effectiveById = new Map((result?.invoicesSummary ?? []).map(inv => [inv.id, inv]))
+  const currentMonthInvoices = (result?.cashflowInvoicesSummary ?? [])
+    .filter(inv => inv.month === selectedMonth)
+    .map(inv => ({
+      ...inv,
+      effective: effectiveById.get(inv.id),
+    }))
+  const previousBalance = currentMonthInvoices.reduce((sum, inv) => sum + (inv.previousMinor ?? 0), 0)
+  const currentInvoiceTotal = currentMonthInvoices.reduce((sum, inv) => sum + (inv.totalMinor ?? 0), 0)
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto' }}>
@@ -96,21 +111,33 @@ export function DebtAssessor() {
           {/* Metricas principais */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
             <Card>
-              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Total em aberto</div>
-              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#fbbf24' }}>{formatBRL(result.openDebtMinor)}</div>
-              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{result.openInvoiceCount} fatura(s)</div>
+              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Renda considerada</div>
+              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#4ade80' }}>{formatBRL(consideredIncome)}</div>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>
+                Real {formatBRL(result.incomeMinor)}{usedProjectedIncome ? ` • Prevista ${formatBRL(projectedIncome)}` : ''}
+              </div>
             </Card>
             <Card>
-              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Pago no mes</div>
-              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#4ade80' }}>{formatBRL(result.paidThisMonthMinor)}</div>
-              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{result.invoiceCount} fatura(s)</div>
+              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Saldo anterior</div>
+              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#fbbf24' }}>{formatBRL(previousBalance)}</div>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>
+                {result.openInvoiceCount} fatura(s) com saldo carregado
+              </div>
             </Card>
             <Card>
-              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Parcelas futuras ({projectionMonths}m)</div>
-              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#f87171' }}>{formatBRL(result.futureInstallmentsMinor)}</div>
-              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{result.invoiceCount} parcela(s)</div>
+              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Fatura atual</div>
+              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#4ade80' }}>{formatBRL(currentInvoiceTotal)}</div>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>
+                {formatBRL(paidStatement)} no extrato • {formatBRL(paidAllocated)} alocado à anterior
+              </div>
             </Card>
           </div>
+
+          <Card style={{ marginBottom: '1.5rem' }}>
+            <div style={{ fontSize: '0.8rem', color: '#9ca3af', marginBottom: 6 }}>Parcelas futuras ({projectionMonths}m)</div>
+            <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#f87171' }}>{formatBRL(result.futureInstallmentsMinor)}</div>
+            <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{result.invoiceCount} parcela(s)</div>
+          </Card>
 
           {/* Barras de pressao */}
           <Card style={{ marginBottom: '1.5rem' }}>
@@ -169,23 +196,44 @@ export function DebtAssessor() {
             </Card>
           </div>
 
-          {/* Faturas em aberto */}
-          {result.invoicesSummary.filter(i => i.openMinor > 0).length > 0 && (
-            <Card style={{ marginBottom: '1.5rem' }}>
-              <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: '0.75rem', fontWeight: 600 }}>Faturas em aberto</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {result.invoicesSummary.filter(i => i.openMinor > 0).map((inv, i) => (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: '1px solid #1e2130' }}>
-                    <div>
-                      <div style={{ fontSize: '0.85rem', color: '#d1d5db' }}>{inv.card ?? 'Cartão'}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Vence: {inv.dueDate}</div>
-                    </div>
-                    <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#fbbf24' }}>{formatBRL(inv.openMinor)}</span>
+          {/* Faturas do mês atual */}
+          <Card style={{ marginBottom: '1.5rem' }}>
+            <div style={{ fontSize: '0.85rem', color: '#e5e7eb', marginBottom: '0.75rem', fontWeight: 700 }}>
+              Faturas do mês atual ({selectedMonth}):
+            </div>
+            {currentMonthInvoices.length > 0 ? (
+              <div style={{ overflowX: 'auto' }}>
+                <div style={{ minWidth: 760 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2.4fr 1.2fr 1.2fr 1.2fr 1.2fr', gap: 12, padding: '0 1rem 0.5rem 1rem', color: '#8ea2ff', fontSize: '0.9rem', fontWeight: 700 }}>
+                    <div>Cartão</div>
+                    <div>Total da fatura anterior</div>
+                    <div>Pago na fatura anterior</div>
+                    <div>Compras do mês</div>
+                    <div>Total da fatura</div>
                   </div>
-                ))}
+                  <div style={{ borderTop: '1px solid #1e2130' }} />
+                  {currentMonthInvoices.map((inv, i) => (
+                    <div key={`${inv.id}-${i}`} style={{ display: 'grid', gridTemplateColumns: '2.4fr 1.2fr 1.2fr 1.2fr 1.2fr', gap: 12, padding: '0.65rem 1rem', alignItems: 'center', borderBottom: i === currentMonthInvoices.length - 1 ? 'none' : '1px solid #1e2130' }}>
+                      <div>
+                        <div style={{ fontSize: '0.9rem', color: '#e5e7eb', fontWeight: 600 }}>{inv.card ?? 'Cartão'}</div>
+                        <div style={{ fontSize: '0.72rem', color: (selectedMonthIsCurrentOrFuture ? (inv.totalMinor ?? 0) : (inv.effective?.openMinor ?? inv.openMinor)) > 0 ? '#fbbf24' : '#4ade80' }}>
+                          {(selectedMonthIsCurrentOrFuture ? (inv.totalMinor ?? 0) : (inv.effective?.openMinor ?? inv.openMinor)) > 0 ? 'Em aberto' : 'Pago'}{inv.dueDate ? ` • Competência ${inv.month}` : ''}
+                        </div>
+                      </div>
+                      <div style={{ color: '#fbbf24', fontWeight: 700 }}>{formatBRL(inv.previousMinor ?? 0)}</div>
+                      <div style={{ color: '#4ade80', fontWeight: 700 }}>{formatBRL(inv.paidMinor ?? 0)}</div>
+                      <div style={{ color: '#fbbf24', fontWeight: 700 }}>{formatBRL(inv.purchasesMinor ?? 0)}</div>
+                      <div style={{ color: '#fbbf24', fontWeight: 700 }}>{formatBRL(inv.totalMinor ?? 0)}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </Card>
-          )}
+            ) : (
+              <div style={{ color: '#9ca3af', fontSize: '0.9rem', padding: '0.5rem 0' }}>
+                Nenhuma fatura encontrada para este mês.
+              </div>
+            )}
+          </Card>
 
           {/* Diagnostico IA */}
           {ai?.diagnosis && (

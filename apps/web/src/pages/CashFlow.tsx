@@ -1,5 +1,5 @@
 /**
- * CashFlow.tsx — Tela de Projecção de CashFlow
+ * CashFlow.tsx — Tela de Projeção de Fluxo de caixa
  *
  * Contrato de API: POST /api/cashflow/projection
  * Payload e response mapeados directamente de apps/api/src/routes/cashflow.ts
@@ -230,7 +230,6 @@ export function CashFlow() {
   // Base params
   const [startMonth, setStartMonth] = useState(now)
   const [months, setMonths] = useState('6')
-  const [openingBalance, setOpeningBalance] = useState('')
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   // Transaction form
@@ -295,9 +294,24 @@ export function CashFlow() {
     if (!startMonth.match(/^\d{4}-\d{2}$/)) e.startMonth = 'Formato YYYY-MM'
     const m = parseInt(months)
     if (isNaN(m) || m < 1 || m > 24) e.months = 'Entre 1 e 24 meses'
-    if (openingBalance === '') e.openingBalance = 'Informe o saldo inicial'
     setErrors(e)
     return Object.keys(e).length === 0
+  }
+
+  function buildProjectionRequest() {
+    return {
+      startMonth,
+      months: parseInt(months),
+      openingBalanceMinor: 0,
+      extraForecasts: transactions.map((tx) => ({
+        id: tx.id,
+        competencyMonth: tx.competencyMonth,
+        amountMinor: tx.type === 'expense' ? -Math.abs(tx.amountMinor) : Math.abs(tx.amountMinor),
+        recurrence: 'one-time' as const,
+        description: tx.description,
+        isActive: true,
+      })),
+    }
   }
 
   function saveTransaction() {
@@ -400,19 +414,7 @@ export function CashFlow() {
     try {
       await api.cashflow.setRecurringMonthStatus(forecastId, month, isPaid)
       await loadRecurring()
-      execute({
-        startMonth,
-        months: parseInt(months),
-        openingBalanceMinor: minor(openingBalance),
-        extraForecasts: transactions.map((tx) => ({
-          id: tx.id,
-          competencyMonth: tx.competencyMonth,
-          amountMinor: tx.type === 'expense' ? -Math.abs(tx.amountMinor) : Math.abs(tx.amountMinor),
-          recurrence: 'one-time',
-          description: tx.description,
-          isActive: true,
-        })),
-      })
+      execute(buildProjectionRequest())
     } catch (err) {
       setRecurringError(err instanceof Error ? err.message : 'Falha ao atualizar status mensal')
     }
@@ -422,19 +424,7 @@ export function CashFlow() {
     e.preventDefault()
     if (!validate()) return
     void buildMonthRange(startMonth, parseInt(months))
-    execute({
-      startMonth,
-      months: parseInt(months),
-      openingBalanceMinor: minor(openingBalance),
-      extraForecasts: transactions.map((tx) => ({
-        id: tx.id,
-        competencyMonth: tx.competencyMonth,
-        amountMinor: tx.type === 'expense' ? -Math.abs(tx.amountMinor) : Math.abs(tx.amountMinor),
-        recurrence: 'one-time',
-        description: tx.description,
-        isActive: true,
-      })),
-    })
+    execute(buildProjectionRequest())
   }
 
   const chartData =
@@ -449,7 +439,7 @@ export function CashFlow() {
       {/* Header */}
       <div style={{ marginBottom: '1.5rem' }}>
         <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#e5e7eb', margin: 0 }}>
-          📈 Projecção de CashFlow
+          📈 Projeção de Fluxo de caixa
         </h1>
         <p style={{ color: '#6b7280', marginTop: '0.3rem', fontSize: '0.85rem' }}>
           Visualize seu saldo mês a mês. Compra no cartão é dívida — o pagamento da fatura afecta o caixa.
@@ -511,15 +501,14 @@ export function CashFlow() {
             <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <Input label="Mês inicial (YYYY-MM)" value={startMonth} onChange={(e) => setStartMonth(e.target.value)} placeholder="2026-05" error={errors.startMonth} />
               <Input label="Meses a projectar" type="number" min={1} max={24} value={months} onChange={(e) => setMonths(e.target.value)} error={errors.months} />
-              <Input label="Saldo inicial (R$)" type="number" step="0.01" value={openingBalance} onChange={(e) => setOpeningBalance(e.target.value)} placeholder="1000.00" error={errors.openingBalance} />
               <Button type="submit" fullWidth disabled={state.status === 'loading'}>
-                {state.status === 'loading' ? 'Calculando...' : 'Calcular projecção'}
+                {state.status === 'loading' ? 'Calculando...' : 'Calcular projeção'}
               </Button>
             </form>
           </Card>
 
-          {/* Projecções avulsas */}
-          <Section title="Projecções avulsas removíveis" count={transactions.length}>
+          {/* Projeções avulsas */}
+          <Section title="Projeções avulsas removíveis" count={transactions.length}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.75rem' }}>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <select value={txType} onChange={(e) => setTxType(e.target.value as 'income' | 'expense')} style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.5rem', color: '#e5e7eb', fontSize: '0.85rem' }}>
@@ -538,7 +527,7 @@ export function CashFlow() {
               )}
             </div>
             {transactions.length === 0
-              ? <EmptyState icon="💸" title="Nenhuma projecção avulsa" description="Adicione receitas e despesas acima. Receita sobe a linha azul; despesa entra no vermelho." />
+              ? <EmptyState icon="💸" title="Nenhuma projeção avulsa" description="Adicione receitas e despesas acima. Receita sobe a linha azul; despesa entra no vermelho." />
               : transactions.map((tx, i) => (
                   <TransactionRow
                     key={tx.id}
@@ -563,7 +552,7 @@ export function CashFlow() {
                 marginBottom: '0.75rem',
               }}
             >
-              Previsões são projecções futuras (ex: salário mensal, IPTU anual). Podem ser substituídas por dados reais quando confirmados.
+              Previsões são projeções futuras (ex: salário mensal, IPTU anual). Podem ser substituídas por dados reais quando confirmados.
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.75rem' }}>
               <input

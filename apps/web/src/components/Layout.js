@@ -4,12 +4,15 @@ import { NavLink } from 'react-router-dom';
 import { api } from '../services/api';
 const NAV_ITEMS = [
     { to: '/', label: 'Dashboard', icon: '🏠' },
-    { to: '/cashflow', label: 'CashFlow', icon: '📈' },
+    { to: '/cashflow', label: 'Fluxo de caixa', icon: '📈' },
     { to: '/budget', label: 'Orçamento', icon: '🎯' },
     { to: '/accounts', label: 'Contas', icon: '🏦' },
     { to: '/statements/upload', label: 'Upload Extrato', icon: '🧾' },
     { to: '/invoices/upload', label: 'Upload Fatura', icon: '📤' },
     { to: '/categories', label: 'Categorias', icon: '🏷️' },
+    { to: '/assess/spending', label: 'Aval. Gastos', icon: '📊' },
+    { to: '/assess/debt', label: 'Aval. Dívidas', icon: '💳' },
+    { to: '/receipt-documents', label: 'Notas Fiscais', icon: '🧾' },
 ];
 export function Layout({ children }) {
     const [authLabel, setAuthLabel] = useState('Carregando usuario...');

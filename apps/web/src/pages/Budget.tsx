@@ -10,7 +10,7 @@
  *
  * Contrato de API: POST /api/assess/budget
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   BarChart,
   Bar,
@@ -26,6 +26,7 @@ import {
   formatBRL,
   currentMonth,
   type BudgetAssessResult,
+  type CashFlowTransaction,
 } from '../services/api'
 import {
   Card,
@@ -71,6 +72,38 @@ function buildMonthOptions(): { value: string; label: string }[] {
   return opts
 }
 
+const manualProjectionStorageKey = 'previa_finance.cashflow.manual_projections.v1'
+
+function loadManualProjections(): CashFlowTransaction[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(manualProjectionStorageKey)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((item): CashFlowTransaction | null => {
+        if (!item || typeof item !== 'object') return null
+        const tx = item as Partial<CashFlowTransaction>
+        if (typeof tx.id !== 'string') return null
+        if (typeof tx.competencyMonth !== 'string') return null
+        if (typeof tx.description !== 'string') return null
+        if (typeof tx.amountMinor !== 'number') return null
+        if (tx.type !== 'income' && tx.type !== 'expense') return null
+        return {
+          id: tx.id,
+          competencyMonth: tx.competencyMonth,
+          amountMinor: tx.amountMinor,
+          type: tx.type,
+          description: tx.description,
+        }
+      })
+      .filter((tx): tx is CashFlowTransaction => tx !== null)
+  } catch {
+    return []
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Gauge visual de comprometimento
 // ---------------------------------------------------------------------------
@@ -109,12 +142,26 @@ export function Budget() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<BudgetAssessResult | null>(null)
+  const [manualProjectionCount, setManualProjectionCount] = useState(0)
 
-  async function handleAnalyze() {
+  async function handleAnalyze(includeAi = false) {
     setLoading(true)
     setError(null)
     try {
-      const data = await api.assess.budget(selectedMonth)
+      const manualProjections = loadManualProjections()
+      setManualProjectionCount(manualProjections.length)
+      const data = await api.assess.budget({
+        month: selectedMonth,
+        includeAi,
+        extraForecasts: manualProjections.map((tx) => ({
+          id: tx.id,
+          competencyMonth: tx.competencyMonth,
+          amountMinor: tx.type === 'expense' ? -Math.abs(tx.amountMinor) : Math.abs(tx.amountMinor),
+          recurrence: 'one-time',
+          description: tx.description,
+          isActive: true,
+        })),
+      })
       setResult(data)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Erro ao avaliar orçamento')
@@ -123,15 +170,31 @@ export function Budget() {
     }
   }
 
+  useEffect(() => {
+    void handleAnalyze(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMonth])
+
   const ai = result?.ai
+  const projectedIncomeMinor = result?.projectedIncomeMinor ?? 0
+  const projectedExpenseMinor = result?.projectedExpenseMinor ?? 0
+  const projectedLiabilityMinor = result?.projectedLiabilityMinor ?? 0
+  const installmentDebtMinor = result?.installmentDebtMinor ?? 0
+  const usedProjectedIncome = result?.usedProjectedIncome ?? false
+  const usedProjectedExpense = result?.usedProjectedExpense ?? false
+  const usedProjectedLiability = result?.usedProjectedLiability ?? false
+  const consideredIncomeMinor = result?.consideredIncomeMinor ?? (result ? result.incomeMinor + projectedIncomeMinor : 0)
+  const consideredExpenseMinor = result?.consideredExpenseMinor ?? (result ? result.expenseMinor + projectedExpenseMinor : 0)
+  const consideredLiabilityMinor = result?.consideredLiabilityMinor ?? (result ? result.liabilityMinor + result.openDebtMinor + projectedLiabilityMinor : 0)
+  const consideredCommittedMinor = result?.totalCommittedMinor ?? (consideredExpenseMinor + consideredLiabilityMinor)
   const commitmentPct = ai?.commitmentPct ?? (
-    result && result.incomeMinor > 0
-      ? Math.round(result.totalCommittedMinor / result.incomeMinor * 100)
+    consideredIncomeMinor > 0
+      ? Math.round(consideredCommittedMinor / consideredIncomeMinor * 100)
       : 0
   )
 
   const availableMinor = ai?.availableMinor ?? (
-    result ? result.incomeMinor - result.totalCommittedMinor : 0
+    result?.availableMinor ?? (consideredIncomeMinor - consideredCommittedMinor)
   )
 
   const chartData = result?.categoryBreakdown
@@ -147,7 +210,7 @@ export function Budget() {
     <div style={{ maxWidth: 900, margin: '0 auto' }}>
       <SectionTitle>Orçamento</SectionTitle>
       <p style={{ color: '#9ca3af', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-        Avaliação automática com base na sua renda, extratos, faturas e categorias do mês.
+        Avaliação automática com base na sua renda, extratos, faturas, previsões e projeções avulsas do mês.
       </p>
 
       {/* Controles */}
@@ -165,11 +228,17 @@ export function Budget() {
               {buildMonthOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
-          <Button onClick={handleAnalyze} disabled={loading} variant="primary">
-            {loading ? 'Analisando...' : '🤖 Avaliar com IA'}
+          <Button onClick={() => void handleAnalyze(true)} disabled={loading} variant="primary">
+            {loading ? 'Analisando...' : '🤖 Detalhar com IA'}
           </Button>
         </div>
       </Card>
+
+      {manualProjectionCount > 0 && (
+        <Alert variant="info" style={{ marginBottom: '1rem' }}>
+          {manualProjectionCount} projeção(ões) avulsa(s) foram carregada(s) do Fluxo de caixa para esta avaliação.
+        </Alert>
+      )}
 
       {error && <Alert variant="error" style={{ marginBottom: '1rem' }}>{error}</Alert>}
       {loading && (
@@ -218,14 +287,32 @@ export function Budget() {
           {/* Métricas */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
             {[
-              { label: 'Renda', value: result.incomeMinor, color: '#4ade80' },
-              { label: 'Gastos', value: result.expenseMinor, color: '#f87171' },
-              { label: 'Dívida em aberto', value: result.openDebtMinor, color: '#fbbf24' },
-              { label: availableMinor >= 0 ? 'Sobra' : 'Déficit', value: Math.abs(availableMinor), color: availableMinor >= 0 ? '#4ade80' : '#f87171' },
+              {
+                label: 'Renda considerada',
+                value: consideredIncomeMinor,
+                color: '#4ade80',
+                meta: `Realizada ${formatBRL(result.incomeMinor)}${usedProjectedIncome ? ` • Prevista ${formatBRL(projectedIncomeMinor)}` : ''}`,
+              },
+              {
+                label: 'Gastos considerados',
+                value: consideredExpenseMinor,
+                color: '#f87171',
+                meta: `Realizados ${formatBRL(result.expenseMinor)}${usedProjectedExpense ? ` • Projetados ${formatBRL(projectedExpenseMinor)}` : ''}`,
+              },
+              {
+                label: 'Dívida em aberto',
+                value: consideredLiabilityMinor,
+                color: '#fbbf24',
+                meta: `Aberta ${formatBRL(result.openDebtMinor)}${installmentDebtMinor > 0 ? ` • Parcelas ${formatBRL(installmentDebtMinor)}` : ''}${usedProjectedLiability ? ` • Projetada ${formatBRL(projectedLiabilityMinor)}` : ''}`,
+              },
+                { label: availableMinor >= 0 ? 'Sobra' : 'Déficit', value: Math.abs(availableMinor), color: availableMinor >= 0 ? '#4ade80' : '#f87171' },
             ].map(m => (
               <Card key={m.label}>
                 <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>{m.label}</div>
                 <div style={{ fontSize: '1.1rem', fontWeight: 700, color: m.color }}>{formatBRL(m.value)}</div>
+                {'meta' in m && m.meta && (
+                  <div style={{ fontSize: '0.72rem', color: '#6b7280', marginTop: 4 }}>{m.meta}</div>
+                )}
               </Card>
             ))}
           </div>
@@ -324,7 +411,7 @@ export function Budget() {
         <Card style={{ textAlign: 'center', padding: '3rem' }}>
           <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🎯</div>
           <p style={{ color: '#9ca3af' }}>
-            Selecione o mês e clique em <strong style={{ color: '#6366f1' }}>Avaliar com IA</strong> para obter um diagnóstico financeiro completo.
+            Selecione o mês para carregar a avaliação automática. Se quiser texto mais detalhado, clique em <strong style={{ color: '#6366f1' }}>Detalhar com IA</strong>.
           </p>
         </Card>
       )}

@@ -19,7 +19,8 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import multer from 'multer'
 import { z } from 'zod'
 import { parseBBInvoice, invoiceToForecast } from '@previa/parser-bb'
-import { parseItauInvoice, itauInvoiceToForecast, isItauInvoice } from '@previa/parser-itau'
+import { parseItauInvoice, itauInvoiceToForecast } from '@previa/parser-itau'
+import { parseBradescoInvoice, bradescoInvoiceToForecast } from '@previa/parser-bradesco'
 import { accounts, categories, cardInvoices, cardTransactions, receiptDocuments } from '@previa/db'
 import { buildFingerprintFromRaw } from '@previa/core'
 import { eq, and, desc, sql } from 'drizzle-orm'
@@ -46,8 +47,8 @@ const upload = multer({
 })
 
 // Supported banks — extend as parsers are added
-type BankId = 'bb' | 'itau' | 'auto'
-const BANK_PARAM = z.enum(['bb', 'itau', 'auto']).default('auto')
+type BankId = 'bb' | 'itau' | 'bradesco' | 'auto'
+const BANK_PARAM = z.enum(['bb', 'itau', 'bradesco', 'auto']).default('auto')
 
 function isPdfPasswordError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
@@ -233,6 +234,8 @@ router.post(
           ? bank
           : filename.includes('itau') || filename.includes('itaú')
             ? 'itau'
+            : filename.includes('bradesco') || filename.includes('bradescard') || filename.includes('casas bahia')
+              ? 'bradesco'
             : filename.includes('bb') || filename.includes('brasil')
               ? 'bb'
               : 'auto'
@@ -298,6 +301,35 @@ router.post(
         }
       }
 
+      const parseAsBradesco = async () => {
+        const invoice = await parseBradescoInvoice(file.buffer, password)
+        const forecasts = bradescoInvoiceToForecast(invoice)
+
+        const txs = invoice.transactions
+          .filter((t) => t.date)
+          .map((t, i) => ({
+            id: `bradesco-${i}`,
+            date: t.date,
+            description: t.description,
+            amountMinor: Math.abs(t.amountMinor),
+            installment: t.installment,
+            categoryId: null,
+            competencyMonth: invoice.summary.invoiceMonth,
+            include: t.amountMinor > 0,
+            category: t.category,
+            country: t.country,
+          }))
+
+        return {
+          bank: 'bradesco' as const,
+          summary: {
+            ...invoice.summary,
+          },
+          transactions: txs,
+          forecasts,
+        }
+      }
+
       if (hintedBank === 'bb') {
         try {
           const payload = await parseAsBB()
@@ -322,14 +354,35 @@ router.post(
         }
       }
 
-      // bank=auto com filename ambíguo: tenta Itaú primeiro, depois BB.
-      // Isso evita parse incorreto quando o nome do arquivo não contém "itau"/"bb".
+      if (hintedBank === 'bradesco') {
+        try {
+          const payload = await parseAsBradesco()
+          return res.json(payload)
+        } catch (error) {
+          if (isPdfPasswordError(error)) {
+            throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+          }
+          throw error
+        }
+      }
+
+      // bank=auto com filename ambíguo: tenta Itaú, depois Bradesco, depois BB.
+      // Isso evita parse incorreto quando o nome do arquivo não contém o banco.
       try {
         const payload = await parseAsItau()
         return res.json(payload)
       } catch (error) {
         if (isPdfPasswordError(error)) {
           // Evita chamar o parser BB quando o problema já é senha.
+          throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+        }
+      }
+
+      try {
+        const payload = await parseAsBradesco()
+        return res.json(payload)
+      } catch (error) {
+        if (isPdfPasswordError(error)) {
           throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
         }
       }
@@ -582,6 +635,13 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           paid_amount_minor = ${paidAmountMinor.toString()},
           open_amount_minor = ${openAmountMinor.toString()},
           status = ${openAmountMinor > 0n ? 'OPEN' : 'PAID'},
+          parser_strategy = ${body.bank?.toLowerCase() === 'bradesco'
+            ? 'bradesco_v1'
+            : body.bank?.toLowerCase() === 'itau'
+              ? 'itau_v1'
+              : body.bank?.toLowerCase() === 'bb'
+                ? 'bb_v1'
+                : null},
           updated_at = CURRENT_TIMESTAMP
         where id = ${existingInvoice.id}
       `)
@@ -600,6 +660,13 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           status: openAmountMinor > 0n ? 'OPEN' : 'PAID',
           source: 'pdf_invoice',
           dataState: 'consolidated',
+          parserStrategy: body.bank?.toLowerCase() === 'bradesco'
+            ? 'bradesco_v1'
+            : body.bank?.toLowerCase() === 'itau'
+              ? 'itau_v1'
+              : body.bank?.toLowerCase() === 'bb'
+                ? 'bb_v1'
+                : undefined,
         })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)

@@ -140,7 +140,7 @@ function expandForecastsForProjection(
 const CashFlowRequestSchema = z.object({
   startMonth: z.string().regex(/^\d{4}-\d{2}$/, 'Format must be YYYY-MM'),
   months: z.number().min(1).max(24),
-  openingBalanceMinor: z.union([z.number(), z.bigint()]),
+  openingBalanceMinor: z.union([z.number(), z.bigint()]).optional().default(0),
   
   // Transações opcionais
   transactions: z.array(z.object({
@@ -657,9 +657,6 @@ router.post('/projection', async (req: Request, res: Response) => {
             competencyMonth: compMonth,
             type: 'expense' as const,
             amountMinor,
-            description: doc.merchantName ?? 'Nota fiscal',
-            categoryId: doc.categoryId ?? null,
-            source: 'manual' as const,
           })
         }
       }
@@ -730,7 +727,7 @@ router.post('/projection', async (req: Request, res: Response) => {
     
     // Converter para formato do CashFlowEngine
     const input: CashFlowInput = {
-      openingBalanceMinor: BigInt(data.openingBalanceMinor),
+      openingBalanceMinor: BigInt(data.openingBalanceMinor ?? 0),
       projectionMonths,
       currentMonth: data.startMonth,
       transactions: allTransactions,
