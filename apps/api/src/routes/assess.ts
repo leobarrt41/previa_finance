@@ -1179,8 +1179,18 @@ router.post('/debt', async (req: Request, res: Response) => {
     ))
     .orderBy(desc(transactions.amountMinor))
 
-  const installmentTxs = await db
+  // Busca TODAS as parcelas do utilizador (igual ao CashFlowEngine).
+  // A projeção de meses futuros é feita por cálculo — os registos dos meses
+  // futuros ainda não existem no banco (fatura não importada), por isso a
+  // query anterior (competencyMonth IN futureMonths) sempre retornava zero.
+  const addM = (base: string, offset: number): string => {
+    const [y, mo] = base.split('-').map(Number)
+    const d = new Date(Date.UTC(y, mo - 1 + offset, 1))
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+  }
+  const allInstallmentTxsRaw = await db
     .select({
+      id: cardTransactions.id,
       description: cardTransactions.description,
       amountMinor: cardTransactions.amountMinor,
       installmentNumber: cardTransactions.installmentNumber,
@@ -1190,11 +1200,40 @@ router.post('/debt', async (req: Request, res: Response) => {
     .from(cardTransactions)
     .where(and(
       eq(cardTransactions.userId, owner.id),
-      sql`${cardTransactions.competencyMonth} IN (${sql.join(futureMonths.map(fm => sql`${fm}`), sql`, `)})`,
-      sql`${cardTransactions.installmentNumber} IS NOT NULL AND ${cardTransactions.installmentTotal} IS NOT NULL AND ${cardTransactions.installmentTotal} > ${cardTransactions.installmentNumber}`,
+      sql`${cardTransactions.installmentNumber} IS NOT NULL`,
+      sql`${cardTransactions.installmentTotal} IS NOT NULL`,
+      sql`CAST(${cardTransactions.installmentTotal} AS UNSIGNED) > CAST(${cardTransactions.installmentNumber} AS UNSIGNED)`,
     ))
-    .orderBy(cardTransactions.competencyMonth)
-    .limit(200)
+    .limit(500)
+  // Projectar parcelas restantes nos meses futuros (mesma lógica do CashFlowEngine)
+  type ProjectedInstallment = {
+    description: string | null
+    amountMinor: number
+    installmentNumber: number
+    installmentTotal: number
+    competencyMonth: string
+    projectedMonth: string
+  }
+  const installmentTxs: ProjectedInstallment[] = allInstallmentTxsRaw.flatMap((tx) => {
+    const n = Number(tx.installmentNumber ?? 0)
+    const t = Number(tx.installmentTotal ?? 0)
+    if (t <= 0 || n <= 0 || t <= n) return []
+    const baseMonth = tx.competencyMonth
+    const rows: ProjectedInstallment[] = []
+    for (let step = 1; step <= (t - n); step++) {
+      const projectedMonth = addM(baseMonth, step)
+      if (!futureMonths.includes(projectedMonth)) continue
+      rows.push({
+        description: tx.description,
+        amountMinor: Number(tx.amountMinor),
+        installmentNumber: n + step,
+        installmentTotal: t,
+        competencyMonth: baseMonth,
+        projectedMonth,
+      })
+    }
+    return rows
+  })
 
   const incomeResult = await db
     .select({ total: sql<string>`COALESCE(SUM(${transactions.amountMinor}), 0)` })
@@ -1467,7 +1506,7 @@ Regras:
       amountMinor: Number(t.amountMinor),
       amountBRL: minorToBRL(Number(t.amountMinor)),
       installment: t.installmentNumber && t.installmentTotal ? `${t.installmentNumber}/${t.installmentTotal}` : null,
-      month: t.competencyMonth,
+      month: t.projectedMonth,
     })),
   }
 
@@ -1546,7 +1585,7 @@ Regras:
       amountMinor: Number(t.amountMinor),
       amountBRL: minorToBRL(Number(t.amountMinor)),
       installment: t.installmentNumber && t.installmentTotal ? `${t.installmentNumber}/${t.installmentTotal}` : null,
-      month: t.competencyMonth,
+      month: t.projectedMonth,
     })),
     ai: aiResult,
   })
