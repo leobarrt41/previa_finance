@@ -218,6 +218,19 @@ STATUS: Pendente
 ID: 20260412181917-24359
 SOURCE: previa_finance/copilot
 CATEGORIA: Arquitetura
+
+---
+
+## [2026-05-05 19:24]
+
+ID: 20260505-1924-ocr-debt-state  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Decisão  
+TÍTULO: Consolidado parcial de OCR de notas e semântica dos avaliadores  
+DESCRIÇÃO: Até este ponto, o projeto consolidou três frentes principais. 1) Avaliadores: ajustes em `Budget` e `DebtAssessor` para aproximar a leitura ao Fluxo de caixa, separando melhor compras no cartão, despesas fixas/gastos e saldo real. 2) Notas fiscais: o fluxo de `receipt_documents` passou a extrair mais pistas opcionais de cartão via IA/OCR, salvar hints no `rawPayload` e expor essa leitura na interface para inspeção. 3) Reconciliação: a importação de faturas continua reconciliando notas projetadas por valor/merchant/mês, com preparação para usar identidade de cartão quando existir. A leitura de imagem ainda depende fortemente da qualidade do comprovante e continua sendo ponto crítico a validar com casos reais.  
+TAGS: assess,receipt_documents,ocr,reconciliation,cashflow  
+PRIORIDADE: Alta  
+STATUS: Em andamento
 TÍTULO: Refactor categories schema to coalesce external_owner_id and document uniqueness
 DESCRIÇÃO: Refactor categories schema to coalesce external_owner_id and document uniqueness
 TAGS: categories

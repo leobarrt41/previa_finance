@@ -17,7 +17,7 @@ import { Router, Request, Response } from 'express'
 import multer from 'multer'
 import { spawn } from 'node:child_process'
 import { getDatabase } from '../config/database.js'
-import { receiptDocuments } from '@previa/db'
+import { accounts, receiptDocuments } from '@previa/db'
 import { eq, and, sql } from 'drizzle-orm'
 import { requireClerkAuth } from '../middlewares/auth.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
@@ -41,6 +41,13 @@ type ReceiptExtractionAIResult = {
   nfeKey?: string | null
   description?: string | null
   paymentKind?: 'card' | 'debit' | 'unknown'
+  issuerName?: string | null
+  cardBrand?: string | null
+  cardLast4?: string | null
+  maskedNumber?: string | null
+  ownerName?: string | null
+  closingDay?: number | null
+  dueDay?: number | null
   confidence?: number
 }
 
@@ -60,6 +67,83 @@ function parseDateLike(value: unknown): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
+function normalizeText(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed ? trimmed : null
+}
+
+function normalizeCardBrand(value: unknown): string | null {
+  const text = normalizeText(value)?.toUpperCase() ?? null
+  if (!text) return null
+  if (text.includes('VISA')) return 'VISA'
+  if (text.includes('MASTERCARD') || text.includes('MASTER')) return 'MASTERCARD'
+  if (text.includes('ELO')) return 'ELO'
+  if (text.includes('AMEX') || text.includes('AMERICAN EXPRESS')) return 'AMEX'
+  if (text.includes('HIPERCARD')) return 'HIPERCARD'
+  return text.length <= 50 ? text : null
+}
+
+function normalizeLast4(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const digits = value.replace(/\D/g, '')
+  if (digits.length < 4) return null
+  return digits.slice(-4)
+}
+
+function normalizeMaskedNumber(value: unknown): string | null {
+  const text = normalizeText(value)
+  return text && text.length <= 30 ? text : null
+}
+
+function normalizeOptionalInt(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return Number(value)
+  return null
+}
+
+type ReceiptCardIdentityHints = {
+  institutionName?: string | null
+  cardBrand?: string | null
+  cardLast4?: string | null
+  maskedNumber?: string | null
+  ownerName?: string | null
+  closingDay?: number | null
+  dueDay?: number | null
+}
+
+function buildReceiptFallbackDisplayName(
+  merchantName: string | null | undefined,
+  expectedInvoiceMonth: string | null | undefined,
+  purchaseMonth: string | null | undefined,
+): string {
+  const labelBase = merchantName?.trim()
+    || (expectedInvoiceMonth ? `Fatura ${expectedInvoiceMonth}` : null)
+    || (purchaseMonth ? `Compra ${purchaseMonth}` : null)
+    || 'Nota fiscal'
+  return `Cartão ${labelBase}`
+}
+
+function buildReceiptCardIdentityHints(extracted: ReceiptExtractionAIResult): ReceiptCardIdentityHints {
+  const institutionName = normalizeText(extracted.issuerName)
+  const cardBrand = normalizeCardBrand(extracted.cardBrand)
+  const cardLast4 = normalizeLast4(extracted.cardLast4 ?? extracted.maskedNumber)
+  const maskedNumber = normalizeMaskedNumber(extracted.maskedNumber)
+  const ownerName = normalizeText(extracted.ownerName)
+  const closingDay = normalizeOptionalInt(extracted.closingDay)
+  const dueDay = normalizeOptionalInt(extracted.dueDay)
+
+  return {
+    institutionName,
+    cardBrand,
+    cardLast4,
+    maskedNumber,
+    ownerName,
+    closingDay,
+    dueDay,
+  }
+}
+
 async function extractPdfText(buffer: Buffer): Promise<string> {
   return await new Promise<string>((resolve) => {
     const child = spawn('pdftotext', ['-', '-'])
@@ -73,6 +157,47 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
         resolve('')
       }
     })
+    child.stdin.write(buffer)
+    child.stdin.end()
+  })
+}
+
+async function preprocessImageForOcr(buffer: Buffer): Promise<Buffer> {
+  return await new Promise<Buffer>((resolve) => {
+    const script = [
+      'import io, sys',
+      'from PIL import Image, ImageOps, ImageEnhance',
+      'data = sys.stdin.buffer.read()',
+      'img = Image.open(io.BytesIO(data))',
+      'img = ImageOps.exif_transpose(img)',
+      'img = img.convert("L")',
+      'img = ImageOps.autocontrast(img)',
+      'if img.width < 1800:',
+      '    new_w = 1800',
+      '    new_h = max(1, int(img.height * (new_w / img.width)))',
+      '    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)',
+      'img = ImageEnhance.Sharpness(img).enhance(1.8)',
+      'img = ImageEnhance.Contrast(img).enhance(1.35)',
+      'out = io.BytesIO()',
+      'img.save(out, format="PNG")',
+      'sys.stdout.buffer.write(out.getvalue())',
+    ].join('\n')
+
+    const child = spawn('python3', ['-c', script], { stdio: ['pipe', 'pipe', 'pipe'] })
+    const chunks: Buffer[] = []
+    const errors: Buffer[] = []
+
+    child.stdout.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+    child.stderr.on('data', (chunk) => errors.push(Buffer.from(chunk)))
+    child.on('error', () => resolve(buffer))
+    child.on('close', (code) => {
+      if (code === 0 && chunks.length > 0) {
+        resolve(Buffer.concat(chunks))
+      } else {
+        resolve(buffer)
+      }
+    })
+
     child.stdin.write(buffer)
     child.stdin.end()
   })
@@ -127,7 +252,7 @@ async function callReceiptExtractionAI(payload: unknown): Promise<ReceiptExtract
         {
           role: 'system',
           content:
-            'Você extrai dados de notas fiscais e comprovantes brasileiros. Responda SOMENTE JSON com os campos merchantName, merchantCnpj, amountMinor, purchaseDate, purchaseMonth, expectedInvoiceMonth, nfeKey, description, paymentKind e confidence. amountMinor deve ser inteiro em centavos. paymentKind deve ser card, debit ou unknown. purchaseDate deve ser YYYY-MM-DD quando possível.',
+            'Você extrai dados de notas fiscais e comprovantes brasileiros. Responda SOMENTE JSON com os campos merchantName, merchantCnpj, amountMinor, purchaseDate, purchaseMonth, expectedInvoiceMonth, nfeKey, description, paymentKind, issuerName, cardBrand, cardLast4, maskedNumber, ownerName, closingDay, dueDay e confidence. Esses campos de cartão são opcionais: preencha quando aparecerem no OCR/PDF/imagem, porque eles servem para identificar o cartão real do documento. Se o comprovante mostrar explicitamente "crédito", "débito", "cartão", "bandeira", "final" ou "autorização", classifique paymentKind como card e extraia tudo o que for visível sobre o cartão, mesmo que só exista parte da informação. amountMinor deve ser inteiro em centavos. paymentKind deve ser card, debit ou unknown. purchaseDate deve ser YYYY-MM-DD quando possível. cardLast4 deve conter apenas os 4 últimos dígitos quando visíveis. maskedNumber deve manter a máscara do documento quando visível. issuerName deve ser o emissor/banco/cartão quando identificado. Se aparecer "fatura", "vence", "compra no cartão" ou comprovante de crédito/débito, trate como item de cartão e preencha expectedInvoiceMonth quando for possível inferir.',
         },
         {
           role: 'user',
@@ -161,6 +286,127 @@ async function getOwner(req: Request): Promise<{ userId: string; ownerId: number
 
   const owner = await resolveOwnerId(clerkUserId)
   return { userId: clerkUserId, ownerId: owner.id }
+}
+
+async function resolveOrCreateReceiptCardAccount(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  ownerId: number,
+  hints: ReceiptCardIdentityHints,
+  fallbackDisplayName?: string | null,
+): Promise<number | null> {
+  const hasIdentity = Boolean(
+    hints.institutionName ||
+    hints.cardBrand ||
+    hints.cardLast4 ||
+    hints.maskedNumber ||
+    hints.ownerName,
+  )
+
+  if (!hasIdentity) {
+    if (!fallbackDisplayName) return null
+
+    const [existingFallback] = await db
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(and(
+        eq(accounts.userId, ownerId),
+        eq(accounts.financialChannel, 'credit_card'),
+        eq(accounts.source, 'receipt_document'),
+        eq(accounts.displayName, fallbackDisplayName),
+      ))
+      .limit(1)
+
+    if (existingFallback) return existingFallback.id
+
+    await db.insert(accounts).values({
+      userId: ownerId,
+      type: 'CREDIT_CARD',
+      financialChannel: 'credit_card',
+      displayName: fallbackDisplayName,
+      institutionName: fallbackDisplayName,
+      source: 'receipt_document',
+      currencyCode: 'BRL',
+      isActive: true,
+    })
+
+    const [createdFallback] = await db
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(and(
+        eq(accounts.userId, ownerId),
+        eq(accounts.financialChannel, 'credit_card'),
+        eq(accounts.source, 'receipt_document'),
+        eq(accounts.displayName, fallbackDisplayName),
+      ))
+      .limit(1)
+
+    if (!createdFallback) {
+      throw new Error('Failed to create fallback receipt card account')
+    }
+
+    return createdFallback.id
+  }
+
+  const whereConditions = [
+    eq(accounts.userId, ownerId),
+    eq(accounts.financialChannel, 'credit_card'),
+    ...(hints.institutionName ? [eq(accounts.institutionName, hints.institutionName)] : []),
+    ...(hints.cardBrand ? [eq(accounts.cardBrand, hints.cardBrand)] : []),
+    ...(hints.cardLast4 ? [eq(accounts.cardLast4, hints.cardLast4)] : []),
+    ...(hints.maskedNumber ? [eq(accounts.maskedNumber, hints.maskedNumber)] : []),
+    ...(hints.ownerName ? [eq(accounts.ownerName, hints.ownerName)] : []),
+  ]
+
+  const [existing] = await db
+    .select({ id: accounts.id })
+    .from(accounts)
+    .where(and(...whereConditions))
+    .limit(1)
+
+  if (existing) return existing.id
+
+  const institutionDisplay = hints.institutionName ?? 'Cartão automático'
+  const cardBrandDisplay = hints.cardBrand ? ` ${hints.cardBrand}` : ''
+  const last4Display = hints.cardLast4 ? ` ••••${hints.cardLast4}` : ''
+  const displayName = `${institutionDisplay}${cardBrandDisplay}${last4Display}`.trim()
+
+  await db.insert(accounts).values({
+    userId: ownerId,
+    type: 'CREDIT_CARD',
+    financialChannel: 'credit_card',
+    displayName,
+    institutionName: hints.institutionName ?? institutionDisplay,
+    cardBrand: hints.cardBrand ?? undefined,
+    cardLast4: hints.cardLast4 ?? undefined,
+    maskedNumber: hints.maskedNumber ?? undefined,
+    ownerName: hints.ownerName ?? undefined,
+    closingDay: hints.closingDay ?? undefined,
+    dueDay: hints.dueDay ?? undefined,
+    source: 'receipt_document',
+    currencyCode: 'BRL',
+    isActive: true,
+  })
+
+  const [created] = await db
+    .select({ id: accounts.id })
+    .from(accounts)
+    .where(and(
+      eq(accounts.userId, ownerId),
+      eq(accounts.financialChannel, 'credit_card'),
+      ...(hints.institutionName ? [eq(accounts.institutionName, hints.institutionName)] : []),
+      ...(hints.cardBrand ? [eq(accounts.cardBrand, hints.cardBrand)] : []),
+      ...(hints.cardLast4 ? [eq(accounts.cardLast4, hints.cardLast4)] : []),
+      ...(hints.maskedNumber ? [eq(accounts.maskedNumber, hints.maskedNumber)] : []),
+      ...(hints.ownerName ? [eq(accounts.ownerName, hints.ownerName)] : []),
+      eq(accounts.source, 'receipt_document'),
+    ))
+    .limit(1)
+
+  if (!created) {
+    throw new Error('Failed to create auto card account from OCR hints')
+  }
+
+  return created.id
 }
 
 // ── GET /api/receipt-documents ───────────────────────────────────────────────
@@ -232,11 +478,36 @@ receiptDocumentsRouter.post('/', async (req: Request, res: Response) => {
       merchantName, merchantCnpj, categoryId, accountId,
       nfeKey, nfeNumber, nfeSeries, fileUrl, fileType,
       installmentTotal, installmentCurrent, description,
+      paymentKind, issuerName, cardBrand, cardLast4, maskedNumber, ownerName, closingDay, dueDay,
+      rawPayload,
     } = req.body
 
     if (!amountMinor || !purchaseDate || !purchaseMonth) {
       return res.status(400).json({ error: 'amountMinor, purchaseDate e purchaseMonth são obrigatórios' })
     }
+
+    const hints = buildReceiptCardIdentityHints({
+      paymentKind: paymentKind === 'card' || paymentKind === 'debit' ? paymentKind : undefined,
+      issuerName,
+      cardBrand,
+      cardLast4,
+      maskedNumber,
+      ownerName,
+      closingDay,
+      dueDay,
+    })
+
+    const resolvedAccountId = accountId
+      ? Number(accountId)
+      : await resolveOrCreateReceiptCardAccount(
+        db,
+        ownerId,
+        {
+          ...hints,
+          institutionName: hints.institutionName || normalizeText(issuerName),
+        },
+        buildReceiptFallbackDisplayName(merchantName, expectedInvoiceMonth, purchaseMonth),
+      )
 
     const [result] = await db.insert(receiptDocuments).values({
       userId,
@@ -248,7 +519,7 @@ receiptDocumentsRouter.post('/', async (req: Request, res: Response) => {
       merchantName: merchantName || null,
       merchantCnpj: merchantCnpj || null,
       categoryId: categoryId || null,
-      accountId: accountId ? Number(accountId) : null,
+      accountId: resolvedAccountId,
       nfeKey: nfeKey || null,
       nfeNumber: nfeNumber || null,
       nfeSeries: nfeSeries || null,
@@ -257,6 +528,7 @@ receiptDocumentsRouter.post('/', async (req: Request, res: Response) => {
       installmentTotal: installmentTotal ? Number(installmentTotal) : null,
       installmentCurrent: installmentCurrent ? Number(installmentCurrent) : null,
       description: description || null,
+      rawPayload: rawPayload ?? null,
       dataState: 'projected',
     })
 
@@ -282,12 +554,14 @@ receiptDocumentsRouter.post('/scan', upload.single('file'), async (req: Request,
 
     const mimeType = req.file.mimetype || 'application/octet-stream'
     const isPdf = mimeType === 'application/pdf' || req.file.originalname.toLowerCase().endsWith('.pdf')
+    const isImage = !isPdf && mimeType.startsWith('image/')
 
     let textContext = ''
     if (isPdf) {
       textContext = await extractPdfText(req.file.buffer)
     }
 
+    const imageBuffer = isImage ? await preprocessImageForOcr(req.file.buffer) : req.file.buffer
     const aiPayload = {
       filename: req.file.originalname,
       mimeType,
@@ -298,7 +572,7 @@ receiptDocumentsRouter.post('/scan', upload.single('file'), async (req: Request,
           }
         : {
             kind: 'image',
-            imageUrl: `data:${mimeType};base64,${req.file.buffer.toString('base64')}`,
+            imageUrl: `data:${mimeType};base64,${imageBuffer.toString('base64')}`,
           },
     }
 
@@ -309,12 +583,29 @@ receiptDocumentsRouter.post('/scan', upload.single('file'), async (req: Request,
       ? extracted.purchaseMonth
       : monthFromDate(parsedPurchaseDate)
     const paymentKind = extracted.paymentKind ?? 'unknown'
+    const hints = buildReceiptCardIdentityHints(extracted)
+    const hasCardHints = Boolean(
+      hints.institutionName ||
+      hints.cardBrand ||
+      hints.cardLast4 ||
+      hints.maskedNumber ||
+      hints.ownerName,
+    )
     const expectedInvoiceMonth = extracted.expectedInvoiceMonth?.match(/^\d{4}-\d{2}$/)
       ? extracted.expectedInvoiceMonth
-      : paymentKind === 'card'
+      : paymentKind === 'card' || hasCardHints
         ? addMonths(purchaseMonth, 1)
         : null
     const amountMinor = Number(extracted.amountMinor ?? 0)
+    const autoAccountId = await resolveOrCreateReceiptCardAccount(
+      db,
+      ownerId,
+      {
+        ...hints,
+        institutionName: hints.institutionName,
+      },
+      buildReceiptFallbackDisplayName(extracted.merchantName, expectedInvoiceMonth, purchaseMonth),
+    )
 
     if (!amountMinor || amountMinor <= 0) {
       return res.status(400).json({ error: 'Não foi possível extrair o valor da nota.' })
@@ -330,11 +621,12 @@ receiptDocumentsRouter.post('/scan', upload.single('file'), async (req: Request,
       merchantName: extracted.merchantName || null,
       merchantCnpj: extracted.merchantCnpj || null,
       categoryId: null,
-      accountId: null,
+      accountId: autoAccountId,
       nfeKey: extracted.nfeKey || null,
       fileUrl: req.file.originalname,
       fileType: mimeType,
       description: extracted.description || extracted.merchantName || null,
+      rawPayload: extracted,
       dataState: 'projected',
     })
 

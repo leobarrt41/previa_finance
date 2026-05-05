@@ -675,6 +675,12 @@ export interface DebtAssessResult {
   projectedIncomeMinor?: number
   consideredIncomeMinor?: number
   usedProjectedIncome?: boolean
+  fixedExpensesMinor?: number
+  fixedExpensesBRL?: string
+  cardPurchasesMinor?: number
+  cardPurchasesBRL?: string
+  netBalanceMinor?: number
+  netBalanceBRL?: string
   statementExpenseMinor?: number
   statementExpenseBRL?: string
   statementOutflowMinor?: number
@@ -727,6 +733,19 @@ export interface DebtAssessResult {
     amountBRL: string
     kind: 'income' | 'expense'
     month: string
+  }>
+  debtTrendSeries?: Array<{
+    month: string
+    incomeMinor: number
+    incomeBRL: string
+    fixedExpensesMinor: number
+    fixedExpensesBRL: string
+    cardPurchasesMinor: number
+    cardPurchasesBRL: string
+    statementOutflowMinor: number
+    statementOutflowBRL: string
+    balanceMinor: number
+    balanceBRL: string
   }>
   futureInstallments: Array<{ description: string | null; amountMinor: number; installment: string | null; month: string }>
   ai: AssessAIResult
@@ -786,6 +805,13 @@ export interface ReceiptDocumentScanResponse {
     nfeKey?: string | null
     description?: string | null
     paymentKind?: 'card' | 'debit' | 'unknown'
+    issuerName?: string | null
+    cardBrand?: string | null
+    cardLast4?: string | null
+    maskedNumber?: string | null
+    ownerName?: string | null
+    closingDay?: number | null
+    dueDay?: number | null
     confidence?: number
   }
 }

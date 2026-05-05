@@ -48,10 +48,6 @@ export function DebtAssessor() {
   const openPressurePct = result?.debtPressurePct ?? 0
   const pressureColor = totalPressurePct >= 40 ? '#f87171' : totalPressurePct >= 25 ? '#fbbf24' : '#4ade80'
   const consideredIncome = result?.consideredIncomeMinor ?? result?.incomeMinor ?? 0
-  const projectedIncome = result?.projectedIncomeMinor ?? 0
-  const usedProjectedIncome = result?.usedProjectedIncome ?? false
-  const paidAllocated = result?.paidAllocatedToPreviousInvoiceMinor ?? 0
-  const paidStatement = result?.paidThisMonthFromStatementMinor ?? 0
   const selectedMonthIsCurrentOrFuture = selectedMonth >= currentMonth()
   const effectiveById = new Map((result?.invoicesSummary ?? []).map(inv => [inv.id, inv]))
   const currentMonthInvoices = (result?.cashflowInvoicesSummary ?? [])
@@ -60,8 +56,34 @@ export function DebtAssessor() {
       ...inv,
       effective: effectiveById.get(inv.id),
     }))
-  const previousBalance = currentMonthInvoices.reduce((sum, inv) => sum + (inv.previousMinor ?? 0), 0)
-  const currentInvoiceTotal = currentMonthInvoices.reduce((sum, inv) => sum + (inv.totalMinor ?? 0), 0)
+  const debtTrendSeries = result?.debtTrendSeries ?? []
+  const visibleDebtTrendSeries = debtTrendSeries.filter((row) =>
+    (row.fixedExpensesMinor ?? 0) !== 0 ||
+    (row.cardPurchasesMinor ?? 0) !== 0 ||
+    (row.statementOutflowMinor ?? 0) !== 0 ||
+    ((row.incomeMinor ?? 0) - (row.statementOutflowMinor ?? 0)) !== 0
+  )
+  const selectedTrendRow = debtTrendSeries.find((row) => row.month === selectedMonth) ?? debtTrendSeries[debtTrendSeries.length - 1] ?? null
+  const selectedFixedExpensesMinor = selectedTrendRow?.fixedExpensesMinor ?? result?.fixedExpensesMinor ?? 0
+  const selectedFixedExpensesBRL = selectedTrendRow?.fixedExpensesBRL ?? result?.fixedExpensesBRL ?? formatBRL(selectedFixedExpensesMinor)
+  const selectedCardPurchasesMinor = selectedTrendRow?.cardPurchasesMinor ?? result?.cardPurchasesMinor ?? 0
+  const selectedCardPurchasesBRL = selectedTrendRow?.cardPurchasesBRL ?? result?.cardPurchasesBRL ?? formatBRL(selectedCardPurchasesMinor)
+  const selectedStatementOutflowMinor = selectedTrendRow?.statementOutflowMinor ?? result?.statementOutflowMinor ?? 0
+  const selectedStatementOutflowBRL = selectedTrendRow?.statementOutflowBRL ?? result?.statementOutflowBRL ?? formatBRL(selectedStatementOutflowMinor)
+  const selectedIncomeMinor = selectedTrendRow?.incomeMinor ?? result?.consideredIncomeMinor ?? result?.incomeMinor ?? 0
+  const selectedFixedExpensesAndStatementMinor = selectedFixedExpensesMinor + selectedStatementOutflowMinor
+  const selectedFixedExpensesAndStatementBRL = formatBRL(selectedFixedExpensesAndStatementMinor)
+  const selectedNetBalanceMinor = selectedTrendRow?.balanceMinor ?? result?.netBalanceMinor ?? (selectedIncomeMinor - selectedStatementOutflowMinor)
+  const selectedNetBalanceBRL = selectedTrendRow?.balanceBRL ?? result?.netBalanceBRL ?? formatBRL(selectedNetBalanceMinor)
+  const balanceColor = selectedNetBalanceMinor >= 0 ? '#4ade80' : '#f87171'
+  const trendMax = Math.max(
+    1,
+    ...visibleDebtTrendSeries.flatMap((row) => [
+      Math.abs((row.fixedExpensesMinor ?? 0) + (row.statementOutflowMinor ?? 0)),
+      Math.abs(row.cardPurchasesMinor ?? 0),
+      Math.abs(row.balanceMinor ?? 0),
+    ]),
+  )
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto' }}>
@@ -108,36 +130,38 @@ export function DebtAssessor() {
 
       {result && !loading && (
         <>
-          {/* Metricas principais */}
+          {/* Resumo principal */}
+          <Card style={{ marginBottom: '1rem' }}>
+            <div style={{ fontSize: '0.8rem', color: '#9ca3af', marginBottom: 6 }}>Saldo real</div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 800, color: balanceColor }}>{selectedNetBalanceBRL}</div>
+            <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 4 }}>
+              Renda {formatBRL(consideredIncome)} • Saídas do extrato {selectedStatementOutflowBRL} • Compras no cartão {selectedCardPurchasesBRL}
+            </div>
+          </Card>
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
             <Card>
-              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Renda considerada</div>
-              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#4ade80' }}>{formatBRL(consideredIncome)}</div>
+              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Despesas fixas/gastos</div>
+              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#f87171' }}>{selectedFixedExpensesAndStatementBRL}</div>
               <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>
-                Real {formatBRL(result.incomeMinor)}{usedProjectedIncome ? ` • Prevista ${formatBRL(projectedIncome)}` : ''}
+                Fixas {selectedFixedExpensesBRL} • Extrato {selectedStatementOutflowBRL}
               </div>
             </Card>
             <Card>
-              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Saldo anterior</div>
-              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#fbbf24' }}>{formatBRL(previousBalance)}</div>
+              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Compras no cartão do mês</div>
+              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#fbbf24' }}>{selectedCardPurchasesBRL}</div>
               <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>
-                {result.openInvoiceCount} fatura(s) com saldo carregado
+                Compras da competência ainda não conciliadas
               </div>
             </Card>
             <Card>
-              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Fatura atual</div>
-              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#4ade80' }}>{formatBRL(currentInvoiceTotal)}</div>
+              <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>Dívida em aberto</div>
+              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#fbbf24' }}>{formatBRL(result.openDebtMinor)}</div>
               <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>
-                {formatBRL(paidStatement)} no extrato • {formatBRL(paidAllocated)} alocado à anterior
+                {formatBRL(result.futureInstallmentsMinor)} em parcelas futuras
               </div>
             </Card>
           </div>
-
-          <Card style={{ marginBottom: '1.5rem' }}>
-            <div style={{ fontSize: '0.8rem', color: '#9ca3af', marginBottom: 6 }}>Parcelas futuras ({projectionMonths}m)</div>
-            <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#f87171' }}>{formatBRL(result.futureInstallmentsMinor)}</div>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{result.invoiceCount} parcela(s)</div>
-          </Card>
 
           {/* Barras de pressao */}
           <Card style={{ marginBottom: '1.5rem' }}>
@@ -199,7 +223,7 @@ export function DebtAssessor() {
           {/* Faturas do mês atual */}
           <Card style={{ marginBottom: '1.5rem' }}>
             <div style={{ fontSize: '0.85rem', color: '#e5e7eb', marginBottom: '0.75rem', fontWeight: 700 }}>
-              Faturas do mês atual ({selectedMonth}):
+              Compras e saldos da competência ({selectedMonth}):
             </div>
             {currentMonthInvoices.length > 0 ? (
               <div style={{ overflowX: 'auto' }}>
@@ -268,6 +292,57 @@ export function DebtAssessor() {
               </ol>
             </Card>
           )}
+
+          <Card style={{ marginTop: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: '0.85rem', color: '#e5e7eb', fontWeight: 700 }}>Evolução mensal</div>
+                <div style={{ fontSize: '0.76rem', color: '#9ca3af' }}>Compare despesas fixas, faturas e saldo por competência.</div>
+              </div>
+              <div style={{ display: 'flex', gap: '0.9rem', flexWrap: 'wrap', fontSize: '0.78rem', color: '#9ca3af' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 999, background: '#f87171' }} /> Despesas fixas/gastos</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 999, background: '#fbbf24' }} /> Compras no cartão</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 999, background: '#4ade80' }} /> Saldo final</span>
+              </div>
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(${Math.max(1, debtTrendSeries.length)}, minmax(72px, 1fr))`,
+                gap: 14,
+                alignItems: 'end',
+                minHeight: 280,
+                paddingTop: 8,
+              }}
+            >
+              {visibleDebtTrendSeries.length > 0 ? visibleDebtTrendSeries.map((row) => {
+                const fixedAndStatementMinor = (row.fixedExpensesMinor ?? 0) + (row.statementOutflowMinor ?? 0)
+                const fixedHeight = Math.max(8, Math.round((Math.abs(fixedAndStatementMinor) / trendMax) * 180))
+                const cardHeight = Math.max(8, Math.round((Math.abs(row.cardPurchasesMinor) / trendMax) * 180))
+                const balanceMinor = row.balanceMinor ?? (row.incomeMinor ?? 0) - (row.statementOutflowMinor ?? 0)
+                const balanceBRL = row.balanceBRL ?? formatBRL(balanceMinor)
+                const balanceHeight = Math.max(8, Math.round((Math.abs(balanceMinor) / trendMax) * 180))
+                const balanceBarColor = balanceMinor >= 0 ? '#4ade80' : '#f87171'
+                return (
+                  <div key={row.month} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'end', gap: 8, height: 200, width: '100%', justifyContent: 'center' }}>
+                      <div title={`Despesas fixas/gastos ${formatBRL(fixedAndStatementMinor)}`} style={{ width: 18, height: fixedHeight, borderRadius: 999, background: '#f87171' }} />
+                      <div title={`Compras no cartão ${row.cardPurchasesBRL}`} style={{ width: 18, height: cardHeight, borderRadius: 999, background: '#fbbf24' }} />
+                      <div title={`Saldo real ${balanceBRL}`} style={{ width: 18, height: balanceHeight, borderRadius: 999, background: balanceBarColor }} />
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.75rem', color: '#e5e7eb', fontWeight: 700 }}>{row.month}</div>
+                      <div style={{ fontSize: '0.7rem', color: '#6b7280' }}>{balanceBRL}</div>
+                    </div>
+                  </div>
+                )
+              }) : (
+                <div style={{ gridColumn: '1 / -1', textAlign: 'center', color: '#9ca3af', fontSize: '0.9rem', padding: '2rem 0' }}>
+                  Nenhum mês com dados para exibir no gráfico.
+                </div>
+              )}
+            </div>
+          </Card>
         </>
       )}
 

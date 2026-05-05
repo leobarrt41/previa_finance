@@ -62,6 +62,38 @@ function isRenderableFileUrl(url?: string | null): boolean {
   return typeof url === 'string' && /^(https?:|data:|blob:)/.test(url)
 }
 
+type ReceiptRawPayload = {
+  paymentKind?: 'card' | 'debit' | 'unknown'
+  issuerName?: string | null
+  cardBrand?: string | null
+  cardLast4?: string | null
+  maskedNumber?: string | null
+  ownerName?: string | null
+  closingDay?: number | null
+  dueDay?: number | null
+  confidence?: number
+  expectedInvoiceMonth?: string | null
+}
+
+function getRawPayloadHints(rawPayload: unknown): ReceiptRawPayload | null {
+  if (!rawPayload || typeof rawPayload !== 'object') return null
+  const value = rawPayload as Record<string, unknown>
+  return {
+    paymentKind: value.paymentKind === 'card' || value.paymentKind === 'debit' || value.paymentKind === 'unknown'
+      ? value.paymentKind
+      : undefined,
+    issuerName: typeof value.issuerName === 'string' ? value.issuerName : null,
+    cardBrand: typeof value.cardBrand === 'string' ? value.cardBrand : null,
+    cardLast4: typeof value.cardLast4 === 'string' ? value.cardLast4 : null,
+    maskedNumber: typeof value.maskedNumber === 'string' ? value.maskedNumber : null,
+    ownerName: typeof value.ownerName === 'string' ? value.ownerName : null,
+    closingDay: typeof value.closingDay === 'number' ? value.closingDay : null,
+    dueDay: typeof value.dueDay === 'number' ? value.dueDay : null,
+    confidence: typeof value.confidence === 'number' ? value.confidence : undefined,
+    expectedInvoiceMonth: typeof value.expectedInvoiceMonth === 'string' ? value.expectedInvoiceMonth : null,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Form state
 // ---------------------------------------------------------------------------
@@ -519,6 +551,30 @@ export default function ReceiptDocuments() {
                   {doc.categoryId && <div><strong>Categoria:</strong> {doc.categoryId}</div>}
                   {doc.nfeKey && <div style={{ gridColumn: '1/-1' }}><strong>Chave NF-e:</strong> <span style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{doc.nfeKey}</span></div>}
                   {doc.description && <div style={{ gridColumn: '1/-1' }}><strong>Descrição:</strong> {doc.description}</div>}
+                  {getRawPayloadHints(doc.rawPayload) && (
+                    <div style={{ gridColumn: '1/-1', borderTop: '1px dashed #2a2f45', paddingTop: '0.75rem', marginTop: '0.25rem' }}>
+                      <strong style={{ color: '#cbd5e1' }}>Leitura automática:</strong>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.35rem 0.75rem', marginTop: '0.45rem' }}>
+                        {(() => {
+                          const hints = getRawPayloadHints(doc.rawPayload)!
+                          return (
+                            <>
+                              <div><strong>Tipo:</strong> {hints.paymentKind ?? '—'}</div>
+                              <div><strong>Emissor:</strong> {hints.issuerName ?? '—'}</div>
+                              <div><strong>Bandeira:</strong> {hints.cardBrand ?? '—'}</div>
+                              <div><strong>Final:</strong> {hints.cardLast4 ?? '—'}</div>
+                              <div><strong>Máscara:</strong> {hints.maskedNumber ?? '—'}</div>
+                              <div><strong>Titular:</strong> {hints.ownerName ?? '—'}</div>
+                              <div><strong>Fechamento:</strong> {hints.closingDay ?? '—'}</div>
+                              <div><strong>Vencimento:</strong> {hints.dueDay ?? '—'}</div>
+                              <div><strong>Fatura:</strong> {hints.expectedInvoiceMonth ?? '—'}</div>
+                              <div><strong>Confiança:</strong> {typeof hints.confidence === 'number' ? `${Math.round(hints.confidence * 100)}%` : '—'}</div>
+                            </>
+                          )
+                        })()}
+                      </div>
+                    </div>
+                  )}
                   {doc.fileUrl && (
                     <div style={{ gridColumn: '1/-1' }}>
                       <strong>Comprovante:</strong>{' '}

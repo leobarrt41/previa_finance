@@ -1134,6 +1134,7 @@ router.post('/debt', async (req: Request, res: Response) => {
   const owner = await resolveOwnerId(req.authUser!.clerkUserId)
 
   const prevMonths3 = previousMonths(month, 3)
+  const prevMonths5 = previousMonths(month, 5)
   const [y, m] = month.split('-').map(Number)
   const futureMonths: string[] = []
   for (let i = 1; i <= projectionMonths; i++) {
@@ -1141,7 +1142,8 @@ router.post('/debt', async (req: Request, res: Response) => {
     futureMonths.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`)
   }
 
-  const allMonthsRange = [...prevMonths3, month, ...futureMonths]
+  const trendMonths = [...prevMonths5, month]
+  const allMonthsRange = [...prevMonths5, month, ...futureMonths]
 
   const [forecastRows, forecastStatusRows] = await Promise.all([
     db
@@ -1317,13 +1319,100 @@ router.post('/debt', async (req: Request, res: Response) => {
   const consideredIncomeMinor = incomeMinor > 0 ? incomeMinor : projectedIncomeMinor
   const usedProjectedIncome = incomeMinor <= 0 && projectedIncomeMinor > 0
 
+  const incomeTrendRows = await db
+    .select({
+      competencyMonth: transactions.competencyMonth,
+      totalMinor: sql<string>`COALESCE(SUM(${transactions.amountMinor}), 0)`,
+    })
+    .from(transactions)
+    .where(and(
+      eq(transactions.userId, owner.id),
+      eq(transactions.movementType, 'income'),
+      sql`${transactions.competencyMonth} IN (${sql.join(trendMonths.map(am => sql`${am}`), sql`, `)})`,
+    ))
+    .groupBy(transactions.competencyMonth)
+
+  const incomeByMonth = new Map<string, number>()
+  for (const row of incomeTrendRows) {
+    incomeByMonth.set(row.competencyMonth, Number(row.totalMinor ?? 0))
+  }
+
+  const forecastTrendRows = trendMonths.flatMap((monthLabel) =>
+    expandForecastsForMonth(
+      monthLabel,
+      forecastRows.map((f) => ({
+        ...f,
+        amountMinor: toBigIntValue(f.amountMinor),
+        recurrence: f.recurrence ?? 'one-time',
+        recurrenceEnd: f.recurrenceEnd ?? null,
+        description: f.description ?? null,
+        isActive: Boolean(f.isActive),
+      })),
+      paidMonthsByForecastId,
+    ).map((row) => ({
+      month: monthLabel,
+      amountMinor: Number(row.amountMinor),
+      description: row.description ?? null,
+    }))
+  )
+
+  const fixedExpensesByMonth = new Map<string, number>()
+  for (const row of forecastTrendRows) {
+    if (row.amountMinor >= 0) continue
+    fixedExpensesByMonth.set(row.month, (fixedExpensesByMonth.get(row.month) ?? 0) + Math.abs(row.amountMinor))
+  }
+
+  const cardPurchasesByMonth = new Map<string, number>()
+  for (const row of invoiceSummaryRows) {
+    cardPurchasesByMonth.set(row.invoiceMonth, (cardPurchasesByMonth.get(row.invoiceMonth) ?? 0) + Number(row.purchasesMinor ?? 0))
+  }
+
+  const statementOutflowRows = await db
+    .select({
+      competencyMonth: transactions.competencyMonth,
+      totalMinor: sql<string>`COALESCE(SUM(ABS(${transactions.amountMinor})), 0)`,
+    })
+    .from(transactions)
+    .where(and(
+      eq(transactions.userId, owner.id),
+      sql`${transactions.competencyMonth} IN (${sql.join(trendMonths.map(am => sql`${am}`), sql`, `)})`,
+      sql`${transactions.movementType} IN ('expense', 'liability_payment')`,
+    ))
+    .groupBy(transactions.competencyMonth)
+
+  const statementOutflowByMonth = new Map<string, number>()
+  for (const row of statementOutflowRows) {
+    statementOutflowByMonth.set(row.competencyMonth, Number(row.totalMinor ?? 0))
+  }
+
+  const debtTrendSeries = trendMonths.map((monthLabel) => {
+    const income = incomeByMonth.get(monthLabel) ?? (monthLabel === month ? consideredIncomeMinor : 0)
+    const fixedExpensesMinor = fixedExpensesByMonth.get(monthLabel) ?? 0
+    const cardPurchasesMinor = cardPurchasesByMonth.get(monthLabel) ?? 0
+    const statementOutflowMinorMonth = statementOutflowByMonth.get(monthLabel) ?? 0
+    const balanceMinor = income - statementOutflowMinorMonth
+    return {
+      month: monthLabel,
+      incomeMinor: income,
+      incomeBRL: minorToBRL(income),
+      fixedExpensesMinor,
+      fixedExpensesBRL: minorToBRL(fixedExpensesMinor),
+      cardPurchasesMinor,
+      cardPurchasesBRL: minorToBRL(cardPurchasesMinor),
+      statementOutflowMinor: statementOutflowMinorMonth,
+      statementOutflowBRL: minorToBRL(statementOutflowMinorMonth),
+      balanceMinor,
+      balanceBRL: minorToBRL(balanceMinor),
+    }
+  })
+
   const paidThisMonthFromStatementMinor = liabilityPaymentRows
     .reduce((s, row) => s + spendMinor(row.amountMinor), 0)
 
   const paidThisMonthMinor = paidThisMonthFromStatementMinor
 
   const statementExpenseResult = await db
-    .select({ total: sql<string>`COALESCE(SUM(${transactions.amountMinor}), 0)` })
+    .select({ total: sql<string>`COALESCE(SUM(ABS(${transactions.amountMinor})), 0)` })
     .from(transactions)
     .where(and(
       eq(transactions.userId, owner.id),
@@ -1333,6 +1422,29 @@ router.post('/debt', async (req: Request, res: Response) => {
 
   const statementExpenseMinor = Number(statementExpenseResult[0]?.total ?? 0)
   const statementOutflowMinor = statementExpenseMinor + paidThisMonthFromStatementMinor
+
+  const selectedTrendRow = debtTrendSeries.find((row) => row.month === month) ?? debtTrendSeries[debtTrendSeries.length - 1] ?? {
+    month,
+    incomeMinor: consideredIncomeMinor,
+    incomeBRL: minorToBRL(consideredIncomeMinor),
+    fixedExpensesMinor: 0,
+    fixedExpensesBRL: minorToBRL(0),
+    cardPurchasesMinor: 0,
+    cardPurchasesBRL: minorToBRL(0),
+    statementOutflowMinor,
+    statementOutflowBRL: minorToBRL(statementOutflowMinor),
+    balanceMinor: consideredIncomeMinor - statementOutflowMinor,
+    balanceBRL: minorToBRL(consideredIncomeMinor - statementOutflowMinor),
+  }
+
+  const fixedExpensesMinor = selectedTrendRow.fixedExpensesMinor
+  const fixedExpensesBRL = selectedTrendRow.fixedExpensesBRL
+  const cardPurchasesMinor = selectedTrendRow.cardPurchasesMinor
+  const cardPurchasesBRL = selectedTrendRow.cardPurchasesBRL
+  const statementOutflowMinorSelected = selectedTrendRow.statementOutflowMinor
+  const statementOutflowBRLSelected = selectedTrendRow.statementOutflowBRL
+  const netBalanceMinor = selectedTrendRow.balanceMinor
+  const netBalanceBRL = selectedTrendRow.balanceBRL
 
   const futureInstallmentsMinor = installmentTxs
     .reduce((s, t) => s + Number(t.amountMinor), 0)
@@ -1498,6 +1610,7 @@ Regras:
 - Nunca escreva valores sem centavos.
 - Formato monetário obrigatório: \`R$ 1.234,56\`
 - Se a renda real do mês ainda não apareceu no extrato, use a renda prevista e diga explicitamente que ela ainda é previsão.
+- Considere como panorama principal os campos \`fixedExpensesBRL\`, \`cardPurchasesBRL\` e \`netBalanceBRL\`.
 - Para a competência selecionada, considere como dívida corrente o total bruto da fatura do mês (\`cashflowInvoicesSummary.totalMinor\`); pagamentos alocados à fatura anterior são histórico e não reduzem a competência corrente.
 - Sempre cite explicitamente todas as faturas da competência selecionada; não omita nenhuma linha do Banco do Brasil, Itaú ou qualquer outro cartão presente em \`currentMonthInvoiceBreakdown\`.
 - Para a leitura de dívidas, considere também o gasto do mês no extrato e as projeções pendentes do Fluxo de caixa que ainda não foram marcadas como pagas.
@@ -1515,6 +1628,13 @@ Regras:
     consideredIncomeMinor,
     consideredIncomeBRL: minorToBRL(consideredIncomeMinor),
     usedProjectedIncome,
+    fixedExpensesMinor,
+    fixedExpensesBRL,
+    cardPurchasesMinor,
+    cardPurchasesBRL,
+    netBalanceMinor,
+    netBalanceBRL,
+    monthlyDebtOverview: debtTrendSeries,
     statementExpenseMinor,
     statementExpenseBRL: minorToBRL(statementExpenseMinor),
     statementOutflowMinor,
@@ -1569,6 +1689,7 @@ Regras:
       dueDate: i.dueDate,
     })),
     pendingCashflowForecasts,
+    debtTrendSeries,
     futureInstallments: installmentTxs.slice(0, 20).map(t => ({
       description: t.description,
       amountMinor: Number(t.amountMinor),
@@ -1589,6 +1710,13 @@ Regras:
     consideredIncomeMinor,
     consideredIncomeBRL: minorToBRL(consideredIncomeMinor),
     usedProjectedIncome,
+    fixedExpensesMinor,
+    fixedExpensesBRL,
+    cardPurchasesMinor,
+    cardPurchasesBRL,
+    netBalanceMinor,
+    netBalanceBRL,
+    monthlyDebtOverview: debtTrendSeries,
     statementExpenseMinor,
     statementExpenseBRL: minorToBRL(statementExpenseMinor),
     statementOutflowMinor,
@@ -1648,6 +1776,7 @@ Regras:
       dueDate: i.dueDate,
     })),
     pendingCashflowForecasts,
+    debtTrendSeries,
     futureInstallments: installmentTxs.slice(0, 20).map(t => ({
       description: t.description,
       amountMinor: Number(t.amountMinor),
