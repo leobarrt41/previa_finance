@@ -264,6 +264,9 @@ export const transactions = mysqlTable(
     memo: text("memo"),
     normalizedDescription: varchar("normalized_description", { length: 500 }),
     categoryId: varchar("category_id", { length: 128 }),  // @external-fk: categories.id
+    providerCategory: varchar("provider_category", { length: 128 }),
+    providerCategoryRaw: varchar("provider_category_raw", { length: 255 }),
+    categoryAssignedBy: varchar("category_assigned_by", { length: 50 }),
 
     // -----------------------------------------------------------------------
     // Installments
@@ -292,6 +295,7 @@ export const transactions = mysqlTable(
     // -----------------------------------------------------------------------
     providerTransactionId: varchar("provider_transaction_id", { length: 255 }),
     providerPayload: json("provider_payload"),
+    receiptDocumentId: int("receipt_document_id"),
 
     ...timestamps,
   },
@@ -330,9 +334,21 @@ export const cardInvoices = mysqlTable(
     // @serialize-to-string: all bigint fields below
     totalAmountMinor: bigint("total_amount_minor", { mode: "bigint" }).notNull().default(0n),       // @serialize-to-string
     minimumPaymentMinor: bigint("minimum_payment_minor", { mode: "bigint" }),                       // @serialize-to-string
-    previousBalanceMinor: bigint("previous_balance_minor", { mode: "bigint" }).notNull().default(0n), // @serialize-to-string
-    paidAmountMinor: bigint("paid_amount_minor", { mode: "bigint" }).notNull().default(0n),         // @serialize-to-string
-    openAmountMinor: bigint("open_amount_minor", { mode: "bigint" }).notNull().default(0n),         // @serialize-to-string
+    previousBalanceMinor: bigint("previous_balance_minor", { mode: "bigint" }).notNull().default(0n), // @serialize-to-string @legacy-ambiguous
+    paidAmountMinor: bigint("paid_amount_minor", { mode: "bigint" }).notNull().default(0n),         // @serialize-to-string @legacy-ambiguous
+    openAmountMinor: bigint("open_amount_minor", { mode: "bigint" }).notNull().default(0n),         // @serialize-to-string @legacy-ambiguous
+
+    // -----------------------------------------------------------------------
+    // Explicit semantics added after the initial model.
+    // These fields disambiguate reported invoice values from real cash
+    // settlement. Legacy fields above remain for backward compatibility.
+    // @serialize-to-string: all bigint fields below
+    // -----------------------------------------------------------------------
+    reportedPreviousBalanceMinor: bigint("reported_previous_balance_minor", { mode: "bigint" }).notNull().default(0n),
+    reportedPaidAmountMinor: bigint("reported_paid_amount_minor", { mode: "bigint" }).notNull().default(0n),
+    carriedOpenAmountMinor: bigint("carried_open_amount_minor", { mode: "bigint" }).notNull().default(0n),
+    paymentsAllocatedMinor: bigint("payments_allocated_minor", { mode: "bigint" }).notNull().default(0n),
+    effectiveOpenAmountMinor: bigint("effective_open_amount_minor", { mode: "bigint" }).notNull().default(0n),
 
     // State and origin
     status: varchar("status", { length: 50 }).notNull().default("OPEN"), // InvoiceStatus
@@ -411,6 +427,9 @@ export const cardTransactions = mysqlTable(
     description: text("description").notNull(),
     normalizedDescription: varchar("normalized_description", { length: 500 }),
     categoryId: varchar("category_id", { length: 128 }),  // @external-fk: categories.id
+    providerCategory: varchar("provider_category", { length: 128 }),
+    providerCategoryRaw: varchar("provider_category_raw", { length: 255 }),
+    categoryAssignedBy: varchar("category_assigned_by", { length: 50 }),
 
     // Merchant
     merchantName: varchar("merchant_name", { length: 255 }),
@@ -462,12 +481,18 @@ export const cardInvoicePayments = mysqlTable(
     allocatedAmountMinor: bigint("allocated_amount_minor", { mode: "bigint" }).notNull(), // @serialize-to-string
     currencyCode: varchar("currency_code", { length: 3 }).notNull().default("BRL"),
     paymentDate: timestamp("payment_date").notNull(),
+    source: varchar("source", { length: 50 }).notNull().default("statement_reconciliation"),
+    matchedBy: varchar("matched_by", { length: 50 }),
+    confidenceScore: decimal("confidence_score", { precision: 5, scale: 4 }),
+    notes: text("notes"),
+    providerPayload: json("provider_payload"),
 
     ...timestamps,
   },
   (t) => [
     uniqueIndex("uq_payment_invoice_trans").on(t.cardInvoiceId, t.transactionId),
     index("idx_payment_user").on(t.userId),
+    index("idx_payment_source").on(t.source),
   ],
 );
 

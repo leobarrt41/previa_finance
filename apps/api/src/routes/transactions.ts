@@ -24,6 +24,7 @@ import { getDatabase } from '../config/database.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
 import { createError } from '../middlewares/errorHandler.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
+import { syncCardInvoiceSemanticFields } from '../services/cardInvoiceSemantics.js'
 
 const router: Router = Router()
 
@@ -80,6 +81,9 @@ const statementRowSchema = z.object({
   amountMinor: z.number().int(),
   competencyMonth: z.string().regex(/^\d{4}-\d{2}$/).optional(),
   categoryId: z.string().trim().min(1).max(128).nullable().optional(),
+  providerCategory: z.string().trim().max(128).nullable().optional(),
+  providerCategoryRaw: z.string().trim().max(255).nullable().optional(),
+  categoryAssignedBy: z.enum(['provider', 'history', 'ai', 'user', 'legacy']).nullable().optional(),
   movementType: z.enum(MOVEMENT_TYPE_VALUES).optional(),
   movementSubtype: z.string().trim().max(50).nullable().optional(),
   providerTransactionId: z.string().trim().max(255).nullable().optional(),
@@ -1095,6 +1099,9 @@ async function reconcileInvoicePayment(
       allocatedAmountMinor: allocate,
       currencyCode: 'BRL',
       paymentDate: payment.occurredAt,
+      source: isGenericPayment ? 'statement_reconciliation_generic' : 'statement_reconciliation_institution',
+      matchedBy: invoice.openAmountMinor === paymentAmount ? 'exact_open_amount' : 'oldest_due_open_invoice',
+      confidenceScore: invoice.openAmountMinor === paymentAmount ? '1.0000' : '0.7000',
     }).onDuplicateKeyUpdate({ set: { allocatedAmountMinor: allocate } })
 
     const newPaid = invoice.paidAmountMinor + allocate
@@ -1106,6 +1113,8 @@ async function reconcileInvoicePayment(
         status: newOpen === 0n ? 'PAID' : 'OPEN',
       })
       .where(eq(cardInvoices.id, invoice.id))
+
+    await syncCardInvoiceSemanticFields(db, invoice.id)
 
     remaining -= allocate
   }
@@ -1204,6 +1213,9 @@ router.post('/statement/import', async (req: Request, res: Response) => {
         memo: tx.memo ?? null,
         normalizedDescription,
         categoryId: tx.categoryId ?? null,
+        providerCategory: tx.providerCategory ?? null,
+        providerCategoryRaw: tx.providerCategoryRaw ?? null,
+        categoryAssignedBy: tx.categoryAssignedBy ?? (tx.categoryId ? 'user' : null),
         installmentNumber: null,
         installmentTotal: null,
         installmentGroupId: null,
@@ -1367,6 +1379,14 @@ router.post('/statement/import', async (req: Request, res: Response) => {
             return amtOk && (merchantOk || monthOk)
           })
           if (match) {
+            await db
+              .update(transactions)
+              .set({
+                receiptDocumentId: note.id,
+                updatedAt: new Date(),
+              })
+              .where(eq(transactions.id, match.id))
+
             await db
               .update(receiptDocuments)
               .set({

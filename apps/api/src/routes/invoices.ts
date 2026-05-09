@@ -27,6 +27,7 @@ import { eq, and, desc, sql } from 'drizzle-orm'
 import { getDatabase } from '../config/database.js'
 import { config } from '../config/env.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
+import { syncCardInvoiceSemanticFields } from '../services/cardInvoiceSemantics.js'
 import { createError } from '../middlewares/errorHandler.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
 
@@ -438,6 +439,9 @@ const importBodySchema = z.object({
       description: z.string(),
       amountMinor: z.number().int(),
       categoryId: z.string().nullable().optional(),
+      providerCategory: z.string().trim().max(128).nullable().optional(),
+      providerCategoryRaw: z.string().trim().max(255).nullable().optional(),
+      categoryAssignedBy: z.enum(['provider', 'history', 'ai', 'user', 'legacy']).nullable().optional(),
       competencyMonth: z.string().regex(/^\d{4}-\d{2}$/),
       installment: z.string().optional(),
     })
@@ -590,6 +594,9 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
   const paidAmountMinor = BigInt(body.paymentsMinor ?? 0)
   const fallbackOpen = totalAmountMinor - paidAmountMinor
   const openAmountMinor = BigInt(body.openBalanceMinor ?? Number(fallbackOpen > 0n ? fallbackOpen : 0n))
+  const reportedPreviousBalanceMinor = previousBalanceMinor
+  const reportedPaidAmountMinor = paidAmountMinor
+  const carriedOpenAmountMinor = previousBalanceMinor > paidAmountMinor ? previousBalanceMinor - paidAmountMinor : 0n
 
   // -------------------------------------------------------------------------
   // 3. Resolve or create the card_invoice for this month
@@ -634,6 +641,9 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           previous_balance_minor = ${previousBalanceMinor.toString()},
           paid_amount_minor = ${paidAmountMinor.toString()},
           open_amount_minor = ${openAmountMinor.toString()},
+          reported_previous_balance_minor = ${reportedPreviousBalanceMinor.toString()},
+          reported_paid_amount_minor = ${reportedPaidAmountMinor.toString()},
+          carried_open_amount_minor = ${carriedOpenAmountMinor.toString()},
           status = ${openAmountMinor > 0n ? 'OPEN' : 'PAID'},
           parser_strategy = ${body.bank?.toLowerCase() === 'bradesco'
             ? 'bradesco_v1'
@@ -657,6 +667,9 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           paidAmountMinor,
           previousBalanceMinor,
           openAmountMinor,
+          reportedPreviousBalanceMinor,
+          reportedPaidAmountMinor,
+          carriedOpenAmountMinor,
           status: openAmountMinor > 0n ? 'OPEN' : 'PAID',
           source: 'pdf_invoice',
           dataState: 'consolidated',
@@ -697,6 +710,8 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
       if (!created) throw createError('Failed to create card_invoice', 500)
       cardInvoiceId = created.id
     }
+
+    await syncCardInvoiceSemanticFields(db, cardInvoiceId)
 
     // -------------------------------------------------------------------------
     // 4. Insert each purchase into card_transactions
@@ -741,6 +756,9 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           description: tx.description,
           normalizedDescription,
           categoryId: tx.categoryId ?? null,
+          providerCategory: tx.providerCategory ?? null,
+          providerCategoryRaw: tx.providerCategoryRaw ?? null,
+          categoryAssignedBy: tx.categoryAssignedBy ?? (tx.categoryId ? 'user' : null),
           installmentNumber,
           installmentTotal,
           installmentGroupId,
@@ -795,6 +813,14 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
             return amtOk && (merchantOk || monthOk)
           })
           if (match) {
+            await db
+              .update(cardTransactions)
+              .set({
+                receiptDocumentId: note.id,
+                updatedAt: new Date(),
+              })
+              .where(eq(cardTransactions.id, match.id))
+
             await db
               .update(receiptDocuments)
               .set({

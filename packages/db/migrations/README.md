@@ -51,3 +51,25 @@ Para executar no Drizzle ou diretamente no MySQL, a ordem é:
 
 *   **Categorias e Usuários:** As migrations assumem que as tabelas `users` e `categories` já existem no banco (ou serão migradas do legado sem grandes alterações estruturais). As chaves estrangeiras para estas tabelas (ex: `user_id`, `category_id`) estão configuradas como `INT`, o que deve bater com a tipagem do legado.
 *   **Timezones:** Todos os campos de data utilizam `TIMESTAMP`. É crucial que o servidor MySQL e a aplicação Node.js estejam configurados para operar em UTC (ou que a aplicação trate os offsets corretamente), conforme o bug resolvido recentemente no CashFlow.
+
+## 5. Categorias: bootstrap vs taxonomia canônica
+
+`0007_categories_table.sql` existe para garantir que:
+- a tabela `categories` exista;
+- um conjunto mínimo de categorias de sistema esteja disponível em ambientes novos;
+- importações não quebrem por falta absoluta da tabela.
+
+Ele **não** é a fonte canônica da taxonomia completa.
+
+A fonte canônica da taxonomia de categorias fica em:
+- [packages/db/scripts/categoryTaxonomy.ts](/home/leobarrt/previa_finance/packages/db/scripts/categoryTaxonomy.ts)
+
+O seed operacional da taxonomia completa é:
+- `pnpm -C packages/db db:seed:categories`
+
+Para provisionamento local ou novos ambientes, o fluxo recomendado é:
+- `pnpm -C packages/db db:setup`
+- `pnpm -C packages/db db:seed:categories`
+
+Ou, de forma composta:
+- `pnpm -C packages/db db:setup:categories`

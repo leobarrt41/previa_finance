@@ -1,4 +1,4 @@
-import { mysqlTable, int, varchar, char, timestamp, text, json } from 'drizzle-orm/mysql-core'
+import { mysqlTable, int, varchar, char, timestamp, text, json, decimal } from 'drizzle-orm/mysql-core'
 
 export const receiptDocuments = mysqlTable('receipt_documents', {
   id:                   int('id').autoincrement().primaryKey(),
@@ -15,6 +15,15 @@ export const receiptDocuments = mysqlTable('receipt_documents', {
   merchantName:         varchar('merchant_name', { length: 255 }),
   merchantCnpj:         varchar('merchant_cnpj', { length: 20 }),
   merchantDocument:     varchar('merchant_document', { length: 20 }),
+  paymentKind:          varchar('payment_kind', { length: 20 }),
+  issuerName:           varchar('issuer_name', { length: 200 }),
+  cardBrand:            varchar('card_brand', { length: 50 }),
+  cardLast4:            varchar('card_last4', { length: 4 }),
+  maskedNumber:         varchar('masked_number', { length: 32 }),
+  ownerName:            varchar('owner_name', { length: 200 }),
+  closingDay:           int('closing_day'),
+  dueDay:               int('due_day'),
+  ocrConfidenceScore:   decimal('ocr_confidence_score', { precision: 5, scale: 4 }),
 
   categoryId:           varchar('category_id', { length: 128 }),
   accountId:            int('account_id'),

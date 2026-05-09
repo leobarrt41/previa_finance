@@ -7,6 +7,13 @@
 --   but the `categories` table itself is missing, causing API crashes on
 --   invoice import when validating category ids.
 --
+-- Important:
+--   This migration provides a minimal bootstrap taxonomy only.
+--   The canonical full taxonomy lives in:
+--     packages/db/scripts/categoryTaxonomy.ts
+--   and should be applied operationally via:
+--     pnpm -C packages/db db:seed:categories
+--
 -- Strategy:
 --   1) Create `categories` if it does not exist.
 --   2) Seed a minimal system taxonomy idempotently with INSERT IGNORE.

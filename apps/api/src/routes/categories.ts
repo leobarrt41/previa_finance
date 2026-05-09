@@ -13,12 +13,15 @@
  */
 import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, or, sql } from 'drizzle-orm'
 import { categories } from '@previa/db'
 import { getDatabase } from '../config/database.js'
 import { createError } from '../middlewares/errorHandler.js'
+import { requireClerkAuth } from '../middlewares/auth.js'
+import { resolveOwnerId } from '../services/ownerStore.js'
 
 const router: Router = Router()
+router.use(requireClerkAuth)
 
 // ---------------------------------------------------------------------------
 // Types
@@ -80,15 +83,24 @@ function toTree(flat: any[]): object[] {
     }))
 }
 
+function visibleCategoryCondition(ownerExternalId: string) {
+  return or(
+    eq(categories.isSystem, true),
+    eq(categories.externalOwnerId, ownerExternalId),
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const db = getDatabase()
+    const owner = await resolveOwnerId(req.authUser!.clerkUserId)
     const all = await db
       .select()
       .from(categories)
+      .where(visibleCategoryCondition(String(owner.id)))
       .orderBy(categories.sortOrder, categories.name)
     res.json(all)
   } catch (error) {
@@ -99,9 +111,11 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 router.get('/tree', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const db = getDatabase()
+    const owner = await resolveOwnerId(req.authUser!.clerkUserId)
     const all = await db
       .select()
       .from(categories)
+      .where(visibleCategoryCondition(String(owner.id)))
       .orderBy(categories.sortOrder, categories.name)
     res.json(toTree(all))
   } catch (error) {
@@ -112,6 +126,7 @@ router.get('/tree', async (req: Request, res: Response, next: NextFunction) => {
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const db = getDatabase()
+    const owner = await resolveOwnerId(req.authUser!.clerkUserId)
     const body = createSchema.parse(req.body)
 
     // Validate parentId exists if provided
@@ -119,7 +134,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       const [parent] = await db
         .select({ id: categories.id })
         .from(categories)
-        .where(eq(categories.id, body.parentId))
+        .where(and(eq(categories.id, body.parentId), visibleCategoryCondition(String(owner.id))))
         .limit(1)
       if (!parent) {
         throw createError('Categoria pai não encontrada', 400)
@@ -138,6 +153,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       parentId: body.parentId ?? null,
       isSystem: false,
       sortOrder: body.sortOrder ?? 50,
+      externalOwnerId: String(owner.id),
     })
 
     const [created] = await db
@@ -155,6 +171,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const db = getDatabase()
+    const owner = await resolveOwnerId(req.authUser!.clerkUserId)
     const { id } = req.params
     const body = updateSchema.parse(req.body)
 
@@ -162,10 +179,13 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const [existing] = await db
       .select()
       .from(categories)
-      .where(eq(categories.id, id))
+      .where(and(eq(categories.id, id), visibleCategoryCondition(String(owner.id))))
       .limit(1)
     if (!existing) {
       throw createError('Categoria não encontrada', 404)
+    }
+    if (existing.isSystem || existing.externalOwnerId !== String(owner.id)) {
+      throw createError('Categoria de sistema ou de outro usuário não pode ser alterada', 403)
     }
 
     // Validate parentId if provided
@@ -173,7 +193,7 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
       const [parent] = await db
         .select({ id: categories.id })
         .from(categories)
-        .where(eq(categories.id, body.parentId))
+        .where(and(eq(categories.id, body.parentId), visibleCategoryCondition(String(owner.id))))
         .limit(1)
       if (!parent) {
         throw createError('Categoria pai não encontrada', 400)
@@ -242,16 +262,20 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
 router.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const db = getDatabase()
+    const owner = await resolveOwnerId(req.authUser!.clerkUserId)
     const { id } = req.params
 
     // Verify category exists
     const [existing] = await db
       .select()
       .from(categories)
-      .where(eq(categories.id, id))
+      .where(and(eq(categories.id, id), visibleCategoryCondition(String(owner.id))))
       .limit(1)
     if (!existing) {
       throw createError('Categoria não encontrada', 404)
+    }
+    if (existing.isSystem || existing.externalOwnerId !== String(owner.id)) {
+      throw createError('Categoria de sistema ou de outro usuário não pode ser removida', 403)
     }
 
     // Check for child categories
@@ -276,4 +300,3 @@ router.delete('/:id', async (req: Request, res: Response, next: NextFunction) =>
 })
 
 export { router as categoryRouter }
-

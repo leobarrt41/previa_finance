@@ -231,6 +231,45 @@ DESCRIÇÃO: Até este ponto, o projeto consolidou três frentes principais. 1) 
 TAGS: assess,receipt_documents,ocr,reconciliation,cashflow  
 PRIORIDADE: Alta  
 STATUS: Em andamento
+
+---
+
+## [2026-05-05 19:29]
+
+ID: 20260505-1929-modular-roadmap  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Arquitetura  
+TÍTULO: Ordem modular de evolução do domínio financeiro  
+DESCRIÇÃO: Definida a ordem modular de trabalho para reduzir regressões e ambiguidade de domínio. Sequência acordada: 1) Extrato/Caixa, 2) Cartão/Fatura, 3) Fluxo de caixa, 4) Notas fiscais/Comprovantes, 5) Recorrências/Projeções, 6) Avaliador de Dívidas, 7) Orçamento, 8) Avaliador de Gastos. Regra arquitetural associada: tudo que define o significado financeiro do número deve sair do frontend e ser resolvido no backend; o frontend deve ficar responsável por exibição, filtros e interação, não por interpretar competência, caixa, saldo aberto, projeção ou conciliação.  
+TAGS: arquitetura,modulos,backend,frontend,roadmap-financeiro  
+PRIORIDADE: Alta  
+STATUS: Em andamento
+
+---
+
+## [2026-05-05 19:38]
+
+ID: 20260505-1938-handoff-state  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Tarefa  
+TÍTULO: Estado atual de retomada remota via SSH/VS Code  
+DESCRIÇÃO: Handoff operacional para retomada do trabalho em outra sessão. Branch ativa: `feat/frontend-manus`. Commit de checkpoint enviado ao remoto: `7d6214c` (`feat: checkpoint assess and receipt flows`). Estado atual: ajustes já feitos em `assess`, `DebtAssessor`, `Budget`, `receipt_documents` e UI de `Notas Fiscais`, incluindo exibição de hints de OCR na tela. Próxima direção acordada: trabalhar por módulos, começando por Extrato/Caixa, depois Cartão/Fatura, Fluxo de caixa, Notas fiscais/Comprovantes, Recorrências/Projeções e só então avaliadores. Regra de retomada: evitar empurrar semântica financeira para o frontend; contratos semânticos devem sair do backend.  
+TAGS: handoff,ssh,vscode,checkpoint,retomada  
+PRIORIDADE: Alta  
+STATUS: Em andamento
+
+---
+
+## [2026-05-06 23:57]
+
+ID: 20260506-2357-schema-branch  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Decisão  
+TÍTULO: Refatoração de schema e reconciliação deve sair em branch separado  
+DESCRIÇÃO: Decidido que a próxima etapa estrutural, envolvendo novas tabelas e deslocamento de lógica de processamento/conciliação hoje espalhada no frontend para o backend, deve ocorrer em branch separado do `feat/frontend-manus`. Justificativa: mudança de schema é alteração estrutural e tende a afetar migrations, invariantes de domínio, DTOs e semântica financeira; manter isso isolado reduz risco de regressão e facilita validação incremental por módulo. O branch atual permanece como linha de integração funcional, enquanto a refatoração de domínio deve abrir uma trilha própria.  
+TAGS: branch,db,schema,reconciliation,backend,arquitetura  
+PRIORIDADE: Alta  
+STATUS: Em andamento
 TÍTULO: Refactor categories schema to coalesce external_owner_id and document uniqueness
 DESCRIÇÃO: Refactor categories schema to coalesce external_owner_id and document uniqueness
 TAGS: categories
@@ -849,3 +888,75 @@ mysql -u root previa_finance < packages/db/migrations/0009_receipt_documents.sql
 - Lógica azul/laranja intacta
 - Sem .env commitado
 - git pull feito antes de iniciar o trabalho (base 3351f6c)
+
+---
+## [2026-05-06 23:57]
+
+ID: 20260506-2357-schema-reconciliation-branch-decision  
+SOURCE: previa_finance/codex  
+CATEGORIA: Arquitetura  
+TÍTULO: Refatoração de schema e reconciliação deve seguir em branch próprio  
+DESCRIÇÃO: Decidido isolar a próxima etapa estrutural em um branch novo, separado de `feat/frontend-manus`. Motivo: a mudança envolve novas tabelas e/ou campos para processamento, reconciliação e semântica financeira hoje inferida no frontend. Esse tipo de alteração afeta migrations, invariantes de domínio, DTOs e contratos do backend; misturar isso com o branch de integração funcional aumenta o risco de regressão e dificulta validação. A recomendação é manter `feat/frontend-manus` como branch de integração atual e abrir um branch específico para a refatoração de backend/schema/reconciliação.  
+TAGS: arquitetura,schema,reconciliacao,backend,frontend,branch,migrations  
+PRIORIDADE: Alta  
+STATUS: Ativo
+
+---
+## [2026-05-07 00:40]
+
+ID: 20260507-0040-reconciliation-schema-phase1  
+SOURCE: previa_finance/codex  
+CATEGORIA: Implementação  
+TÍTULO: Fase 1 aditiva do branch feat/backend-reconciliation-schema iniciada  
+DESCRIÇÃO: Aberto o branch `feat/backend-reconciliation-schema` a partir de `feat/frontend-manus`. Criada a migration aditiva `0010_backend_reconciliation_semantics.sql` com foco em `card_invoices`, `card_invoice_payments`, `receipt_documents`, `transactions` e `cashflow_forecast_month_status`. Os campos legados foram mantidos. O pacote adiciona campos semânticos novos para separar valores reportados, pagamentos reais alocados, saldo carregado, saldo efetivo, status mensal explícito e hints persistidos de OCR/cartão. O backfill foi aplicado no banco local `previa_finance`, a migration ficou registrada e o backend foi ajustado para escrever os campos novos em paralelo aos legados: import de fatura sincroniza os novos campos, alocação de pagamento real atualiza `payments_allocated/effective_open`, `receipt_documents` persiste `payment_kind` e dados de cartão/OCR em colunas próprias, e a reconciliação automática liga também `receipt_document_id` no lado de `transactions` e `card_transactions`. Validações concluídas: `pnpm -C packages/db build`, `pnpm -C apps/api build` e `pnpm -C packages/db db:setup`.  
+TAGS: schema,reconciliacao,card_invoices,card_invoice_payments,receipt_documents,transactions,cashflow_forecast_month_status,backend,migration  
+PRIORIDADE: Alta  
+STATUS: Em andamento
+
+---
+## [2026-05-08 00:20]
+
+ID: 20260508-0020-categories-seed-wiring  
+SOURCE: previa_finance/codex  
+CATEGORIA: Implementação  
+TÍTULO: Seed de categorias operacionalizado e taxonomia canônica consolidada  
+DESCRIÇÃO: Resolvidos os dois primeiros pontos pendentes do item “Category Schema with Hierarchy and Seed Script”. O seed foi exposto como comando oficial em `packages/db/package.json` (`db:seed:categories`) e também como fluxo composto (`db:setup:categories`). A taxonomia completa foi centralizada em `packages/db/scripts/categoryTaxonomy.ts`, e `seedCategories.ts` passou a consumir essa fonte canônica em vez de manter uma segunda lista hardcoded. A migration `0007_categories_table.sql` foi mantida apenas como bootstrap mínimo e documentada como tal; a taxonomia completa passa a ser aplicada operacionalmente pelo seed canônico. O script de seed também foi alinhado ao padrão de conexão do projeto (`DB_*`, com fallback para `DATABASE_URL`). Validações concluídas: `pnpm -C packages/db typecheck` e `pnpm -C packages/db db:seed:categories`.  
+TAGS: categories,seed,taxonomy,hierarchy,db,operational,wiring  
+PRIORIDADE: Alta  
+STATUS: Concluido
+
+---
+## [2026-05-08 00:38]
+
+ID: 20260508-0038-categories-ownership-scope  
+SOURCE: previa_finance/codex  
+CATEGORIA: Implementação  
+TÍTULO: Categorias agora respeitam ownership real no backend  
+DESCRIÇÃO: Fechado o item 3 do trabalho de categorias: a rota `apps/api/src/routes/categories.ts` passou a usar `requireClerkAuth` e `resolveOwnerId`, aplicando visibilidade combinada de categorias de sistema (`is_system = true`) com categorias custom do owner atual (`external_owner_id = owner.id`). O contrato do frontend foi mantido: `GET /api/categories` e `GET /api/categories/tree` continuam retornando a mesma estrutura, mas agora filtrada corretamente. `POST` grava `externalOwnerId` nas categorias custom. `PUT` e `DELETE` passaram a bloquear alteração/remoção de categorias de sistema ou de outro owner. Validação concluída com `pnpm -C apps/api build`.  
+TAGS: categories,ownership,externalOwnerId,api,auth,hierarchy  
+PRIORIDADE: Alta  
+STATUS: Concluido
+
+---
+## [2026-05-08 00:48]
+
+ID: 20260508-0048-open-finance-category-semantics  
+SOURCE: previa_finance/codex  
+CATEGORIA: Implementação  
+TÍTULO: Campos mínimos adicionados para coexistência entre categorias internas e Open Finance  
+DESCRIÇÃO: Implementado o pacote mínimo para evitar conflito semântico entre taxonomia interna e categorias vindas de Open Finance/provedores. Foi criada a migration `0011_open_finance_category_semantics.sql`, adicionando em `transactions` e `card_transactions` os campos `provider_category`, `provider_category_raw` e `category_assigned_by`. A regra fica explícita: `category_id` continua sendo a categoria final interna do app, enquanto `provider_category*` preserva a classificação de origem do provedor. O backfill marca registros antigos classificados como `legacy` em `category_assigned_by`. Validações concluídas com `pnpm -C packages/db build` e `pnpm -C packages/db db:setup`.  
+TAGS: open-finance,categories,provider-category,transactions,card-transactions,migration  
+PRIORIDADE: Média  
+STATUS: Concluido
+
+---
+## [2026-05-08 00:58]
+
+ID: 20260508-0058-category-provenance-new-imports  
+SOURCE: previa_finance/codex  
+CATEGORIA: Implementação  
+TÍTULO: Novos imports preservam origem da categoria sem tocar no histórico  
+DESCRIÇÃO: Ajustados os contratos e inserts de `transactions` e `card_transactions` para aceitar e persistir, em imports novos, os campos `providerCategory`, `providerCategoryRaw` e `categoryAssignedBy`. No extrato (`apps/api/src/routes/transactions.ts`), o payload de import agora aceita esses campos opcionalmente e grava `categoryAssignedBy = 'user'` quando a linha chega com `categoryId` confirmado mas sem provenance explícita. No import de faturas (`apps/api/src/routes/invoices.ts`), o mesmo padrão foi aplicado às `card_transactions`. Isso permite começar a conviver com Open Finance sem reclassificar histórico: dados antigos ficam como `legacy`; dados novos passam a carregar provenance explícita quando disponível. Validação concluída com `pnpm -C apps/api build`.  
+TAGS: categories,provenance,imports,transactions,card-transactions,open-finance  
+PRIORIDADE: Média  
+STATUS: Concluido

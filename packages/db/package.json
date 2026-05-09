@@ -16,6 +16,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "db:setup": "tsx scripts/migrate.ts",
+    "db:seed:categories": "tsx scripts/seedCategories.ts",
+    "db:setup:categories": "pnpm run db:setup && pnpm run db:seed:categories",
     "db:bootstrap": "tsx scripts/migrate.ts --bootstrap",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

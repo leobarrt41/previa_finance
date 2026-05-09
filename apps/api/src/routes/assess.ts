@@ -493,6 +493,7 @@ router.post('/budget', async (req: Request, res: Response) => {
         forecastId: cashflowForecastMonthStatus.forecastId,
         competencyMonth: cashflowForecastMonthStatus.competencyMonth,
         isPaid: cashflowForecastMonthStatus.isPaid,
+        status: cashflowForecastMonthStatus.status,
       })
       .from(cashflowForecastMonthStatus)
       .where(eq(cashflowForecastMonthStatus.userId, owner.id)),
@@ -515,7 +516,7 @@ router.post('/budget', async (req: Request, res: Response) => {
 
   const paidMonthsByForecastId = new Map<string, Set<string>>()
   for (const row of forecastStatusRows) {
-    if (!row.isPaid) continue
+    if (!(row.status ? row.status === 'realized' : row.isPaid)) continue
     const set = paidMonthsByForecastId.get(row.forecastId) ?? new Set<string>()
     set.add(row.competencyMonth)
     paidMonthsByForecastId.set(row.forecastId, set)
@@ -1163,6 +1164,7 @@ router.post('/debt', async (req: Request, res: Response) => {
         forecastId: cashflowForecastMonthStatus.forecastId,
         competencyMonth: cashflowForecastMonthStatus.competencyMonth,
         isPaid: cashflowForecastMonthStatus.isPaid,
+        status: cashflowForecastMonthStatus.status,
       })
       .from(cashflowForecastMonthStatus)
       .where(eq(cashflowForecastMonthStatus.userId, owner.id)),
@@ -1170,7 +1172,7 @@ router.post('/debt', async (req: Request, res: Response) => {
 
   const paidMonthsByForecastId = new Map<string, Set<string>>()
   for (const row of forecastStatusRows) {
-    if (!row.isPaid) continue
+    if (!(row.status ? row.status === 'realized' : row.isPaid)) continue
     const set = paidMonthsByForecastId.get(row.forecastId) ?? new Set<string>()
     set.add(row.competencyMonth)
     paidMonthsByForecastId.set(row.forecastId, set)

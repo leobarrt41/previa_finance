@@ -221,6 +221,7 @@ router.get('/recurring-transactions', async (req: Request, res: Response) => {
         forecastId: cashflowForecastMonthStatus.forecastId,
         competencyMonth: cashflowForecastMonthStatus.competencyMonth,
         isPaid: cashflowForecastMonthStatus.isPaid,
+        status: cashflowForecastMonthStatus.status,
       })
       .from(cashflowForecastMonthStatus)
       .where(eq(cashflowForecastMonthStatus.userId, owner.id)),
@@ -228,7 +229,7 @@ router.get('/recurring-transactions', async (req: Request, res: Response) => {
 
   const paidMonthsByForecastId = new Map<string, string[]>()
   for (const row of statusRows) {
-    if (!row.isPaid) continue
+    if (!(row.status ? row.status === 'realized' : row.isPaid)) continue
     const list = paidMonthsByForecastId.get(row.forecastId) ?? []
     list.push(row.competencyMonth)
     paidMonthsByForecastId.set(row.forecastId, list)
@@ -369,11 +370,15 @@ router.put('/recurring-transactions/:id/month-status', async (req: Request, res:
       userId: owner.id,
       competencyMonth: payload.competencyMonth,
       isPaid: payload.isPaid,
+      status: payload.isPaid ? 'realized' : 'pending',
+      resolvedAt: payload.isPaid ? new Date() : null,
       updatedAt: new Date(),
     })
     .onDuplicateKeyUpdate({
       set: {
         isPaid: payload.isPaid,
+        status: payload.isPaid ? 'realized' : 'pending',
+        resolvedAt: payload.isPaid ? new Date() : null,
         updatedAt: new Date(),
       },
     })
@@ -686,6 +691,7 @@ router.post('/projection', async (req: Request, res: Response) => {
               forecastId: cashflowForecastMonthStatus.forecastId,
               competencyMonth: cashflowForecastMonthStatus.competencyMonth,
               isPaid: cashflowForecastMonthStatus.isPaid,
+              status: cashflowForecastMonthStatus.status,
             })
             .from(cashflowForecastMonthStatus)
             .where(eq(cashflowForecastMonthStatus.userId, owner.id)),
@@ -694,7 +700,7 @@ router.post('/projection', async (req: Request, res: Response) => {
 
     const paidMonthsByForecastId = new Map<string, Set<string>>()
     for (const row of persistedStatusRows) {
-      if (!row.isPaid) continue
+      if (!(row.status ? row.status === 'realized' : row.isPaid)) continue
       const set = paidMonthsByForecastId.get(row.forecastId) ?? new Set<string>()
       set.add(row.competencyMonth)
       paidMonthsByForecastId.set(row.forecastId, set)

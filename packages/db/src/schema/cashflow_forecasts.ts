@@ -23,11 +23,15 @@ export const cashflowForecastMonthStatus = mysqlTable('cashflow_forecast_month_s
   forecastId: varchar('forecast_id', { length: 128 }).notNull(),
   userId: int('user_id').notNull(),
   competencyMonth: varchar('competency_month', { length: 7 }).notNull(),
-  isPaid: boolean('is_paid').notNull().default(false),
+  isPaid: boolean('is_paid').notNull().default(false), // @legacy-ambiguous
+  status: varchar('status', { length: 20 }).notNull().default('pending'),
+  realizedTransactionId: int('realized_transaction_id'),
+  resolvedAt: timestamp('resolved_at'),
   updatedAt: timestamp('updated_at').notNull().default(sql`CURRENT_TIMESTAMP`).$onUpdate(() => sql`CURRENT_TIMESTAMP`),
 }, (t) => [
   primaryKey({ columns: [t.forecastId, t.competencyMonth] }),
   index('idx_cashflow_fc_month_status_user').on(t.userId),
+  index('idx_cashflow_fc_month_status_status').on(t.status),
 ])
 
 export type CashflowForecast = typeof cashflowForecasts.$inferSelect

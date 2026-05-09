@@ -102,6 +102,15 @@ function normalizeOptionalInt(value: unknown): number | null {
   return null
 }
 
+function normalizeConfidence(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value.toFixed(4)
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed.toFixed(4) : null
+  }
+  return null
+}
+
 type ReceiptCardIdentityHints = {
   institutionName?: string | null
   cardBrand?: string | null
@@ -518,6 +527,15 @@ receiptDocumentsRouter.post('/', async (req: Request, res: Response) => {
       expectedInvoiceMonth: expectedInvoiceMonth ? String(expectedInvoiceMonth) : null,
       merchantName: merchantName || null,
       merchantCnpj: merchantCnpj || null,
+      paymentKind: paymentKind === 'card' || paymentKind === 'debit' ? paymentKind : null,
+      issuerName: normalizeText(issuerName),
+      cardBrand: hints.cardBrand ?? null,
+      cardLast4: hints.cardLast4 ?? null,
+      maskedNumber: hints.maskedNumber ?? null,
+      ownerName: hints.ownerName ?? null,
+      closingDay: hints.closingDay ?? null,
+      dueDay: hints.dueDay ?? null,
+      ocrConfidenceScore: normalizeConfidence(rawPayload?.confidence),
       categoryId: categoryId || null,
       accountId: resolvedAccountId,
       nfeKey: nfeKey || null,
@@ -620,6 +638,15 @@ receiptDocumentsRouter.post('/scan', upload.single('file'), async (req: Request,
       expectedInvoiceMonth,
       merchantName: extracted.merchantName || null,
       merchantCnpj: extracted.merchantCnpj || null,
+      paymentKind: paymentKind === 'card' || paymentKind === 'debit' ? paymentKind : null,
+      issuerName: hints.institutionName ?? null,
+      cardBrand: hints.cardBrand ?? null,
+      cardLast4: hints.cardLast4 ?? null,
+      maskedNumber: hints.maskedNumber ?? null,
+      ownerName: hints.ownerName ?? null,
+      closingDay: hints.closingDay ?? null,
+      dueDay: hints.dueDay ?? null,
+      ocrConfidenceScore: normalizeConfidence(extracted.confidence),
       categoryId: null,
       accountId: autoAccountId,
       nfeKey: extracted.nfeKey || null,
@@ -662,6 +689,7 @@ receiptDocumentsRouter.put('/:id', async (req: Request, res: Response) => {
       amountMinor, purchaseDate, purchaseMonth, expectedInvoiceMonth,
       merchantName, merchantCnpj, categoryId, accountId,
       nfeKey, fileUrl, fileType, installmentTotal, installmentCurrent, description,
+      paymentKind, issuerName, cardBrand, cardLast4, maskedNumber, ownerName, closingDay, dueDay, ocrConfidenceScore,
     } = req.body
 
     await db.update(receiptDocuments).set({
@@ -671,6 +699,15 @@ receiptDocumentsRouter.put('/:id', async (req: Request, res: Response) => {
       ...(expectedInvoiceMonth !== undefined && { expectedInvoiceMonth: expectedInvoiceMonth || null }),
       ...(merchantName !== undefined && { merchantName }),
       ...(merchantCnpj !== undefined && { merchantCnpj }),
+      ...(paymentKind !== undefined && { paymentKind: paymentKind || null }),
+      ...(issuerName !== undefined && { issuerName: issuerName || null }),
+      ...(cardBrand !== undefined && { cardBrand: cardBrand || null }),
+      ...(cardLast4 !== undefined && { cardLast4: cardLast4 || null }),
+      ...(maskedNumber !== undefined && { maskedNumber: maskedNumber || null }),
+      ...(ownerName !== undefined && { ownerName: ownerName || null }),
+      ...(closingDay !== undefined && { closingDay: closingDay ? Number(closingDay) : null }),
+      ...(dueDay !== undefined && { dueDay: dueDay ? Number(dueDay) : null }),
+      ...(ocrConfidenceScore !== undefined && { ocrConfidenceScore: normalizeConfidence(ocrConfidenceScore) }),
       ...(categoryId !== undefined && { categoryId }),
       ...(accountId !== undefined && { accountId: accountId ? Number(accountId) : null }),
       ...(nfeKey !== undefined && { nfeKey }),
