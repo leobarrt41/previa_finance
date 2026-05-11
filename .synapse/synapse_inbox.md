@@ -843,51 +843,16 @@ PRIORIDADE: Alta
 STATUS: Concluido
 
 ---
-## [2026-05-02] Avaliadores IA + Notas Fiscais — Rebase sobre 3351f6c
+## [2026-05-02 00:00]
 
-### Contexto
-Trabalho anterior foi feito sobre versão desatualizada do cashflow.ts.
-O Codex subiu a versão correta (commit 3351f6c) e o Manus refez tudo sobre essa base.
-
-### O que foi implementado (commit 3fb0823)
-
-#### 3 Telas de Avaliação com IA
-- **Orçamento (`/budget`):** Avaliação 100% automática. Removidos campos manuais. IA analisa renda, faturas, extratos e categorias. Exibe gauge de comprometimento, diagnóstico, alertas e recomendações.
-- **Avaliador de Gastos (`/assess/spending`):** Tela dedicada. Seleção de categoria (pré-selecionável via `?categoryId=` na URL). Histórico, tendência, risco, impacto na renda.
-- **Avaliador de Dívidas (`/assess/debt`):** Faturas em aberto, parcelas futuras, risco de atraso, pressão sobre renda.
-- **API:** `apps/api/src/routes/assess.ts` — 3 endpoints com chamadas reais a `POST /v1/chat/completions` (mesmo padrão de invoices.ts).
-
-#### Módulo receipt_documents (Notas Fiscais)
-- **Migration:** `packages/db/migrations/0009_receipt_documents.sql`
-- **Schema Drizzle:** `packages/db/src/schema/receipt_documents.ts`
-- **API:** `apps/api/src/routes/receiptDocuments.ts` — CRUD + reconciliação manual
-- **Tela:** `/receipt-documents` com botão rápido (FAB) para uso no estabelecimento
-
-#### Integração no CashFlow (SEM alterar o CashFlowEngine)
-- Notas `projected` com `expectedInvoiceMonth` → injetadas como `cardInvoice` sintética → **barra laranja**
-- Notas `projected` sem `expectedInvoiceMonth` (débito) → injetadas como `expense` → **barra vermelha**
-- Notas `reconciled` → ignoradas (dado real assume o controle)
-- Injeção feita em `cashflow.ts` (API), NUNCA no CashFlowEngine
-
-#### Reconciliação Automática
-- **Cartão:** `invoices.ts` — após insert de `card_transactions`, cruza notas por `amount_minor` + `merchant_name` fuzzy (8 chars) + `purchase_month`
-- **Débito:** `transactions.ts` — após insert de `transactions`, mesmo critério
-- Best-effort: não bloqueia o import em caso de erro
-
-#### Menu e Navegação
-- Layout: "Notas Fiscais 🧾", "Aval. Gastos 📊", "Aval. Dívidas 💳"
-- Botão "Avaliar" em cada categoria → `/assess/spending?categoryId=...`
-
-### Migrations pendentes em produção
-```bash
-mysql -u root previa_finance < packages/db/migrations/0009_receipt_documents.sql
-```
-
-### Regras respeitadas
-- CashFlowEngine NÃO foi alterado
-- Lógica azul/laranja intacta
-- Sem .env commitado
-- git pull feito antes de iniciar o trabalho (base 3351f6c)
+ID: 20260502-0000-assess-receipt-rebase  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Implementação  
+TÍTULO: Avaliadores IA e receipt_documents refeitos sobre base 3351f6c  
+DESCRIÇÃO: O trabalho de avaliadores com IA e notas fiscais foi refeito sobre a base corrigida do CashFlow (`3351f6c`), após identificação de que uma linha anterior havia sido desenvolvida sobre versão desatualizada de `cashflow.ts`. O pacote implementado incluiu três telas de avaliação com IA (`/budget`, `/assess/spending`, `/assess/debt`) com endpoints reais em `apps/api/src/routes/assess.ts`, além do módulo `receipt_documents` com migration `packages/db/migrations/0009_receipt_documents.sql`, schema Drizzle, rota `apps/api/src/routes/receiptDocuments.ts` e tela `/receipt-documents`. A integração com o Fluxo de caixa foi feita sem alterar o `CashFlowEngine`: notas `projected` com `expectedInvoiceMonth` entram como `cardInvoice` sintética na barra laranja; notas `projected` sem `expectedInvoiceMonth` entram como `expense` na barra vermelha; notas `reconciled` deixam de influenciar a projeção. Também foi implementada reconciliação automática best-effort em `invoices.ts` e `transactions.ts`, por valor + merchant fuzzy + mês de competência. Regras respeitadas: `CashFlowEngine` intacto, lógica azul/laranja preservada, `.env` fora do repositório e rebase feito sobre a base corrigida. Migration pendente em produção à época: `mysql -u root previa_finance < packages/db/migrations/0009_receipt_documents.sql`.  
+TAGS: assess,receipt_documents,ocr,reconciliation,cashflow,ai,rebase  
+PRIORIDADE: Alta  
+STATUS: Concluido
 
 ---
 ## [2026-05-06 23:57]
