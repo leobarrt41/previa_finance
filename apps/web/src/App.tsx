@@ -11,6 +11,7 @@ import { StatementUpload } from './pages/StatementUpload'
 import { SpendingAssessor } from './pages/SpendingAssessor'
 import { DebtAssessor } from './pages/DebtAssessor'
 import ReceiptDocuments from './pages/ReceiptDocuments'
+import { PreviaBot } from './pages/PreviaBot'
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
           <Route path="/assess/spending" element={<SpendingAssessor />} />
           <Route path="/assess/debt" element={<DebtAssessor />} />
           <Route path="/receipt-documents" element={<ReceiptDocuments />} />
+          <Route path="/chat" element={<PreviaBot />} />
         </Routes>
       </Layout>
     </BrowserRouter>

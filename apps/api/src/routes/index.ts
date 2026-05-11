@@ -12,6 +12,7 @@ import { invoiceRouter } from './invoices.js'
 import { accountRouter } from './accounts.js'
 import { assessRouter } from './assess.js'
 import { receiptDocumentsRouter } from './receiptDocuments.js'
+import { chatRouter } from './chat.js'
 
 export function setupRoutes(): Router {
   const router: Router = Router()
@@ -31,6 +32,7 @@ export function setupRoutes(): Router {
         invoices: '/api/invoices',
         assess: '/api/assess',
         receiptDocuments: '/api/receipt-documents',
+        chat: '/api/chat',
       }
     })
   })
@@ -45,6 +47,7 @@ export function setupRoutes(): Router {
   router.use('/invoices', invoiceRouter)
   router.use('/assess', assessRouter)
   router.use('/receipt-documents', receiptDocumentsRouter)
+  router.use('/chat', chatRouter)
 
   return router
 }

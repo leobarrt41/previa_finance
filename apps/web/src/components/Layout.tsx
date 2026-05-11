@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { to: '/assess/spending',  label: 'Aval. Gastos',    icon: '📊' },
   { to: '/assess/debt',      label: 'Aval. Dívidas',   icon: '💳' },
   { to: '/receipt-documents', label: 'Notas Fiscais',   icon: '🧾' },
+  { to: '/chat',               label: 'Previa Bot',      icon: '🤖' },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {

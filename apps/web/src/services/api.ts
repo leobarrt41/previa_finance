@@ -1031,6 +1031,26 @@ export const api = {
         body: JSON.stringify(body),
       }),
   },
+
+  // ---------------------------------------------------------------------------
+  // Previa Bot — Chat Contextual Financeiro
+  // ---------------------------------------------------------------------------
+  chat: {
+    send: (body: {
+      message: string
+      month?: string
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>
+    }) =>
+      request<{
+        reply: string
+        contextUsed: string[]
+        month: string
+        intent: string
+      }>('/api/chat', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+  },
 }
 
 // ---------------------------------------------------------------------------
