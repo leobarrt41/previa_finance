@@ -14,6 +14,7 @@ import { createError } from '../middlewares/errorHandler.js'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
+import { buildCardInvoiceSemanticView } from '../services/cardInvoiceSemantics.js'
 
 const router: Router = Router()
 router.use(requireClerkAuth)
@@ -757,6 +758,13 @@ router.post('/projection', async (req: Request, res: Response) => {
       previousBalanceMinor: string
       paidAmountMinor: string
       openAmountMinor: string
+      semantic: {
+        reportedPreviousInvoiceTotalMinor: string
+        reportedPreviousInvoicePaidMinor: string
+        carriedOpenMinor: string
+        paymentsAllocatedMinor: string
+        effectiveOpenMinor: string
+      }
     }> = []
     if (useDbCardInvoices) {
       // Buscar todas as faturas do período
@@ -773,6 +781,11 @@ router.post('/projection', async (req: Request, res: Response) => {
           previousBalanceMinor: cardInvoices.previousBalanceMinor,
           paidAmountMinor: cardInvoices.paidAmountMinor,
           openAmountMinor: cardInvoices.openAmountMinor,
+          reportedPreviousBalanceMinor: cardInvoices.reportedPreviousBalanceMinor,
+          reportedPaidAmountMinor: cardInvoices.reportedPaidAmountMinor,
+          carriedOpenAmountMinor: cardInvoices.carriedOpenAmountMinor,
+          paymentsAllocatedMinor: cardInvoices.paymentsAllocatedMinor,
+          effectiveOpenAmountMinor: cardInvoices.effectiveOpenAmountMinor,
         })
         .from(cardInvoices)
         .leftJoin(accounts, eq(accounts.id, cardInvoices.accountId))
@@ -804,22 +817,28 @@ router.post('/projection', async (req: Request, res: Response) => {
       }
 
       cardInvoicesPanel = invoices.map(inv => {
-        const totalFatura = toBigInt(inv.totalAmountMinor ?? 0n)
-        const abertoAnterior = toBigInt(inv.previousBalanceMinor ?? 0n)
         const purchasesMinor = purchasesByInvoice.get(String(inv.id)) ?? 0n
+        const semantic = buildCardInvoiceSemanticView(inv, purchasesMinor)
         return {
           invoiceMonth: inv.invoiceMonth,
           institutionName: inv.institutionName,
           cardBrand: inv.cardBrand,
           cardLast4: inv.cardLast4,
-          comprasDoMesMinor: purchasesMinor.toString(),
-          abertoAnteriorMinor: abertoAnterior.toString(),
-          totalFaturaAnteriorMinor: abertoAnterior.toString(),
-          totalFaturaMinor: totalFatura.toString(),
-          totalAmountMinor: inv.totalAmountMinor?.toString() ?? '0',
-          previousBalanceMinor: inv.previousBalanceMinor?.toString() ?? '0',
-          paidAmountMinor: inv.paidAmountMinor?.toString() ?? '0',
-          openAmountMinor: inv.openAmountMinor?.toString() ?? '0',
+          comprasDoMesMinor: semantic.currentCyclePurchasesMinor.toString(),
+          abertoAnteriorMinor: semantic.carriedOpenMinor.toString(),
+          totalFaturaAnteriorMinor: semantic.reportedPreviousInvoiceTotalMinor.toString(),
+          totalFaturaMinor: semantic.totalInvoiceMinor.toString(),
+          totalAmountMinor: semantic.totalInvoiceMinor.toString(),
+          previousBalanceMinor: semantic.reportedPreviousInvoiceTotalMinor.toString(),
+          paidAmountMinor: semantic.reportedPreviousInvoicePaidMinor.toString(),
+          openAmountMinor: semantic.effectiveOpenMinor.toString(),
+          semantic: {
+            reportedPreviousInvoiceTotalMinor: semantic.reportedPreviousInvoiceTotalMinor.toString(),
+            reportedPreviousInvoicePaidMinor: semantic.reportedPreviousInvoicePaidMinor.toString(),
+            carriedOpenMinor: semantic.carriedOpenMinor.toString(),
+            paymentsAllocatedMinor: semantic.paymentsAllocatedMinor.toString(),
+            effectiveOpenMinor: semantic.effectiveOpenMinor.toString(),
+          },
         }
       })
     }

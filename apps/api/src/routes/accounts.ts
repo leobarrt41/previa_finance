@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { accounts, cardInvoices, cardTransactions, categories, transactions } from '@previa/db'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
+import { buildCardInvoiceSemanticView } from '../services/cardInvoiceSemantics.js'
 import { createError } from '../middlewares/errorHandler.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
 
@@ -246,6 +247,11 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
       paidAmountMinor: cardInvoices.paidAmountMinor,
       openAmountMinor: cardInvoices.openAmountMinor,
       previousBalanceMinor: cardInvoices.previousBalanceMinor,
+      reportedPreviousBalanceMinor: cardInvoices.reportedPreviousBalanceMinor,
+      reportedPaidAmountMinor: cardInvoices.reportedPaidAmountMinor,
+      carriedOpenAmountMinor: cardInvoices.carriedOpenAmountMinor,
+      paymentsAllocatedMinor: cardInvoices.paymentsAllocatedMinor,
+      effectiveOpenAmountMinor: cardInvoices.effectiveOpenAmountMinor,
       status: cardInvoices.status,
       parserStrategy: cardInvoices.parserStrategy,
       institutionName: cardInvoices.institutionName,
@@ -296,10 +302,8 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
     .where(eq(cardTransactions.cardInvoiceId, invoice.id))
     .orderBy(desc(cardTransactions.occurredAt), desc(cardTransactions.id))
 
-
-  // Calcula o valor em aberto para CONTAS: total da fatura - soma das compras/taxas/anuidades do mês
   const comprasDoMes = transactionRows.reduce((sum, tx) => sum + Number(tx.amountMinor ?? 0), 0)
-  const emAbertoMinor = Number(invoice.totalAmountMinor ?? 0) - comprasDoMes
+  const semantic = buildCardInvoiceSemanticView(invoice, BigInt(comprasDoMes))
 
   res.json({
     accountId,
@@ -316,17 +320,25 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
       id: invoice.id,
       invoiceMonth: invoice.invoiceMonth,
       dueDate: invoice.dueDate,
-      totalAmountMinor: Number(invoice.totalAmountMinor ?? 0),
+      totalAmountMinor: Number(semantic.totalInvoiceMinor),
       minimumPaymentMinor: invoice.minimumPaymentMinor === null ? null : Number(invoice.minimumPaymentMinor),
-      paidAmountMinor: Number(invoice.paidAmountMinor ?? 0),
-      openAmountMinor: Number(invoice.openAmountMinor ?? 0),
-      previousBalanceMinor: Number(invoice.previousBalanceMinor ?? 0),
-      emAbertoMinor, // campo calculado para CONTAS
-      status: invoice.status,
+      paidAmountMinor: Number(semantic.paymentsAllocatedMinor),
+      openAmountMinor: Number(semantic.effectiveOpenMinor),
+      previousBalanceMinor: Number(semantic.reportedPreviousInvoiceTotalMinor),
+      emAbertoMinor: Number(semantic.effectiveOpenMinor),
+      status: semantic.effectiveOpenMinor > 0n ? 'OPEN' : 'PAID',
       parserStrategy: invoice.parserStrategy,
       institutionName: invoice.institutionName,
       cardBrand: invoice.cardBrand,
       cardLast4: invoice.cardLast4,
+      semantic: {
+        reportedPreviousInvoiceTotalMinor: Number(semantic.reportedPreviousInvoiceTotalMinor),
+        reportedPreviousInvoicePaidMinor: Number(semantic.reportedPreviousInvoicePaidMinor),
+        carriedOpenMinor: Number(semantic.carriedOpenMinor),
+        paymentsAllocatedMinor: Number(semantic.paymentsAllocatedMinor),
+        effectiveOpenMinor: Number(semantic.effectiveOpenMinor),
+        currentCyclePurchasesMinor: Number(semantic.currentCyclePurchasesMinor),
+      },
     },
     transactions: transactionRows.map((row) => ({
       id: row.id,

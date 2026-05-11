@@ -9,8 +9,79 @@ type CardInvoiceSemanticSnapshot = {
   effectiveOpenAmountMinor: bigint
 }
 
+type NullableBigIntLike = bigint | number | string | null | undefined
+
+export type CardInvoiceSemanticView = {
+  reportedPreviousInvoiceTotalMinor: bigint
+  reportedPreviousInvoicePaidMinor: bigint
+  carriedOpenMinor: bigint
+  paymentsAllocatedMinor: bigint
+  effectiveOpenMinor: bigint
+  currentCyclePurchasesMinor: bigint
+  totalInvoiceMinor: bigint
+}
+
 function maxBigInt(a: bigint, b: bigint): bigint {
   return a > b ? a : b
+}
+
+function toBigIntValue(value: NullableBigIntLike): bigint {
+  if (value === null || value === undefined) return 0n
+  if (typeof value === 'bigint') return value
+  if (typeof value === 'number') return BigInt(Math.trunc(value))
+  if (typeof value === 'string') {
+    if (!value.trim()) return 0n
+    return BigInt(value)
+  }
+  return 0n
+}
+
+export function buildCardInvoiceSemanticView(
+  invoice: {
+    totalAmountMinor?: NullableBigIntLike
+    previousBalanceMinor?: NullableBigIntLike
+    paidAmountMinor?: NullableBigIntLike
+    openAmountMinor?: NullableBigIntLike
+    reportedPreviousBalanceMinor?: NullableBigIntLike
+    reportedPaidAmountMinor?: NullableBigIntLike
+    carriedOpenAmountMinor?: NullableBigIntLike
+    paymentsAllocatedMinor?: NullableBigIntLike
+    effectiveOpenAmountMinor?: NullableBigIntLike
+  },
+  purchasesMinor: NullableBigIntLike = 0n,
+): CardInvoiceSemanticView {
+  const totalInvoiceMinor = toBigIntValue(invoice.totalAmountMinor)
+  const reportedPreviousInvoiceTotalMinor = maxBigInt(
+    toBigIntValue(invoice.reportedPreviousBalanceMinor) || toBigIntValue(invoice.previousBalanceMinor),
+    0n,
+  )
+  const reportedPreviousInvoicePaidMinor = maxBigInt(
+    toBigIntValue(invoice.reportedPaidAmountMinor) || toBigIntValue(invoice.paidAmountMinor),
+    0n,
+  )
+  const carriedOpenMinor = maxBigInt(
+    toBigIntValue(invoice.carriedOpenAmountMinor) || maxBigInt(reportedPreviousInvoiceTotalMinor - reportedPreviousInvoicePaidMinor, 0n),
+    0n,
+  )
+  const paymentsAllocatedMinor = maxBigInt(
+    toBigIntValue(invoice.paymentsAllocatedMinor),
+    0n,
+  )
+  const effectiveOpenMinor = maxBigInt(
+    toBigIntValue(invoice.effectiveOpenAmountMinor) || toBigIntValue(invoice.openAmountMinor),
+    0n,
+  )
+  const currentCyclePurchasesMinor = maxBigInt(toBigIntValue(purchasesMinor), 0n)
+
+  return {
+    reportedPreviousInvoiceTotalMinor,
+    reportedPreviousInvoicePaidMinor,
+    carriedOpenMinor,
+    paymentsAllocatedMinor,
+    effectiveOpenMinor,
+    currentCyclePurchasesMinor,
+    totalInvoiceMinor,
+  }
 }
 
 export async function syncCardInvoiceSemanticFields(
@@ -24,6 +95,11 @@ export async function syncCardInvoiceSemanticFields(
       previousBalanceMinor: cardInvoices.previousBalanceMinor,
       paidAmountMinor: cardInvoices.paidAmountMinor,
       openAmountMinor: cardInvoices.openAmountMinor,
+      reportedPreviousBalanceMinor: cardInvoices.reportedPreviousBalanceMinor,
+      reportedPaidAmountMinor: cardInvoices.reportedPaidAmountMinor,
+      carriedOpenAmountMinor: cardInvoices.carriedOpenAmountMinor,
+      effectiveOpenAmountMinor: cardInvoices.effectiveOpenAmountMinor,
+      paymentsAllocatedMinor: cardInvoices.paymentsAllocatedMinor,
     })
     .from(cardInvoices)
     .where(eq(cardInvoices.id, cardInvoiceId))
