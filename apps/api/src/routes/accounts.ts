@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express'
 import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { z } from 'zod'
-import { accounts, cardInvoices, cardTransactions, categories, transactions } from '@previa/db'
+import { accounts, cardInvoices, cardTransactions, categories, receiptDocuments, transactions } from '@previa/db'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { buildCardInvoiceSemanticView } from '../services/cardInvoiceSemantics.js'
@@ -85,8 +85,23 @@ router.get('/', async (req: Request, res: Response) => {
     .where(eq(cardInvoices.userId, owner.id))
     .groupBy(cardInvoices.accountId, cardInvoices.invoiceMonth)
 
+  const receiptRows = await db
+    .select({
+      accountId: receiptDocuments.accountId,
+      month: receiptDocuments.purchaseMonth,
+      count: sql<number>`count(*)`,
+    })
+    .from(receiptDocuments)
+    .where(and(
+      eq(receiptDocuments.ownerId, owner.id),
+      sql`${receiptDocuments.dataState} <> 'cancelled'`,
+      sql`${receiptDocuments.accountId} is not null`,
+    ))
+    .groupBy(receiptDocuments.accountId, receiptDocuments.purchaseMonth)
+
   const bankByAccount = new Map<number, Array<{ month: string; count: number }>>()
   const cardByAccount = new Map<number, Array<{ month: string; count: number }>>()
+  const receiptByAccount = new Map<number, Array<{ month: string; count: number }>>()
 
   for (const row of bankRows) {
     const arr = bankByAccount.get(row.accountId) ?? []
@@ -100,21 +115,30 @@ router.get('/', async (req: Request, res: Response) => {
     cardByAccount.set(row.accountId, arr)
   }
 
+  for (const row of receiptRows) {
+    const arr = receiptByAccount.get(row.accountId) ?? []
+    arr.push({ month: row.month, count: Number(row.count ?? 0) })
+    receiptByAccount.set(row.accountId, arr)
+  }
+
   const items = accountRows
     .map((account) => {
       const bankMonths = (bankByAccount.get(account.id) ?? []).sort((a, b) => b.month.localeCompare(a.month))
       const invoiceMonths = (cardByAccount.get(account.id) ?? []).sort((a, b) => b.month.localeCompare(a.month))
+      const receiptMonths = (receiptByAccount.get(account.id) ?? []).sort((a, b) => b.month.localeCompare(a.month))
 
       return {
         ...account,
         bankMonths,
         invoiceMonths,
+        receiptMonths,
         totalBankEntries: bankMonths.reduce((sum, m) => sum + m.count, 0),
         totalInvoiceEntries: invoiceMonths.reduce((sum, m) => sum + m.count, 0),
+        totalReceiptEntries: receiptMonths.reduce((sum, m) => sum + m.count, 0),
       }
     })
     // Regra pedida: conta sem fatura/extrato nao aparece.
-    .filter((account) => account.totalBankEntries > 0 || account.totalInvoiceEntries > 0)
+    .filter((account) => account.totalBankEntries > 0 || account.totalInvoiceEntries > 0 || account.totalReceiptEntries > 0)
 
   res.json({ items })
 })

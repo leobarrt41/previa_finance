@@ -41,6 +41,7 @@ export function Accounts() {
       new Set([
         ...account.invoiceMonths.map((m) => m.month),
         ...account.bankMonths.map((m) => m.month),
+        ...account.receiptMonths.map((m) => m.month),
       ]).size
 
     return (
@@ -78,7 +79,7 @@ export function Accounts() {
           Contas
         </h1>
         <p style={{ color: '#6b7280', marginTop: '0.3rem', fontSize: '0.85rem' }}>
-          Contas ativas com extratos ou faturas importadas. Clique em uma conta para ver os meses.
+          Contas ativas com extratos, faturas ou notas vinculadas. Clique em uma conta para ver os meses.
         </p>
       </div>
 

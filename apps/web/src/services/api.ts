@@ -315,8 +315,10 @@ export interface AccountSummary {
   cardLast4: string | null
   bankMonths: AccountMonthSummary[]
   invoiceMonths: AccountMonthSummary[]
+  receiptMonths: AccountMonthSummary[]
   totalBankEntries: number
   totalInvoiceEntries: number
+  totalReceiptEntries: number
 }
 
 export interface AccountInvoiceLine {
