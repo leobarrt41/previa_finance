@@ -17,11 +17,12 @@ import { Router, Request, Response } from 'express'
 import multer from 'multer'
 import { spawn } from 'node:child_process'
 import { getDatabase } from '../config/database.js'
-import { accounts, receiptDocuments } from '@previa/db'
+import { receiptDocuments } from '@previa/db'
 import { eq, and, sql } from 'drizzle-orm'
 import { requireClerkAuth } from '../middlewares/auth.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { config } from '../config/env.js'
+import { resolveOrCreateCreditCardAccount } from '../services/cardAccountResolver.js'
 
 export const receiptDocumentsRouter: Router = Router()
 receiptDocumentsRouter.use(requireClerkAuth)
@@ -119,18 +120,6 @@ type ReceiptCardIdentityHints = {
   ownerName?: string | null
   closingDay?: number | null
   dueDay?: number | null
-}
-
-function buildReceiptFallbackDisplayName(
-  merchantName: string | null | undefined,
-  expectedInvoiceMonth: string | null | undefined,
-  purchaseMonth: string | null | undefined,
-): string {
-  const labelBase = merchantName?.trim()
-    || (expectedInvoiceMonth ? `Fatura ${expectedInvoiceMonth}` : null)
-    || (purchaseMonth ? `Compra ${purchaseMonth}` : null)
-    || 'Nota fiscal'
-  return `Cartão ${labelBase}`
 }
 
 function buildReceiptCardIdentityHints(extracted: ReceiptExtractionAIResult): ReceiptCardIdentityHints {
@@ -297,127 +286,6 @@ async function getOwner(req: Request): Promise<{ userId: string; ownerId: number
   return { userId: clerkUserId, ownerId: owner.id }
 }
 
-async function resolveOrCreateReceiptCardAccount(
-  db: Awaited<ReturnType<typeof getDatabase>>,
-  ownerId: number,
-  hints: ReceiptCardIdentityHints,
-  fallbackDisplayName?: string | null,
-): Promise<number | null> {
-  const hasIdentity = Boolean(
-    hints.institutionName ||
-    hints.cardBrand ||
-    hints.cardLast4 ||
-    hints.maskedNumber ||
-    hints.ownerName,
-  )
-
-  if (!hasIdentity) {
-    if (!fallbackDisplayName) return null
-
-    const [existingFallback] = await db
-      .select({ id: accounts.id })
-      .from(accounts)
-      .where(and(
-        eq(accounts.userId, ownerId),
-        eq(accounts.financialChannel, 'credit_card'),
-        eq(accounts.source, 'receipt_document'),
-        eq(accounts.displayName, fallbackDisplayName),
-      ))
-      .limit(1)
-
-    if (existingFallback) return existingFallback.id
-
-    await db.insert(accounts).values({
-      userId: ownerId,
-      type: 'CREDIT_CARD',
-      financialChannel: 'credit_card',
-      displayName: fallbackDisplayName,
-      institutionName: fallbackDisplayName,
-      source: 'receipt_document',
-      currencyCode: 'BRL',
-      isActive: true,
-    })
-
-    const [createdFallback] = await db
-      .select({ id: accounts.id })
-      .from(accounts)
-      .where(and(
-        eq(accounts.userId, ownerId),
-        eq(accounts.financialChannel, 'credit_card'),
-        eq(accounts.source, 'receipt_document'),
-        eq(accounts.displayName, fallbackDisplayName),
-      ))
-      .limit(1)
-
-    if (!createdFallback) {
-      throw new Error('Failed to create fallback receipt card account')
-    }
-
-    return createdFallback.id
-  }
-
-  const whereConditions = [
-    eq(accounts.userId, ownerId),
-    eq(accounts.financialChannel, 'credit_card'),
-    ...(hints.institutionName ? [eq(accounts.institutionName, hints.institutionName)] : []),
-    ...(hints.cardBrand ? [eq(accounts.cardBrand, hints.cardBrand)] : []),
-    ...(hints.cardLast4 ? [eq(accounts.cardLast4, hints.cardLast4)] : []),
-    ...(hints.maskedNumber ? [eq(accounts.maskedNumber, hints.maskedNumber)] : []),
-    ...(hints.ownerName ? [eq(accounts.ownerName, hints.ownerName)] : []),
-  ]
-
-  const [existing] = await db
-    .select({ id: accounts.id })
-    .from(accounts)
-    .where(and(...whereConditions))
-    .limit(1)
-
-  if (existing) return existing.id
-
-  const institutionDisplay = hints.institutionName ?? 'Cartão automático'
-  const cardBrandDisplay = hints.cardBrand ? ` ${hints.cardBrand}` : ''
-  const last4Display = hints.cardLast4 ? ` ••••${hints.cardLast4}` : ''
-  const displayName = `${institutionDisplay}${cardBrandDisplay}${last4Display}`.trim()
-
-  await db.insert(accounts).values({
-    userId: ownerId,
-    type: 'CREDIT_CARD',
-    financialChannel: 'credit_card',
-    displayName,
-    institutionName: hints.institutionName ?? institutionDisplay,
-    cardBrand: hints.cardBrand ?? undefined,
-    cardLast4: hints.cardLast4 ?? undefined,
-    maskedNumber: hints.maskedNumber ?? undefined,
-    ownerName: hints.ownerName ?? undefined,
-    closingDay: hints.closingDay ?? undefined,
-    dueDay: hints.dueDay ?? undefined,
-    source: 'receipt_document',
-    currencyCode: 'BRL',
-    isActive: true,
-  })
-
-  const [created] = await db
-    .select({ id: accounts.id })
-    .from(accounts)
-    .where(and(
-      eq(accounts.userId, ownerId),
-      eq(accounts.financialChannel, 'credit_card'),
-      ...(hints.institutionName ? [eq(accounts.institutionName, hints.institutionName)] : []),
-      ...(hints.cardBrand ? [eq(accounts.cardBrand, hints.cardBrand)] : []),
-      ...(hints.cardLast4 ? [eq(accounts.cardLast4, hints.cardLast4)] : []),
-      ...(hints.maskedNumber ? [eq(accounts.maskedNumber, hints.maskedNumber)] : []),
-      ...(hints.ownerName ? [eq(accounts.ownerName, hints.ownerName)] : []),
-      eq(accounts.source, 'receipt_document'),
-    ))
-    .limit(1)
-
-  if (!created) {
-    throw new Error('Failed to create auto card account from OCR hints')
-  }
-
-  return created.id
-}
-
 // ── GET /api/receipt-documents ───────────────────────────────────────────────
 receiptDocumentsRouter.get('/', async (req: Request, res: Response) => {
   try {
@@ -506,17 +374,23 @@ receiptDocumentsRouter.post('/', async (req: Request, res: Response) => {
       dueDay,
     })
 
+    const shouldAutoCreateCardAccount = paymentKind !== 'debit'
+      && (paymentKind === 'card' || Boolean(hints.institutionName || hints.cardLast4))
+
     const resolvedAccountId = accountId
       ? Number(accountId)
-      : await resolveOrCreateReceiptCardAccount(
+      : shouldAutoCreateCardAccount
+        ? await resolveOrCreateCreditCardAccount(
         db,
         ownerId,
         {
-          ...hints,
           institutionName: hints.institutionName || normalizeText(issuerName),
+          cardBrand: hints.cardBrand,
+          cardLast4: hints.cardLast4,
         },
-        buildReceiptFallbackDisplayName(merchantName, expectedInvoiceMonth, purchaseMonth),
-      )
+        'receipt_document',
+          )
+        : null
 
     const [result] = await db.insert(receiptDocuments).values({
       userId,
@@ -615,15 +489,18 @@ receiptDocumentsRouter.post('/scan', upload.single('file'), async (req: Request,
         ? addMonths(purchaseMonth, 1)
         : null
     const amountMinor = Number(extracted.amountMinor ?? 0)
-    const autoAccountId = await resolveOrCreateReceiptCardAccount(
-      db,
-      ownerId,
-      {
-        ...hints,
-        institutionName: hints.institutionName,
-      },
-      buildReceiptFallbackDisplayName(extracted.merchantName, expectedInvoiceMonth, purchaseMonth),
-    )
+    const autoAccountId = paymentKind !== 'debit'
+      ? await resolveOrCreateCreditCardAccount(
+        db,
+        ownerId,
+        {
+          institutionName: hints.institutionName,
+          cardBrand: hints.cardBrand,
+          cardLast4: hints.cardLast4,
+        },
+        'receipt_document',
+      )
+      : null
 
     if (!amountMinor || amountMinor <= 0) {
       return res.status(400).json({ error: 'Não foi possível extrair o valor da nota.' })

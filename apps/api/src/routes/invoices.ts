@@ -28,6 +28,7 @@ import { getDatabase } from '../config/database.js'
 import { config } from '../config/env.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { syncCardInvoiceSemanticFields } from '../services/cardInvoiceSemantics.js'
+import { resolveOrCreateCreditCardAccount } from '../services/cardAccountResolver.js'
 import { createError } from '../middlewares/errorHandler.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
 
@@ -527,24 +528,19 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
 
   let accountId: number
 
-  // Prefer matching by (userId, institutionName, cardLast4) — most specific
-  const whereConditions = [
-    eq(accounts.userId, owner.id),
-    ...(institutionName ? [eq(accounts.institutionName, institutionName)] : []),
-    ...(cardLast4 ? [eq(accounts.cardLast4, cardLast4)] : []),
-  ]
-  const hasIdentity = !!(institutionName && cardLast4)
+  const sharedAccountId = await resolveOrCreateCreditCardAccount(
+    db,
+    owner.id,
+    {
+      institutionName,
+      cardBrand,
+      cardLast4,
+    },
+    'manual',
+  )
 
-  const [existingAccount] = hasIdentity
-    ? await db
-        .select({ id: accounts.id })
-        .from(accounts)
-        .where(and(...whereConditions))
-        .limit(1)
-    : []
-
-  if (existingAccount) {
-    accountId = existingAccount.id
+  if (sharedAccountId) {
+    accountId = sharedAccountId
   } else {
     // Build a human-readable display name: "Itaú Platinum ••••9970"
     const last4Display = cardLast4 ? ` ••••${cardLast4}` : ''
