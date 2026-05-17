@@ -571,6 +571,7 @@ const INSTITUTION_MAP: Record<string, string> = {
   bradesco: 'Bradesco',
   carrefour: 'Carrefour',
   picpay: 'PicPay',
+  generic: 'Genérico',
   santander: 'Santander',
   caixa: 'Caixa Econômica Federal',
   inter: 'Banco Inter',
