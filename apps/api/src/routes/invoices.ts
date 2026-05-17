@@ -809,6 +809,17 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
             return amtOk && (merchantOk || monthOk)
           })
           if (match) {
+            const [projectedTx] = await db
+              .select({ id: cardTransactions.id })
+              .from(cardTransactions)
+              .where(
+                and(
+                  eq(cardTransactions.receiptDocumentId, note.id),
+                  eq(cardTransactions.dataState, 'projected'),
+                ),
+              )
+              .limit(1)
+
             await db
               .update(cardTransactions)
               .set({
@@ -827,6 +838,10 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
                 updatedAt: new Date(),
               })
               .where(eq(receiptDocuments.id, note.id))
+
+            if (projectedTx && projectedTx.id !== match.id) {
+              await db.delete(cardTransactions).where(eq(cardTransactions.id, projectedTx.id))
+            }
           }
         }
       }
