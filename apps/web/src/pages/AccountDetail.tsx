@@ -14,6 +14,7 @@ function getAllMonths(acc: AccountSummary): string[] {
   const set = new Set<string>()
   for (const m of acc.bankMonths) set.add(m.month)
   for (const m of acc.invoiceMonths) set.add(m.month)
+  for (const m of acc.receiptMonths) set.add(m.month)
   return Array.from(set).sort((a, b) => b.localeCompare(a))
 }
 

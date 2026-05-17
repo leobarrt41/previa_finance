@@ -17,8 +17,9 @@ import { Router, Request, Response } from 'express'
 import multer from 'multer'
 import { spawn } from 'node:child_process'
 import { getDatabase } from '../config/database.js'
-import { receiptDocuments } from '@previa/db'
+import { cardInvoices, cardTransactions, receiptDocuments } from '@previa/db'
 import { eq, and, sql } from 'drizzle-orm'
+import { buildFingerprintFromRaw } from '@previa/core'
 import { requireClerkAuth } from '../middlewares/auth.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { config } from '../config/env.js'
@@ -140,6 +141,158 @@ function buildReceiptCardIdentityHints(extracted: ReceiptExtractionAIResult): Re
     closingDay,
     dueDay,
   }
+}
+
+function buildProjectedInvoiceDueDate(invoiceMonth: string, dueDay?: number | null): Date {
+  const [yearText, monthText] = invoiceMonth.split('-')
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = typeof dueDay === 'number' && dueDay > 0 ? dueDay : 15
+  return new Date(Date.UTC(year, month - 1, day, 23, 59, 59))
+}
+
+async function syncProjectedCardReceiptArtifacts(
+  tx: any,
+  receipt: {
+    id: number
+    ownerId: number
+    accountId: number | null
+    amountMinor: number
+    purchaseDate: Date
+    purchaseMonth: string
+    expectedInvoiceMonth: string | null
+    merchantName: string | null
+    description: string | null
+    categoryId: string | null
+    installmentTotal: number | null
+    installmentCurrent: number | null
+    paymentKind: string | null
+    issuerName: string | null
+    cardBrand: string | null
+    cardLast4: string | null
+    closingDay: number | null
+    dueDay: number | null
+  },
+): Promise<void> {
+  if (!receipt.accountId || receipt.paymentKind !== 'card' || !receipt.expectedInvoiceMonth) {
+    return
+  }
+
+  const invoiceMonth = receipt.expectedInvoiceMonth
+  const [existingInvoice] = await tx
+    .select({
+      id: cardInvoices.id,
+      source: cardInvoices.source,
+      dataState: cardInvoices.dataState,
+    })
+    .from(cardInvoices)
+    .where(and(
+      eq(cardInvoices.userId, receipt.ownerId),
+      eq(cardInvoices.accountId, receipt.accountId),
+      eq(cardInvoices.invoiceMonth, invoiceMonth),
+    ))
+    .limit(1)
+
+  const projectedTotalRows = await tx
+    .select({
+      totalMinor: sql<number>`coalesce(sum(${receiptDocuments.amountMinor}), 0)`,
+    })
+    .from(receiptDocuments)
+    .where(and(
+      eq(receiptDocuments.ownerId, receipt.ownerId),
+      eq(receiptDocuments.accountId, receipt.accountId),
+      eq(receiptDocuments.expectedInvoiceMonth, invoiceMonth),
+      eq(receiptDocuments.dataState, 'projected'),
+      eq(receiptDocuments.paymentKind, 'card'),
+    ))
+
+  const projectedTotalMinor = BigInt(Number(projectedTotalRows[0]?.totalMinor ?? 0))
+  const dueDate = buildProjectedInvoiceDueDate(invoiceMonth, receipt.dueDay)
+  let cardInvoiceId = existingInvoice?.id ?? null
+
+  if (!existingInvoice) {
+    await tx.insert(cardInvoices).values({
+      userId: receipt.ownerId,
+      accountId: receipt.accountId,
+      invoiceMonth,
+      dueDate,
+      totalAmountMinor: projectedTotalMinor,
+      minimumPaymentMinor: null,
+      previousBalanceMinor: 0n,
+      paidAmountMinor: 0n,
+      openAmountMinor: projectedTotalMinor,
+      reportedPreviousBalanceMinor: 0n,
+      reportedPaidAmountMinor: 0n,
+      carriedOpenAmountMinor: 0n,
+      paymentsAllocatedMinor: 0n,
+      effectiveOpenAmountMinor: projectedTotalMinor,
+      status: projectedTotalMinor > 0n ? 'OPEN' : 'PAID',
+      source: 'receipt_document',
+      dataState: 'projected',
+      institutionName: receipt.issuerName ?? undefined,
+      cardBrand: receipt.cardBrand ?? undefined,
+      cardLast4: receipt.cardLast4 ?? undefined,
+    })
+
+    const [createdInvoice] = await tx
+      .select({ id: cardInvoices.id })
+      .from(cardInvoices)
+      .where(and(
+        eq(cardInvoices.userId, receipt.ownerId),
+        eq(cardInvoices.accountId, receipt.accountId),
+        eq(cardInvoices.invoiceMonth, invoiceMonth),
+      ))
+      .limit(1)
+
+    cardInvoiceId = createdInvoice?.id ?? null
+  } else if (existingInvoice.source === 'receipt_document' || existingInvoice.dataState === 'projected') {
+    await tx.update(cardInvoices).set({
+      totalAmountMinor: projectedTotalMinor,
+      openAmountMinor: projectedTotalMinor,
+      effectiveOpenAmountMinor: projectedTotalMinor,
+      status: projectedTotalMinor > 0n ? 'OPEN' : 'PAID',
+      updatedAt: new Date(),
+    }).where(eq(cardInvoices.id, existingInvoice.id))
+
+    cardInvoiceId = existingInvoice.id
+  }
+
+  if (!cardInvoiceId) return
+
+  const description = receipt.description || receipt.merchantName || 'Nota fiscal'
+  const { fingerprint, normalizedDescription } = buildFingerprintFromRaw({
+    competencyMonth: invoiceMonth,
+    amountMinor: BigInt(receipt.amountMinor),
+    rawDescription: description,
+  })
+
+  const installmentNumber = receipt.installmentCurrent ?? null
+  const installmentTotal = receipt.installmentTotal ?? null
+  const installmentGroupId = installmentTotal ? `${fingerprint}-${installmentTotal}` : null
+
+  await tx.insert(cardTransactions).values({
+    userId: receipt.ownerId,
+    cardInvoiceId,
+    source: 'receipt_document',
+    dataState: 'projected',
+    movementType: 'card_purchase',
+    movementSubtype: installmentTotal ? 'installment' : 'single',
+    amountMinor: BigInt(receipt.amountMinor),
+    currencyCode: 'BRL',
+    occurredAt: receipt.purchaseDate,
+    competencyMonth: invoiceMonth,
+    description,
+    normalizedDescription,
+    categoryId: receipt.categoryId,
+    categoryAssignedBy: receipt.categoryId ? 'user' : 'receipt_document',
+    merchantName: receipt.merchantName,
+    installmentNumber,
+    installmentTotal,
+    installmentGroupId,
+    fingerprint,
+    isReconciled: false,
+    receiptDocumentId: receipt.id,
+  })
 }
 
 async function extractPdfText(buffer: Buffer): Promise<string> {
@@ -392,42 +545,75 @@ receiptDocumentsRouter.post('/', async (req: Request, res: Response) => {
           )
         : null
 
-    const [result] = await db.insert(receiptDocuments).values({
-      userId,
-      ownerId,
-      amountMinor: Number(amountMinor),
-      purchaseDate: new Date(purchaseDate),
-      purchaseMonth: String(purchaseMonth),
-      expectedInvoiceMonth: expectedInvoiceMonth ? String(expectedInvoiceMonth) : null,
-      merchantName: merchantName || null,
-      merchantCnpj: merchantCnpj || null,
-      paymentKind: paymentKind === 'card' || paymentKind === 'debit' ? paymentKind : null,
-      issuerName: normalizeText(issuerName),
-      cardBrand: hints.cardBrand ?? null,
-      cardLast4: hints.cardLast4 ?? null,
-      maskedNumber: hints.maskedNumber ?? null,
-      ownerName: hints.ownerName ?? null,
-      closingDay: hints.closingDay ?? null,
-      dueDay: hints.dueDay ?? null,
-      ocrConfidenceScore: normalizeConfidence(rawPayload?.confidence),
-      categoryId: categoryId || null,
-      accountId: resolvedAccountId,
-      nfeKey: nfeKey || null,
-      nfeNumber: nfeNumber || null,
-      nfeSeries: nfeSeries || null,
-      fileUrl: fileUrl || null,
-      fileType: fileType || null,
-      installmentTotal: installmentTotal ? Number(installmentTotal) : null,
-      installmentCurrent: installmentCurrent ? Number(installmentCurrent) : null,
-      description: description || null,
-      rawPayload: rawPayload ?? null,
-      dataState: 'projected',
-    })
+    const inferredExpectedInvoiceMonth = expectedInvoiceMonth
+      ? String(expectedInvoiceMonth)
+      : paymentKind === 'card'
+        ? addMonths(String(purchaseMonth), 1)
+        : null
 
-    const [created] = await db
-      .select()
-      .from(receiptDocuments)
-      .where(eq(receiptDocuments.id, (result as any).insertId))
+    const created = await db.transaction(async (tx) => {
+      const [result] = await tx.insert(receiptDocuments).values({
+        userId,
+        ownerId,
+        amountMinor: Number(amountMinor),
+        purchaseDate: new Date(purchaseDate),
+        purchaseMonth: String(purchaseMonth),
+        expectedInvoiceMonth: inferredExpectedInvoiceMonth,
+        merchantName: merchantName || null,
+        merchantCnpj: merchantCnpj || null,
+        paymentKind: paymentKind === 'card' || paymentKind === 'debit' ? paymentKind : null,
+        issuerName: normalizeText(issuerName),
+        cardBrand: hints.cardBrand ?? null,
+        cardLast4: hints.cardLast4 ?? null,
+        maskedNumber: hints.maskedNumber ?? null,
+        ownerName: hints.ownerName ?? null,
+        closingDay: hints.closingDay ?? null,
+        dueDay: hints.dueDay ?? null,
+        ocrConfidenceScore: normalizeConfidence(rawPayload?.confidence),
+        categoryId: categoryId || null,
+        accountId: resolvedAccountId,
+        nfeKey: nfeKey || null,
+        nfeNumber: nfeNumber || null,
+        nfeSeries: nfeSeries || null,
+        fileUrl: fileUrl || null,
+        fileType: fileType || null,
+        installmentTotal: installmentTotal ? Number(installmentTotal) : null,
+        installmentCurrent: installmentCurrent ? Number(installmentCurrent) : null,
+        description: description || null,
+        rawPayload: rawPayload ?? null,
+        dataState: 'projected',
+      })
+
+      const [createdRow] = await tx
+        .select()
+        .from(receiptDocuments)
+        .where(eq(receiptDocuments.id, (result as any).insertId))
+
+      if (createdRow) {
+        await syncProjectedCardReceiptArtifacts(tx, {
+          id: createdRow.id,
+          ownerId: createdRow.ownerId,
+          accountId: createdRow.accountId,
+          amountMinor: createdRow.amountMinor,
+          purchaseDate: createdRow.purchaseDate,
+          purchaseMonth: createdRow.purchaseMonth,
+          expectedInvoiceMonth: createdRow.expectedInvoiceMonth,
+          merchantName: createdRow.merchantName,
+          description: createdRow.description,
+          categoryId: createdRow.categoryId,
+          installmentTotal: createdRow.installmentTotal,
+          installmentCurrent: createdRow.installmentCurrent,
+          paymentKind: createdRow.paymentKind,
+          issuerName: createdRow.issuerName,
+          cardBrand: createdRow.cardBrand,
+          cardLast4: createdRow.cardLast4,
+          closingDay: createdRow.closingDay,
+          dueDay: createdRow.dueDay,
+        })
+      }
+
+      return createdRow
+    })
 
     res.status(201).json(created)
   } catch (err: any) {
@@ -506,35 +692,61 @@ receiptDocumentsRouter.post('/scan', upload.single('file'), async (req: Request,
       return res.status(400).json({ error: 'Não foi possível extrair o valor da nota.' })
     }
 
-    const [result] = await db.insert(receiptDocuments).values({
-      userId,
-      ownerId,
-      amountMinor,
-      purchaseDate: parsedPurchaseDate,
-      purchaseMonth,
-      expectedInvoiceMonth,
-      merchantName: extracted.merchantName || null,
-      merchantCnpj: extracted.merchantCnpj || null,
-      paymentKind: paymentKind === 'card' || paymentKind === 'debit' ? paymentKind : null,
-      issuerName: hints.institutionName ?? null,
-      cardBrand: hints.cardBrand ?? null,
-      cardLast4: hints.cardLast4 ?? null,
-      maskedNumber: hints.maskedNumber ?? null,
-      ownerName: hints.ownerName ?? null,
-      closingDay: hints.closingDay ?? null,
-      dueDay: hints.dueDay ?? null,
-      ocrConfidenceScore: normalizeConfidence(extracted.confidence),
-      categoryId: null,
-      accountId: autoAccountId,
-      nfeKey: extracted.nfeKey || null,
-      fileUrl: req.file.originalname,
-      fileType: mimeType,
-      description: extracted.description || extracted.merchantName || null,
-      rawPayload: extracted,
-      dataState: 'projected',
-    })
+    const created = await db.transaction(async (tx) => {
+      const [result] = await tx.insert(receiptDocuments).values({
+        userId,
+        ownerId,
+        amountMinor,
+        purchaseDate: parsedPurchaseDate,
+        purchaseMonth,
+        expectedInvoiceMonth,
+        merchantName: extracted.merchantName || null,
+        merchantCnpj: extracted.merchantCnpj || null,
+        paymentKind: paymentKind === 'card' || paymentKind === 'debit' ? paymentKind : null,
+        issuerName: hints.institutionName ?? null,
+        cardBrand: hints.cardBrand ?? null,
+        cardLast4: hints.cardLast4 ?? null,
+        maskedNumber: hints.maskedNumber ?? null,
+        ownerName: hints.ownerName ?? null,
+        closingDay: hints.closingDay ?? null,
+        dueDay: hints.dueDay ?? null,
+        ocrConfidenceScore: normalizeConfidence(extracted.confidence),
+        categoryId: null,
+        accountId: autoAccountId,
+        nfeKey: extracted.nfeKey || null,
+        fileUrl: req.file.originalname,
+        fileType: mimeType,
+        description: extracted.description || extracted.merchantName || null,
+        rawPayload: extracted,
+        dataState: 'projected',
+      })
 
-    const [created] = await db.select().from(receiptDocuments).where(eq(receiptDocuments.id, (result as any).insertId))
+      const [createdRow] = await tx.select().from(receiptDocuments).where(eq(receiptDocuments.id, (result as any).insertId))
+      if (createdRow) {
+        await syncProjectedCardReceiptArtifacts(tx, {
+          id: createdRow.id,
+          ownerId: createdRow.ownerId,
+          accountId: createdRow.accountId,
+          amountMinor: createdRow.amountMinor,
+          purchaseDate: createdRow.purchaseDate,
+          purchaseMonth: createdRow.purchaseMonth,
+          expectedInvoiceMonth: createdRow.expectedInvoiceMonth,
+          merchantName: createdRow.merchantName,
+          description: createdRow.description,
+          categoryId: createdRow.categoryId,
+          installmentTotal: createdRow.installmentTotal,
+          installmentCurrent: createdRow.installmentCurrent,
+          paymentKind: createdRow.paymentKind,
+          issuerName: createdRow.issuerName,
+          cardBrand: createdRow.cardBrand,
+          cardLast4: createdRow.cardLast4,
+          closingDay: createdRow.closingDay,
+          dueDay: createdRow.dueDay,
+        })
+      }
+
+      return createdRow
+    })
 
     res.status(201).json({
       data: created,
