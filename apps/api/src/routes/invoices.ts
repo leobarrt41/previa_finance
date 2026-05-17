@@ -21,6 +21,7 @@ import { z } from 'zod'
 import { parseBBInvoice, invoiceToForecast } from '@previa/parser-bb'
 import { parseItauInvoice, itauInvoiceToForecast } from '@previa/parser-itau'
 import { parseBradescoInvoice, bradescoInvoiceToForecast } from '@previa/parser-bradesco'
+import { parseCarrefourInvoice, carrefourInvoiceToForecast } from '@previa/parser-carrefour'
 import { accounts, categories, cardInvoices, cardTransactions, receiptDocuments } from '@previa/db'
 import { buildFingerprintFromRaw } from '@previa/core'
 import { eq, and, desc, sql } from 'drizzle-orm'
@@ -47,8 +48,8 @@ const upload = multer({
 })
 
 // Supported banks — extend as parsers are added
-type BankId = 'bb' | 'itau' | 'bradesco' | 'auto'
-const BANK_PARAM = z.enum(['bb', 'itau', 'bradesco', 'auto']).default('auto')
+type BankId = 'bb' | 'itau' | 'bradesco' | 'carrefour' | 'auto'
+const BANK_PARAM = z.enum(['bb', 'itau', 'bradesco', 'carrefour', 'auto']).default('auto')
 
 function isPdfPasswordError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
@@ -236,6 +237,8 @@ router.post(
             ? 'itau'
             : filename.includes('bradesco') || filename.includes('bradescard') || filename.includes('casas bahia')
               ? 'bradesco'
+            : filename.includes('carrefour')
+              ? 'carrefour'
             : filename.includes('bb') || filename.includes('brasil')
               ? 'bb'
               : 'auto'
@@ -293,6 +296,35 @@ router.post(
 
         return {
           bank: 'itau' as const,
+          summary: {
+            ...invoice.summary,
+          },
+          transactions: txs,
+          forecasts,
+        }
+      }
+
+      const parseAsCarrefour = async () => {
+        const invoice = await parseCarrefourInvoice(file.buffer, password)
+        const forecasts = carrefourInvoiceToForecast(invoice)
+
+        const txs = invoice.transactions
+          .filter((t) => t.date)
+          .map((t, i) => ({
+            id: `carrefour-${i}`,
+            date: t.date,
+            description: t.description,
+            amountMinor: Math.abs(t.amountMinor),
+            installment: t.installment,
+            categoryId: null,
+            competencyMonth: invoice.summary.invoiceMonth,
+            include: t.amountMinor > 0,
+            category: t.category,
+            country: t.country,
+          }))
+
+        return {
+          bank: 'carrefour' as const,
           summary: {
             ...invoice.summary,
           },
@@ -362,11 +394,22 @@ router.post(
           if (isPdfPasswordError(error)) {
             throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
           }
+        }
+      }
+
+      if (hintedBank === 'carrefour') {
+        try {
+          const payload = await parseAsCarrefour()
+          return res.json(payload)
+        } catch (error) {
+          if (isPdfPasswordError(error)) {
+            throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+          }
           throw error
         }
       }
 
-      // bank=auto com filename ambíguo: tenta Itaú, depois Bradesco, depois BB.
+      // bank=auto com filename ambíguo: tenta Itaú, depois Carrefour, depois Bradesco, depois BB.
       // Isso evita parse incorreto quando o nome do arquivo não contém o banco.
       try {
         const payload = await parseAsItau()
@@ -374,6 +417,15 @@ router.post(
       } catch (error) {
         if (isPdfPasswordError(error)) {
           // Evita chamar o parser BB quando o problema já é senha.
+          throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+        }
+      }
+
+      try {
+        const payload = await parseAsCarrefour()
+        return res.json(payload)
+      } catch (error) {
+        if (isPdfPasswordError(error)) {
           throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
         }
       }
@@ -461,6 +513,7 @@ const INSTITUTION_MAP: Record<string, string> = {
   bb: 'Banco do Brasil',
   nubank: 'Nubank',
   bradesco: 'Bradesco',
+  carrefour: 'Carrefour',
   santander: 'Santander',
   caixa: 'Caixa Econômica Federal',
   inter: 'Banco Inter',
@@ -641,7 +694,9 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
               ? 'itau_v1'
               : body.bank?.toLowerCase() === 'bb'
                 ? 'bb_v1'
-                : null},
+                : body.bank?.toLowerCase() === 'carrefour'
+                  ? 'carrefour_v1'
+                  : null},
           updated_at = CURRENT_TIMESTAMP
         where id = ${existingInvoice.id}
       `)
@@ -666,7 +721,9 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
               ? 'itau_v1'
               : body.bank?.toLowerCase() === 'bb'
                 ? 'bb_v1'
-                : undefined,
+                : body.bank?.toLowerCase() === 'carrefour'
+                  ? 'carrefour_v1'
+                  : undefined,
         })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
