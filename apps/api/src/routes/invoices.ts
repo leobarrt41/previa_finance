@@ -23,6 +23,8 @@ import { parseItauInvoice, itauInvoiceToForecast } from '@previa/parser-itau'
 import { parseBradescoInvoice, bradescoInvoiceToForecast } from '@previa/parser-bradesco'
 import { parseCarrefourInvoice, carrefourInvoiceToForecast } from '@previa/parser-carrefour'
 import { parsePicPayInvoice, picPayInvoiceToForecast } from '@previa/parser-picpay'
+import { parseGenericInvoice, genericInvoiceToForecast } from '@previa/parser-generic'
+import { parseC6Invoice, c6InvoiceToForecast } from '@previa/parser-c6'
 import { accounts, categories, cardInvoices, cardTransactions, receiptDocuments } from '@previa/db'
 import { buildFingerprintFromRaw } from '@previa/core'
 import { eq, and, desc, sql } from 'drizzle-orm'
@@ -49,8 +51,8 @@ const upload = multer({
 })
 
 // Supported banks — extend as parsers are added
-type BankId = 'bb' | 'itau' | 'bradesco' | 'carrefour' | 'picpay' | 'auto'
-const BANK_PARAM = z.enum(['bb', 'itau', 'bradesco', 'carrefour', 'picpay', 'auto']).default('auto')
+type BankId = 'bb' | 'itau' | 'bradesco' | 'carrefour' | 'picpay' | 'c6' | 'generic' | 'auto'
+const BANK_PARAM = z.enum(['bb', 'itau', 'bradesco', 'carrefour', 'picpay', 'c6', 'generic', 'auto']).default('auto')
 
 function isPdfPasswordError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
@@ -242,6 +244,8 @@ router.post(
               ? 'carrefour'
             : filename.includes('picpay')
               ? 'picpay'
+            : filename.includes('c6') || filename.includes('c6bank') || filename.includes('c6-bank')
+              ? 'c6'
             : filename.includes('bb') || filename.includes('brasil')
               ? 'bb'
               : 'auto'
@@ -302,6 +306,36 @@ router.post(
           summary: {
             ...invoice.summary,
           },
+          transactions: txs,
+          forecasts,
+        }
+      }
+
+      const parseAsC6 = async () => {
+        const invoice = await parseC6Invoice(file.buffer, password)
+        const forecasts = c6InvoiceToForecast(invoice)
+
+        const txs = invoice.transactions
+          .filter((t) => t.date && t.amountMinor > 0)
+          .map((t, i) => ({
+            id: `c6-${i}`,
+            date: t.date,
+            description: t.description,
+            amountMinor: Math.abs(t.amountMinor),
+            installment: t.installment,
+            categoryId: null,
+            competencyMonth: invoice.summary.invoiceMonth,
+            include: true,
+            category: t.category,
+            country: t.country,
+            originalAmountMinor: t.originalAmountMinor,
+            originalCurrencyCode: t.originalCurrencyCode,
+            exchangeRate: t.exchangeRate,
+          }))
+
+        return {
+          bank: 'c6' as const,
+          summary: { ...invoice.summary },
           transactions: txs,
           forecasts,
         }
@@ -432,6 +466,18 @@ router.post(
         }
       }
 
+      if (hintedBank === 'c6') {
+        try {
+          const payload = await parseAsC6()
+          return res.json(payload)
+        } catch (error) {
+          if (isPdfPasswordError(error)) {
+            throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+          }
+          throw error
+        }
+      }
+
       if (hintedBank === 'picpay') {
         try {
           const payload = await parseAsPicPay()
@@ -456,14 +502,22 @@ router.post(
         }
       }
 
-      // bank=auto com filename ambíguo: tenta Itaú, depois PicPay, depois Carrefour, depois Bradesco, depois BB.
+      // bank=auto com filename ambíguo: tenta Itaú, depois C6, depois PicPay, depois Carrefour, depois Bradesco, depois BB.
       // Isso evita parse incorreto quando o nome do arquivo não contém o banco.
       try {
         const payload = await parseAsItau()
         return res.json(payload)
       } catch (error) {
         if (isPdfPasswordError(error)) {
-          // Evita chamar o parser BB quando o problema já é senha.
+          throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+        }
+      }
+
+      try {
+        const payload = await parseAsC6()
+        return res.json(payload)
+      } catch (error) {
+        if (isPdfPasswordError(error)) {
           throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
         }
       }
@@ -571,6 +625,7 @@ const INSTITUTION_MAP: Record<string, string> = {
   bradesco: 'Bradesco',
   carrefour: 'Carrefour',
   picpay: 'PicPay',
+  c6: 'C6 Bank',
   generic: 'Genérico',
   santander: 'Santander',
   caixa: 'Caixa Econômica Federal',
