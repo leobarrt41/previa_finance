@@ -820,3 +820,15 @@ DESCRIÇÃO: Ajustados os contratos e inserts de `transactions` e `card_transact
 TAGS: categories,provenance,imports,transactions,card-transactions,open-finance  
 PRIORIDADE: Média  
 STATUS: Concluido
+
+---
+## [2026-05-31 00:00]
+
+ID: 20260531-0000-mvp-status-final-prep
+SOURCE: previa_finance/codex
+CATEGORIA: Roadmap
+TÍTULO: Estado atual do MVP e próximos passos para fechamento
+DESCRIÇÃO: O app já está com a base principal do MVP encaminhada: auth com Clerk sem `users` local, conciliação de faturas via `liability_payment`, painel de faturas com `Pago no mês`, gráfico de fluxo ajustado para usar saldo aberto conciliado e forecast de receita que não duplica quando já existe receita real no mês. O commit mais recente foi enviado para o GitHub na branch `feat/backend-reconciliation-schema` (commit `eded184`). Próximos passos prioritários: organizar o dashboard, criar uma landing page pública para acesso/cadastro/login, e implementar tabelas intermediárias/read models para acelerar carregamento do dashboard e do cashflow.
+TAGS: mvp,dashboard,landing-page,clerk,cashflow,reconciliation,read-models,performance
+PRIORIDADE: Alta
+STATUS: Pendente
