@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom'
 import { api } from '../services/api'
 
 const NAV_ITEMS = [
-  { to: '/',                label: 'Dashboard',       icon: '🏠' },
+  { to: '/dashboard',       label: 'Dashboard',       icon: '🏠' },
   { to: '/cashflow',        label: 'Fluxo de caixa',  icon: '📈' },
   { to: '/budget',          label: 'Orçamento',       icon: '🎯' },
   { to: '/accounts',        label: 'Contas',          icon: '🏦' },
@@ -12,7 +12,8 @@ const NAV_ITEMS = [
   { to: '/categories',      label: 'Categorias',      icon: '🏷️' },
   { to: '/assess/spending',  label: 'Aval. Gastos',    icon: '📊' },
   { to: '/assess/debt',      label: 'Aval. Dívidas',   icon: '💳' },
-  { to: '/receipt-documents', label: 'Notas Fiscais',   icon: '🧾' },
+  { to: '/receipt-documents', label: 'Notas Fiscais',   icon: '🧧' },
+  { to: '/chat',             label: 'Previa Bot',      icon: '🤖' },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -64,7 +65,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <NavLink
               key={to}
               to={to}
-              end={to === '/'}
+              end={to === '/dashboard'}
               style={({ isActive }) => ({
                 display: 'flex',
                 alignItems: 'center',
