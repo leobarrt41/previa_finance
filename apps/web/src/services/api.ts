@@ -1034,6 +1034,19 @@ export const api = {
         body: JSON.stringify(body),
       }),
   },
+
+  // ── Chat (Previa Bot) ──────────────────────────────────────────────────
+  chat: {
+    send: (body: {
+      message: string
+      month: string
+      history: Array<{ role: 'user' | 'assistant'; content: string }>
+    }) =>
+      request<{ reply: string; context?: string }>('/api/chat', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+  },
 }
 
 // ---------------------------------------------------------------------------

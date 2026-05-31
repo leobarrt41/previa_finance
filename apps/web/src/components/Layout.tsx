@@ -1,45 +1,31 @@
-import React, { useEffect, useState } from 'react'
+import React from 'react'
 import { NavLink } from 'react-router-dom'
-import { api } from '../services/api'
+import { UserButton, useUser } from '@clerk/clerk-react'
 
 const NAV_ITEMS = [
-  { to: '/dashboard',       label: 'Dashboard',       icon: '🏠' },
-  { to: '/cashflow',        label: 'Fluxo de caixa',  icon: '📈' },
-  { to: '/budget',          label: 'Orçamento',       icon: '🎯' },
-  { to: '/accounts',        label: 'Contas',          icon: '🏦' },
-  { to: '/statements/upload', label: 'Upload Extrato', icon: '🧾' },
-  { to: '/invoices/upload', label: 'Upload Fatura',   icon: '📤' },
-  { to: '/categories',      label: 'Categorias',      icon: '🏷️' },
-  { to: '/assess/spending',  label: 'Aval. Gastos',    icon: '📊' },
-  { to: '/assess/debt',      label: 'Aval. Dívidas',   icon: '💳' },
-  { to: '/receipt-documents', label: 'Notas Fiscais',   icon: '🧧' },
-  { to: '/chat',             label: 'Previa Bot',      icon: '🤖' },
+  { to: '/dashboard',          label: 'Dashboard',       icon: '🏠' },
+  { to: '/cashflow',           label: 'Fluxo de caixa',  icon: '📈' },
+  { to: '/budget',             label: 'Orçamento',       icon: '🎯' },
+  { to: '/accounts',           label: 'Contas',          icon: '🏦' },
+  { to: '/statements/upload',  label: 'Upload Extrato',  icon: '🧾' },
+  { to: '/invoices/upload',    label: 'Upload Fatura',   icon: '📤' },
+  { to: '/categories',         label: 'Categorias',      icon: '🏷️' },
+  { to: '/assess/spending',    label: 'Aval. Gastos',    icon: '📊' },
+  { to: '/assess/debt',        label: 'Aval. Dívidas',   icon: '💳' },
+  { to: '/receipt-documents',  label: 'Notas Fiscais',   icon: '🧾' },
+  { to: '/chat',               label: 'Previa Bot',      icon: '🤖' },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const [authLabel, setAuthLabel] = useState('Carregando usuario...')
+  const { user } = useUser()
 
-  useEffect(() => {
-    let active = true
-
-    api.auth.me()
-      .then((me) => {
-        if (!active) return
-        setAuthLabel(`${me.clerkUserId} (owner ${me.ownerId})`)
-      })
-      .catch(() => {
-        if (!active) return
-        setAuthLabel('Nao autenticado')
-      })
-
-    return () => {
-      active = false
-    }
-  }, [])
+  const displayName = user?.firstName
+    ? `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`
+    : user?.emailAddresses?.[0]?.emailAddress ?? 'Utilizador'
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#0f1117', color: '#e5e7eb' }}>
-      {/* Sidebar */}
+      {/* ── Sidebar ─────────────────────────────────────────────── */}
       <aside
         style={{
           width: 220,
@@ -60,7 +46,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
 
         {/* Nav */}
-        <nav style={{ padding: '1rem 0.75rem', display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <nav style={{ padding: '1rem 0.75rem', flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
           {NAV_ITEMS.map(({ to, label, icon }) => (
             <NavLink
               key={to}
@@ -86,34 +72,47 @@ export function Layout({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
 
-        {/* Footer */}
-        <div style={{ marginTop: 'auto', padding: '1rem 1.5rem', borderTop: '1px solid #1e2130' }}>
-          <span style={{ fontSize: '0.7rem', color: '#4b5563' }}>
-            MVP · feat/frontend-manus
-          </span>
+        {/* Utilizador + Logout */}
+        <div
+          style={{
+            marginTop: 'auto',
+            padding: '1rem 1.25rem',
+            borderTop: '1px solid #1e2130',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.65rem',
+          }}
+        >
+          {/* UserButton do Clerk — avatar + menu de conta + logout */}
+          <UserButton
+            afterSignOutUrl="/"
+            appearance={{
+              elements: {
+                avatarBox: { width: 32, height: 32 },
+              },
+            }}
+          />
+          <div style={{ overflow: 'hidden' }}>
+            <div
+              style={{
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                color: '#e5e7eb',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                maxWidth: 140,
+              }}
+            >
+              {displayName}
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#4b5563' }}>MVP · beta</div>
+          </div>
         </div>
       </aside>
 
-      {/* Main content */}
-      <main style={{ flex: 1, padding: '2rem', overflowY: 'auto' }}>
-        <div
-          style={{
-            marginBottom: '1rem',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.45rem',
-            padding: '0.35rem 0.65rem',
-            borderRadius: 999,
-            border: '1px solid #2b3150',
-            background: '#171b2e',
-            color: '#c7d2fe',
-            fontSize: '0.78rem',
-            fontWeight: 600,
-          }}
-        >
-          <span>Usuario ativo:</span>
-          <span style={{ color: '#e0e7ff' }}>{authLabel}</span>
-        </div>
+      {/* ── Main content ────────────────────────────────────────── */}
+      <main style={{ flex: 1, padding: '2rem', overflowY: 'auto', minWidth: 0 }}>
         {children}
       </main>
     </div>
