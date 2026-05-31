@@ -25,8 +25,8 @@ const FEATURES = [
   },
   {
     icon: '💳',
-    title: 'Faturas sem surpresa',
-    desc: 'Importe PDF de qualquer cartão. O app calcula o impacto real no seu caixa.',
+    title: 'Faturas com preview',
+    desc: 'Importe PDFs dos cartões suportados, revise o preview e confirme antes de salvar.',
   },
   {
     icon: '🎯',

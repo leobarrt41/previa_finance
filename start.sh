@@ -8,6 +8,7 @@ fi
 
 find_listening_pids() {
   local port="$1"
+
   if command -v lsof >/dev/null 2>&1; then
     lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
     return
@@ -23,6 +24,7 @@ find_listening_pids() {
 stop_port_if_busy() {
   local port="$1"
   local label="$2"
+
   mapfile -t pids < <(find_listening_pids "$port")
   if (( ${#pids[@]} == 0 )); then
     return
@@ -32,28 +34,45 @@ stop_port_if_busy() {
   kill "${pids[@]}" 2>/dev/null || true
 }
 
-stop_port_if_busy 3001 "API"
-stop_port_if_busy 5173 "WEB"
-
-CLEANED_UP=0
-
 cleanup() {
-  if [[ "$CLEANED_UP" == "1" ]]; then
+  if [[ "${CLEANED_UP:-0}" == "1" ]]; then
     return
   fi
   CLEANED_UP=1
 
-  echo "\nParando API e WEB..."
+  echo "Parando API e WEB..."
   [[ -n "${API_PID:-}" ]] && kill "$API_PID" 2>/dev/null || true
   [[ -n "${WEB_PID:-}" ]] && kill "$WEB_PID" 2>/dev/null || true
+  wait 2>/dev/null || true
+}
+
+start_services() {
+  pnpm --filter @previa/api dev &
+  API_PID=$!
+
+  pnpm --filter previa-finance dev &
+  WEB_PID=$!
 }
 
 trap cleanup INT TERM EXIT
 
-pnpm --filter @previa/api dev &
-API_PID=$!
+while true; do
+  CLEANED_UP=0
+  API_PID=""
+  WEB_PID=""
 
-pnpm --filter previa-finance dev &
-WEB_PID=$!
+  stop_port_if_busy 3001 "API"
+  stop_port_if_busy 5173 "WEB"
 
-wait -n "$API_PID" "$WEB_PID"
+  echo "Subindo API e WEB..."
+  start_services
+
+  set +e
+  wait -n "$API_PID" "$WEB_PID"
+  EXIT_CODE=$?
+  set -e
+
+  echo "Um dos processos caiu (codigo $EXIT_CODE). Reiniciando os dois em 2s..."
+  cleanup
+  sleep 2
+done
