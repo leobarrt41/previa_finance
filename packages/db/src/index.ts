@@ -22,6 +22,7 @@ export {
   investmentTransactions,
   providerWebhookEvents,
   syncRuns,
+  subscriptions,
 } from "./schema";
 
 export type {
@@ -49,6 +50,8 @@ export type {
   NewProviderWebhookEvent,
   SyncRun,
   NewSyncRun,
+  Subscription,
+  NewSubscription,
 } from "./schema";
 
 export {

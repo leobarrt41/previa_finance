@@ -14,6 +14,7 @@ import { SpendingAssessor } from './pages/SpendingAssessor'
 import { DebtAssessor } from './pages/DebtAssessor'
 import ReceiptDocuments from './pages/ReceiptDocuments'
 import { PreviaBot } from './pages/PreviaBot'
+import { Upgrade } from './pages/Upgrade'
 
 /**
  * ProtectedRoute — redireciona para /sign-in se não autenticado.
@@ -86,6 +87,7 @@ export default function App() {
                   <Route path="/assess/debt" element={<DebtAssessor />} />
                   <Route path="/receipt-documents" element={<ReceiptDocuments />} />
                   <Route path="/chat" element={<PreviaBot />} />
+                  <Route path="/upgrade" element={<Upgrade />} />
                   {/* Fallback — redireciona para dashboard */}
                   <Route path="*" element={<Navigate to="/dashboard" replace />} />
                 </Routes>

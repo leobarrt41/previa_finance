@@ -679,3 +679,38 @@ export type NewSyncRun = typeof syncRuns.$inferInsert;
 // Re-export categories table defined in ./schema/categories.ts
 export { categories } from "./schema/categories";
 export type { Category, NewCategory } from "./schema/categories";
+
+// ---------------------------------------------------------------------------
+// Subscriptions — trial de 15 dias + plano pago via Stripe
+// ---------------------------------------------------------------------------
+
+export const subscriptions = mysqlTable(
+  "subscriptions",
+  {
+    id: bigint("id", { mode: "number", unsigned: true })
+      .autoincrement()
+      .primaryKey(),
+    clerkUserId: varchar("clerk_user_id", { length: 255 }).notNull(),
+    plan: varchar("plan", { length: 50 }).notNull().default("monthly"),
+    status: varchar("status", { length: 50 }).notNull().default("trialing"),
+    // status values: 'trialing' | 'active' | 'past_due' | 'canceled' | 'expired'
+    trialStartedAt: timestamp("trial_started_at").notNull(),
+    trialEndsAt: timestamp("trial_ends_at").notNull(),
+    currentPeriodStart: timestamp("current_period_start"),
+    currentPeriodEnd: timestamp("current_period_end"),
+    canceledAt: timestamp("canceled_at"),
+    stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
+    stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
+    stripePriceId: varchar("stripe_price_id", { length: 255 }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("uq_subscriptions_clerk_user").on(t.clerkUserId),
+    index("idx_subscriptions_status").on(t.status),
+    index("idx_subscriptions_stripe_customer").on(t.stripeCustomerId),
+    index("idx_subscriptions_stripe_sub").on(t.stripeSubscriptionId),
+  ],
+);
+
+export type Subscription = typeof subscriptions.$inferSelect;
+export type NewSubscription = typeof subscriptions.$inferInsert;

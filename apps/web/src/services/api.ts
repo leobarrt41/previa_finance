@@ -108,6 +108,19 @@ export class ApiError extends Error {
 // Types — mapeados dos contratos reais da API
 // ---------------------------------------------------------------------------
 
+// --- Subscription ---
+
+export interface SubscriptionStatus {
+  status: 'trialing' | 'active' | 'past_due' | 'canceled' | 'expired'
+  trialEndsAt: string | null
+  currentPeriodEnd: string | null
+  daysRemaining: number
+  isActive: boolean
+  plan: string
+  stripeCustomerId: string | null
+  stripeSubscriptionId: string | null
+}
+
 // --- CashFlow ---
 
 export interface CashFlowTransaction {
@@ -1045,6 +1058,27 @@ export const api = {
       request<{ reply: string; context?: string }>('/api/chat', {
         method: 'POST',
         body: JSON.stringify(body),
+      }),
+  },
+
+  // ── Subscription (Stripe) ──────────────────────────────────────────────
+  subscription: {
+    /** Retorna o estado da assinatura; cria trial de 15 dias se não existe. */
+    me: () =>
+      request<SubscriptionStatus>('/api/subscription/me'),
+
+    /** Cria uma sessão de checkout Stripe e retorna a URL de pagamento. */
+    createCheckout: (opts?: { successUrl?: string; cancelUrl?: string }) =>
+      request<{ url: string; sessionId: string }>('/api/subscription/create-checkout', {
+        method: 'POST',
+        body: JSON.stringify(opts ?? {}),
+      }),
+
+    /** Cancela a assinatura no final do período atual. */
+    cancel: () =>
+      request<{ success: boolean; canceledAt: string }>('/api/subscription/cancel', {
+        method: 'POST',
+        body: JSON.stringify({}),
       }),
   },
 }

@@ -22,6 +22,8 @@ app.use(cors({
   origin: config.frontend.url,
   credentials: true
 }))
+// Stripe webhook precisa de raw body ANTES do express.json()
+app.use('/api/subscription/webhook', express.raw({ type: 'application/json' }))
 app.use(express.json({ limit: '10mb' })) // Para uploads de PDF
 app.use(requestLogger)
 

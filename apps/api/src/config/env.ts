@@ -67,5 +67,13 @@ export const config = {
     apiKey: process.env.AI_API_KEY || process.env.OPENAI_API_KEY || '',
     model: process.env.AI_MODEL || process.env.LLM_MODEL_CLASSIFIER || 'gpt-4o-mini',
     baseUrl: process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+  },
+
+  billing: {
+    stripeSecretKey: process.env.STRIPE_SECRET_KEY || '',
+    stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+    stripePriceId: process.env.STRIPE_PRICE_ID || 'price_1TdEEy2HW1BQKySlLGuQ5MtM',
+    trialDays: parseInt(process.env.TRIAL_DAYS || '15', 10),
+    monthlyPriceBRL: parseFloat(process.env.MONTHLY_PRICE_BRL || '14.99'),
   }
 }

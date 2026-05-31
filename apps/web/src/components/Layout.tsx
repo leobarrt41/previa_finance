@@ -1,6 +1,7 @@
-import React from 'react'
-import { NavLink } from 'react-router-dom'
+import React, { useEffect, useState } from 'react'
+import { NavLink, useNavigate } from 'react-router-dom'
 import { UserButton, useUser } from '@clerk/clerk-react'
+import { api, type SubscriptionStatus } from '../services/api'
 
 const NAV_ITEMS = [
   { to: '/dashboard',          label: 'Dashboard',       icon: '🏠' },
@@ -18,10 +19,26 @@ const NAV_ITEMS = [
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user } = useUser()
+  const navigate = useNavigate()
+  const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null)
 
   const displayName = user?.firstName
     ? `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`
     : user?.emailAddresses?.[0]?.emailAddress ?? 'Utilizador'
+
+  useEffect(() => {
+    api.subscription.me().then(setSubscription).catch(() => {
+      // Silenciar erros de rede — não bloquear o layout
+    })
+  }, [])
+
+  const showTrialBanner =
+    subscription?.status === 'trialing' &&
+    subscription.isActive &&
+    subscription.daysRemaining <= 15
+
+  const showExpiredBanner =
+    subscription !== null && !subscription.isActive
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#0f1117', color: '#e5e7eb' }}>
@@ -70,6 +87,29 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <span>{label}</span>
             </NavLink>
           ))}
+
+          {/* Link de upgrade na sidebar */}
+          <NavLink
+            to="/upgrade"
+            style={({ isActive }) => ({
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.6rem',
+              padding: '0.55rem 0.85rem',
+              borderRadius: 8,
+              textDecoration: 'none',
+              fontSize: '0.9rem',
+              fontWeight: isActive ? 700 : 400,
+              color: isActive ? '#f59e0b' : '#f59e0b',
+              background: isActive ? '#1e2130' : 'transparent',
+              marginTop: 8,
+              borderTop: '1px solid #1e2130',
+              paddingTop: '0.75rem',
+            })}
+          >
+            <span>⭐</span>
+            <span>Assinar</span>
+          </NavLink>
         </nav>
 
         {/* Utilizador + Logout */}
@@ -112,8 +152,88 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* ── Main content ────────────────────────────────────────── */}
-      <main style={{ flex: 1, padding: '2rem', overflowY: 'auto', minWidth: 0 }}>
-        {children}
+      <main style={{ flex: 1, overflowY: 'auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {/* Banner de trial a expirar */}
+        {showTrialBanner && (
+          <div
+            style={{
+              background: 'linear-gradient(90deg, #1e1b4b, #312e81)',
+              borderBottom: '1px solid #4338ca',
+              padding: '0.6rem 2rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '1rem',
+              flexShrink: 0,
+            }}
+          >
+            <span style={{ fontSize: '0.875rem', color: '#c7d2fe' }}>
+              ⏳ O seu trial gratuito expira em{' '}
+              <strong style={{ color: '#e0e7ff' }}>
+                {subscription!.daysRemaining === 1
+                  ? '1 dia'
+                  : `${subscription!.daysRemaining} dias`}
+              </strong>
+              .
+            </span>
+            <button
+              onClick={() => navigate('/upgrade')}
+              style={{
+                background: '#6366f1',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                padding: '0.35rem 0.9rem',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Assinar agora
+            </button>
+          </div>
+        )}
+
+        {/* Banner de assinatura expirada */}
+        {showExpiredBanner && (
+          <div
+            style={{
+              background: 'linear-gradient(90deg, #450a0a, #7f1d1d)',
+              borderBottom: '1px solid #dc2626',
+              padding: '0.6rem 2rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '1rem',
+              flexShrink: 0,
+            }}
+          >
+            <span style={{ fontSize: '0.875rem', color: '#fecaca' }}>
+              🔒 O seu acesso expirou. Assine para continuar a usar o Previa Finance.
+            </span>
+            <button
+              onClick={() => navigate('/upgrade')}
+              style={{
+                background: '#dc2626',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                padding: '0.35rem 0.9rem',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Reativar acesso
+            </button>
+          </div>
+        )}
+
+        <div style={{ flex: 1, padding: '2rem' }}>
+          {children}
+        </div>
       </main>
     </div>
   )
