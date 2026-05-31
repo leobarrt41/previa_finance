@@ -93,15 +93,20 @@ function sumPendingRecurringExpenseMinor(recurring: CashFlowRecurringTransaction
 function toChartData(
   monthly: MonthlyCashFlow[],
   recurring: CashFlowRecurringTransaction[],
-  cardTotalsByMonth = new Map<string, number>(),
+  cardOpenByMonth = new Map<string, number>(),
 ) {
   const activeMonth = currentMonth()
+  let rollingCardOpenMinor = 0
 
   return monthly.map((m) => {
     const pendingRecurringExpenseMinor = sumPendingRecurringExpenseMinor(recurring, m.competencyMonth)
     const statementOutflowMinor = Number(m.statementOutflowMinor ?? 0)
-    const cardTotalMinor = cardTotalsByMonth.get(m.competencyMonth) ?? Number(m.debtOpenMinor)
-    const orangeMinor = m.competencyMonth < activeMonth ? 0 : cardTotalMinor
+
+    if (cardOpenByMonth.has(m.competencyMonth)) {
+      rollingCardOpenMinor = cardOpenByMonth.get(m.competencyMonth) ?? 0
+    }
+
+    const orangeMinor = m.competencyMonth < activeMonth ? 0 : rollingCardOpenMinor
 
     return {
       month: m.competencyMonth,
@@ -283,9 +288,9 @@ export function CashFlow() {
 
   const cardInvoicesByMonth = state.status === 'success' ? state.data.cardInvoicesByMonth ?? [] : []
   const currentCardInvoiceRows = cardInvoicesByMonth.filter((f) => f.invoiceMonth === startMonth)
-  const cardTotalsByMonth = cardInvoicesByMonth.reduce((acc, row) => {
+  const cardOpenByMonth = cardInvoicesByMonth.reduce((acc, row) => {
     const current = acc.get(row.invoiceMonth) ?? 0
-    acc.set(row.invoiceMonth, current + Number(row.totalFaturaMinor || 0))
+    acc.set(row.invoiceMonth, current + Number(row.openAmountMinor || 0))
     return acc
   }, new Map<string, number>())
   // Validation
@@ -429,7 +434,7 @@ export function CashFlow() {
 
   const chartData =
     state.status === 'success'
-      ? toChartData(state.data.monthly, recurring, cardTotalsByMonth)
+      ? toChartData(state.data.monthly, recurring, cardOpenByMonth)
       : []
   const recurringExpenseItems = recurring.filter((item) => item.amountMinor < 0)
 
@@ -467,6 +472,7 @@ export function CashFlow() {
                   <th style={{ padding: '4px 8px' }}>Pago na fatura anterior</th>
                   <th style={{ padding: '4px 8px' }}>Compras do mês</th>
                   <th style={{ padding: '4px 8px' }}>Total da fatura</th>
+                  <th style={{ padding: '4px 8px' }}>Pago no mês</th>
                 </tr>
               </thead>
               <tbody>
@@ -483,6 +489,7 @@ export function CashFlow() {
                     <td style={{ padding: '4px 8px', color: '#4ade80', fontWeight: 600 }}>{formatBRL(Number(f.paidAmountMinor))}</td>
                     <td style={{ padding: '4px 8px', color: '#fbbf24', fontWeight: 600 }}>{formatBRL(Number(f.comprasDoMesMinor))}</td>
                     <td style={{ padding: '4px 8px', color: '#fbbf24', fontWeight: 700 }}>{formatBRL(Number(f.totalFaturaMinor))}</td>
+                    <td style={{ padding: '4px 8px', color: '#4ade80', fontWeight: 600 }}>{formatBRL(Number(f.pagoNoMesMinor))}</td>
                   </tr>
                 ))}
               </tbody>
@@ -677,7 +684,7 @@ export function CashFlow() {
                           recebido: 'Recebido',
                           pago: 'Saídas do extrato',
                           previsto: 'Débitos recorrentes',
-                          cartaoProjetado: 'Faturas do cartão',
+                          cartaoProjetado: 'Fatura em aberto',
                           saldo: 'Saldo final',
                         }
                         return [formatBRL(Number(v ?? 0) * 100), labels[String(name)] ?? String(name)]

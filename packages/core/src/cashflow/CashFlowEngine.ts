@@ -45,6 +45,13 @@ export class CashFlowEngine {
       txByMonth.set(t.competencyMonth, arr)
     })
 
+    const realIncomeMonths = new Set<CompetencyMonth>()
+    ;(input.transactions || []).forEach((t) => {
+      if (t.type === 'income' && t.amountMinor > 0) {
+        realIncomeMonths.add(t.competencyMonth)
+      }
+    })
+
     // build forecast additions per month — split income/expense
     const forecastIncomeByMonth = new Map<CompetencyMonth, Minor>()
     const forecastExpenseByMonth = new Map<CompetencyMonth, Minor>()
@@ -60,6 +67,7 @@ export class CashFlowEngine {
 
       const addToMonth = (m: CompetencyMonth) => {
         if (m <= currentMonth) return
+        if (!isNeg && realIncomeMonths.has(m)) return
         const curr = targetMap.get(m) || zero()
         targetMap.set(m, add(curr, absAmt))
       }

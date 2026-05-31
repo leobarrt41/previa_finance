@@ -25,6 +25,10 @@ import { requireClerkAuth } from '../middlewares/auth.js'
 import { createError } from '../middlewares/errorHandler.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { syncCardInvoiceSemanticFields } from '../services/cardInvoiceSemantics.js'
+import {
+  isCreditCardInvoiceCategory,
+  reconcileInvoicePayment,
+} from '../services/cardInvoiceReconciliation.js'
 
 const router: Router = Router()
 
@@ -449,6 +453,9 @@ function isCashNeutralSweep(description: string): boolean {
     || normalized.includes('fundo')
 }
 
+const CARD_PAYMENT_PATTERN =
+  /PAG(AMENTO)?\s+(FATURA|CART[A\u00c3]O|FAT)|FATURA\s+CART[A\u00c3]O|PAGTO\s+CART[A\u00c3]O(\s+CR[E\u00c9]DITO)?|PAYMENT\s+CREDIT|PAG\s+CARTAO|PAGTO\s+CART\b/i
+
 function isLikelyCardPayment(description: string): boolean {
   const normalized = normalizeText(description)
   if (CARD_PAYMENT_PATTERN.test(description)) return true
@@ -548,17 +555,31 @@ function parseOfxTag(block: string, tag: string): string | null {
   return match?.[1]?.trim() ?? null
 }
 
+function normalizeBankAccountId(value: string | null): string | null {
+  if (!value) return null
+
+  const trimmed = value.trim()
+  if (!trimmed) return null
+
+  // OFX files sometimes alternate between "50625" and "50625-7" for the
+  // same account. Keep the base token before separators so imports map to the
+  // same persisted account.
+  const [base] = trimmed.split(/[^0-9A-Za-z]+/, 1)
+  const normalized = (base ?? trimmed).replace(/[^0-9A-Za-z]/g, '')
+  return normalized || null
+}
+
 function parseOfxStatement(buffer: Buffer) {
   const text = buffer.toString('latin1')
   const txBlocks = [...text.matchAll(/<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi)]
   const parsed: Array<Record<string, unknown>> = []
 
-  const providerAccountId = parseOfxTag(text, 'ACCTID')
+  const providerAccountId = normalizeBankAccountId(parseOfxTag(text, 'ACCTID'))
   const org = parseOfxTag(text, 'ORG')
   const fid = parseOfxTag(text, 'FID')
   const institutionName = org ?? fid ?? null
   const accountLast4 = providerAccountId
-    ? providerAccountId.replace(/\D/g, '').slice(-4) || null
+    ? providerAccountId.slice(-4) || null
     : null
 
   for (const [_, block] of txBlocks) {
@@ -637,8 +658,9 @@ type StatementSourceAccount = {
 
 async function detectStatementAccount(ownerId: number, sourceAccount: StatementSourceAccount) {
   const db = getDatabase()
+  const normalizedProviderAccountId = normalizeBankAccountId(sourceAccount.providerAccountId)
 
-  if (sourceAccount.providerAccountId) {
+  if (normalizedProviderAccountId) {
     const [byProvider] = await db
       .select({ id: accounts.id, displayName: accounts.displayName })
       .from(accounts)
@@ -646,7 +668,7 @@ async function detectStatementAccount(ownerId: number, sourceAccount: StatementS
         and(
           eq(accounts.userId, ownerId),
           eq(accounts.financialChannel, 'bank_account'),
-          eq(accounts.providerAccountId, sourceAccount.providerAccountId),
+          eq(accounts.providerAccountId, normalizedProviderAccountId),
         ),
       )
       .limit(1)
@@ -672,7 +694,8 @@ async function detectStatementAccount(ownerId: number, sourceAccount: StatementS
       .limit(1)
 
     if (byInstitution) {
-      if (!sourceAccount.providerAccountId || byInstitution.providerAccountId === sourceAccount.providerAccountId) {
+      const existingProviderAccountId = normalizeBankAccountId(byInstitution.providerAccountId)
+      if (!normalizedProviderAccountId || existingProviderAccountId === normalizedProviderAccountId) {
         return { id: byInstitution.id, displayName: byInstitution.displayName }
       }
     }
@@ -721,7 +744,7 @@ async function resolveStatementAccountId(
       financialChannel: 'bank_account',
       displayName,
       institutionName: sourceAccount.institutionName,
-      providerAccountId: sourceAccount.providerAccountId,
+      providerAccountId: normalizeBankAccountId(sourceAccount.providerAccountId) ?? undefined,
       source: 'manual',
       currencyCode: 'BRL',
       isActive: true,
@@ -965,161 +988,6 @@ router.post('/statement/classify', async (req: Request, res: Response) => {
   res.json({ suggestions })
 })
 
-// ---------------------------------------------------------------------------
-// Invoice reconciliation helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Maps known institution name fragments found in bank statement descriptions
- * to the key used in `accounts.institution_name`.
- * Order matters: more specific patterns first.
- */
-const INSTITUTION_PATTERNS: Array<{ pattern: RegExp; key: string }> = [
-  { pattern: /BANCO DO BRASIL|PAG\s*BB\b/i, key: 'Banco do Brasil' },
-  { pattern: /ITAU\s+UNIBANCO|ITAU\b|ITAÚ/i, key: 'Itaú' },
-  { pattern: /BRADESCO/i, key: 'Bradesco' },
-  { pattern: /NUBANK|NU PAG/i, key: 'Nubank' },
-  { pattern: /SANTANDER/i, key: 'Santander' },
-  { pattern: /CAIXA|C\.E\.F/i, key: 'Caixa' },
-  { pattern: /BTG/i, key: 'BTG' },
-  { pattern: /\bINTER\b/i, key: 'Inter' },
-  { pattern: /\bC6\b/i, key: 'C6' },
-  { pattern: /PICPAY/i, key: 'PicPay' },
-  { pattern: /SICOOB/i, key: 'Sicoob' },
-  { pattern: /SICREDI/i, key: 'Sicredi' },
-  { pattern: /XP INVESTIMENTOS|XP INC/i, key: 'XP' },
-]
-
-const CARD_PAYMENT_PATTERN =
-  /PAG(AMENTO)?\s+(FATURA|CART[A\u00c3]O|FAT)|FATURA\s+CART[A\u00c3]O|PAGTO\s+CART[A\u00c3]O(\s+CR[E\u00c9]DITO)?|PAYMENT\s+CREDIT|PAG\s+CARTAO|PAGTO\s+CART\b/i
-
-/**
- * Returns the institution key to look up in `card_invoices` for a given
- * liability_payment transaction.
- *
- * Rule: if another bank is named in the description → that institution.
- * Otherwise → same institution as the source bank account.
- */
-function detectInvoiceTargetInstitution(
-  description: string,
-  sourceInstitution: string | null,
-): string | null {
-  if (!CARD_PAYMENT_PATTERN.test(description)) return null
-  for (const { pattern, key } of INSTITUTION_PATTERNS) {
-    if (pattern.test(description)) return key
-  }
-  return sourceInstitution
-}
-
-type DbType = ReturnType<typeof getDatabase>
-
-/**
- * Allocates a liability_payment transaction to open card invoices.
- * Oldest-due-date first, partial payments supported.
- */
-async function reconcileInvoicePayment(
-  db: DbType,
-  userId: number,
-  payment: { id: number; amountMinor: bigint; occurredAt: Date; description: string },
-  sourceInstitution: string | null,
-): Promise<void> {
-  // Payment amount is negative in the bank account → negate to get positive
-  const paymentAmount = payment.amountMinor < 0n ? -payment.amountMinor : payment.amountMinor
-  if (paymentAmount === 0n) return
-
-  const targetInstitution = detectInvoiceTargetInstitution(payment.description, sourceInstitution)
-  if (!targetInstitution) return
-
-  // Skip if this transaction was already reconciled
-  const existing = await db
-    .select({ id: cardInvoicePayments.id })
-    .from(cardInvoicePayments)
-    .where(eq(cardInvoicePayments.transactionId, payment.id))
-    .limit(1)
-  if (existing.length > 0) return
-
-  // Janela assimétrica: pagamento ocorre tipicamente antes ou no dia do vencimento.
-  // -60 dias: cobre pagamentos antecipados de faturas em aberto.
-  // +5 dias: tolerância mínima para atraso, evita alocar faturas futuras erradas.
-  const windowStart = new Date(payment.occurredAt.getTime() - 60 * 24 * 60 * 60 * 1000)
-  const windowEnd = new Date(payment.occurredAt.getTime() + 5 * 24 * 60 * 60 * 1000)
-
-  // When targetInstitution == sourceInstitution the payment description is generic
-  // (e.g. "Pagto cartão crédito" from BB) and does not name the card institution.
-  // In that case we search ALL open invoices within the window and use the payment
-  // amount as the matching signal (exact match first, then oldest-due-date order).
-  const isGenericPayment = targetInstitution === sourceInstitution
-
-  const baseConditions = and(
-    eq(cardInvoices.userId, userId),
-    gt(cardInvoices.openAmountMinor, 0n),
-    gte(cardInvoices.dueDate, windowStart),
-    lte(cardInvoices.dueDate, windowEnd),
-  )
-
-  const openInvoices = await db
-    .select({
-      id: cardInvoices.id,
-      dueDate: cardInvoices.dueDate,
-      openAmountMinor: cardInvoices.openAmountMinor,
-      paidAmountMinor: cardInvoices.paidAmountMinor,
-    })
-    .from(cardInvoices)
-    .innerJoin(accounts, eq(accounts.id, cardInvoices.accountId))
-    .where(
-      isGenericPayment
-        ? baseConditions
-        : and(
-            baseConditions,
-            sql`LOWER(${accounts.institutionName}) LIKE LOWER(${`%${targetInstitution}%`})`,
-          ),
-    )
-    .orderBy(cardInvoices.dueDate)
-
-  if (openInvoices.length === 0) return
-
-  // For generic payments: prefer invoices whose openAmountMinor exactly matches
-  // the payment amount (most likely the correct fatura). Sort exact matches first.
-  const sortedInvoices = isGenericPayment
-    ? [
-        ...openInvoices.filter((inv) => inv.openAmountMinor === paymentAmount),
-        ...openInvoices.filter((inv) => inv.openAmountMinor !== paymentAmount),
-      ]
-    : openInvoices
-
-  let remaining = paymentAmount
-  for (const invoice of sortedInvoices) {
-    if (remaining <= 0n) break
-    const allocate = remaining < invoice.openAmountMinor ? remaining : invoice.openAmountMinor
-
-    await db.insert(cardInvoicePayments).values({
-      userId,
-      cardInvoiceId: invoice.id,
-      transactionId: payment.id,
-      allocatedAmountMinor: allocate,
-      currencyCode: 'BRL',
-      paymentDate: payment.occurredAt,
-      source: isGenericPayment ? 'statement_reconciliation_generic' : 'statement_reconciliation_institution',
-      matchedBy: invoice.openAmountMinor === paymentAmount ? 'exact_open_amount' : 'oldest_due_open_invoice',
-      confidenceScore: invoice.openAmountMinor === paymentAmount ? '1.0000' : '0.7000',
-    }).onDuplicateKeyUpdate({ set: { allocatedAmountMinor: allocate } })
-
-    const newPaid = invoice.paidAmountMinor + allocate
-    const newOpen = invoice.openAmountMinor - allocate
-    await db.update(cardInvoices)
-      .set({
-        paidAmountMinor: newPaid,
-        openAmountMinor: newOpen,
-        status: newOpen === 0n ? 'PAID' : 'OPEN',
-      })
-      .where(eq(cardInvoices.id, invoice.id))
-
-    await syncCardInvoiceSemanticFields(db, invoice.id)
-
-    remaining -= allocate
-  }
-}
-
 router.post('/statement/import', async (req: Request, res: Response) => {
   const owner = await resolveOwnerId(req.authUser!.clerkUserId)
   const body = statementImportSchema.parse(req.body)
@@ -1141,12 +1009,26 @@ router.post('/statement/import', async (req: Request, res: Response) => {
 
   const requestedCategoryIds = [...new Set(selected.map((tx) => tx.categoryId).filter(Boolean) as string[])]
   const validCategoryIds = new Set<string>()
+  const categoryById = new Map<string, { id: string; name: string; slug: string; parentId: string | null }>()
   if (requestedCategoryIds.length > 0) {
     const found = await db
-      .select({ id: categories.id })
+      .select({
+        id: categories.id,
+        name: categories.name,
+        slug: categories.slug,
+        parentId: categories.parentId,
+      })
       .from(categories)
       .where(inArray(categories.id, requestedCategoryIds))
-    for (const row of found) validCategoryIds.add(row.id)
+    for (const row of found) {
+      validCategoryIds.add(row.id)
+      categoryById.set(row.id, {
+        id: row.id,
+        name: row.name,
+        slug: row.slug,
+        parentId: row.parentId ?? null,
+      })
+    }
   }
 
   let skippedInvalid = 0
@@ -1201,7 +1083,9 @@ router.post('/statement/import', async (req: Request, res: Response) => {
         accountId: destinationAccountId,
         source: 'pdf_statement',
         dataState: 'consolidated',
-        movementType: tx.movementType ?? (tx.amountMinor < 0 ? 'expense' : 'income'),
+        movementType: isCreditCardInvoiceCategory(tx.categoryId, categoryById)
+          ? 'liability_payment'
+          : (tx.movementType ?? (tx.amountMinor < 0 ? 'expense' : 'income')),
         movementSubtype: tx.movementSubtype ?? null,
         financialChannel: 'bank_account',
         amountMinor,
@@ -1312,6 +1196,7 @@ router.post('/statement/import', async (req: Request, res: Response) => {
                 amountMinor: transactions.amountMinor,
                 occurredAt: transactions.occurredAt,
                 description: transactions.description,
+                categoryId: transactions.categoryId,
               })
               .from(transactions)
               .where(
@@ -1324,7 +1209,18 @@ router.post('/statement/import', async (req: Request, res: Response) => {
           : []
 
         for (const tx of insertedPayments) {
-          await reconcileInvoicePayment(db, owner.id, tx, sourceAcc?.institutionName ?? null)
+          await reconcileInvoicePayment(
+            db,
+            owner.id,
+            {
+              id: tx.id,
+              amountMinor: tx.amountMinor,
+              occurredAt: tx.occurredAt,
+              description: tx.description,
+              forceInvoiceMatch: isCreditCardInvoiceCategory(tx.categoryId ?? null, categoryById),
+            },
+            sourceAcc?.institutionName ?? null,
+          )
         }
       } catch (err) {
         // Reconciliation failure must not roll back the import

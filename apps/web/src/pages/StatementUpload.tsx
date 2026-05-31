@@ -17,6 +17,36 @@ function isInvestmentSweep(description: string): boolean {
   )
 }
 
+function normalizeCategoryText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+}
+
+function isCreditCardInvoiceCategoryId(
+  categoryId: string | null,
+  categories: Category[],
+): boolean {
+  if (!categoryId) return false
+
+  const byId = new Map(categories.map((category) => [category.id, category]))
+  let current = byId.get(categoryId) ?? null
+  let sawPayment = false
+  let sawInvoice = false
+  let sawCard = false
+
+  while (current) {
+    const text = normalizeCategoryText(`${current.name} ${current.slug ?? ''}`)
+    if (/(pagament|pagos?)/.test(text)) sawPayment = true
+    if (/fatura/.test(text)) sawInvoice = true
+    if (/cartao|credito/.test(text)) sawCard = true
+    current = current.parentId ? byId.get(current.parentId) ?? null : null
+  }
+
+  return sawPayment && sawInvoice && sawCard
+}
+
 function DropZone({ onFile }: { onFile: (file: File) => void }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
@@ -212,6 +242,14 @@ export function StatementUpload() {
 
   function updateRow(id: string, patch: Partial<StatementPreviewTransaction>) {
     setTransactions((prev) => prev.map((tx) => (tx.id === id ? { ...tx, ...patch } : tx)))
+  }
+
+  function updateRowCategory(id: string, categoryId: string | null) {
+    const isInvoicePayment = isCreditCardInvoiceCategoryId(categoryId, categories)
+    updateRow(id, {
+      categoryId,
+      movementType: isInvoicePayment ? 'liability_payment' : undefined,
+    })
   }
 
   async function ensureCategoriesLoaded(): Promise<Category[]> {
@@ -434,7 +472,13 @@ export function StatementUpload() {
                       key={tx.id}
                       tx={tx}
                       categoryOptions={tx.movementType === 'income' ? categoryOptionsByType.income : categoryOptionsByType.expense}
-                      onChange={updateRow}
+                      onChange={(id, patch) => {
+                        if (patch.categoryId !== undefined) {
+                          updateRowCategory(id, patch.categoryId)
+                          return
+                        }
+                        updateRow(id, patch)
+                      }}
                     />
                   ))}
                 </tbody>

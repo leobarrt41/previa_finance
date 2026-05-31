@@ -5,6 +5,11 @@ import { accounts, cardInvoices, cardTransactions, categories, receiptDocuments,
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { buildCardInvoiceSemanticView } from '../services/cardInvoiceSemantics.js'
+import {
+  isCreditCardInvoiceCategory,
+  loadCategoryHierarchyById,
+  reconcileInvoicePayment,
+} from '../services/cardInvoiceReconciliation.js'
 import { createError } from '../middlewares/errorHandler.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
 
@@ -116,9 +121,11 @@ router.get('/', async (req: Request, res: Response) => {
   }
 
   for (const row of receiptRows) {
-    const arr = receiptByAccount.get(row.accountId) ?? []
+    if (row.accountId == null) continue
+    const accountId = row.accountId
+    const arr = receiptByAccount.get(accountId) ?? []
     arr.push({ month: row.month, count: Number(row.count ?? 0) })
-    receiptByAccount.set(row.accountId, arr)
+    receiptByAccount.set(accountId, arr)
   }
 
   const items = accountRows
@@ -473,6 +480,44 @@ router.patch('/bank-transactions/:transactionId/category', async (req: Request, 
       .update(transactions)
       .set({ categoryId, updatedAt: new Date() })
       .where(and(eq(transactions.id, transactionId), eq(transactions.userId, owner.id)))
+
+    if (categoryId) {
+      const categoryHierarchy = await loadCategoryHierarchyById(db, categoryId)
+      if (isCreditCardInvoiceCategory(categoryId, categoryHierarchy)) {
+        const [txToReconcile] = await db
+          .select({
+            id: transactions.id,
+            amountMinor: transactions.amountMinor,
+            occurredAt: transactions.occurredAt,
+            description: transactions.description,
+            accountId: transactions.accountId,
+          })
+          .from(transactions)
+          .where(and(eq(transactions.id, transactionId), eq(transactions.userId, owner.id)))
+          .limit(1)
+
+        if (txToReconcile) {
+          const [sourceAcc] = await db
+            .select({ institutionName: accounts.institutionName })
+            .from(accounts)
+            .where(eq(accounts.id, txToReconcile.accountId))
+            .limit(1)
+
+          await reconcileInvoicePayment(
+            db,
+            owner.id,
+            {
+              id: txToReconcile.id,
+              amountMinor: txToReconcile.amountMinor,
+              occurredAt: txToReconcile.occurredAt,
+              description: txToReconcile.description,
+              forceInvoiceMatch: true,
+            },
+            sourceAcc?.institutionName ?? null,
+          )
+        }
+      }
+    }
 
     const [updatedTx] = await db
       .select({

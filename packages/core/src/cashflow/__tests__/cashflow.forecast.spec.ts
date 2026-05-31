@@ -117,6 +117,36 @@ describe('CashFlowEngine — forecast behavior', () => {
     expect(out.monthly.find(m => m.competencyMonth === '2027-12')!.totalIncomeMinor).toBe(1000000)
   })
 
+  it('does not add forecast income when real income exists in the same month', () => {
+    const forecast: CashFlowForecast = {
+      id: 'f6',
+      competencyMonth: '2026-05',
+      amountMinor: 200000,
+      recurrence: 'one-time',
+      description: 'Salário previsto'
+    }
+
+    const input: CashFlowInput = {
+      openingBalanceMinor: 0,
+      transactions: [
+        {
+          id: 'tx-1',
+          competencyMonth: '2026-05',
+          type: 'income',
+          amountMinor: 150000,
+        },
+      ],
+      forecasts: [forecast],
+      currentMonth: '2026-04',
+      projectionMonths: ['2026-04', '2026-05']
+    }
+
+    const out = CashFlowEngine.project(input)
+
+    expect(out.monthly.find(m => m.competencyMonth === '2026-05')!.totalIncomeMinor).toBe(150000)
+    expect(out.monthly.find(m => m.competencyMonth === '2026-05')!.projectedClosingBalanceMinor).toBe(150000)
+  })
+
   it('handles monthly recurrence with future months only', () => {
     const forecast: CashFlowForecast = {
       id: 'f5',

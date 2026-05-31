@@ -182,6 +182,7 @@ export interface CashFlowResponse {
     totalAmountMinor: string
     previousBalanceMinor?: string
     paidAmountMinor: string
+    pagoNoMesMinor: string
     openAmountMinor: string
   }>
 }

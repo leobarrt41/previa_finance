@@ -736,7 +736,7 @@ router.post('/projection', async (req: Request, res: Response) => {
     const input: CashFlowInput = {
       openingBalanceMinor: BigInt(data.openingBalanceMinor ?? 0),
       projectionMonths,
-      currentMonth: data.startMonth,
+      currentMonth: new Date().toISOString().slice(0, 7),
       transactions: allTransactions,
       cardInvoices: allCardInvoices,
       forecasts: [...normalizedForecasts, ...extraForecasts],
@@ -757,6 +757,7 @@ router.post('/projection', async (req: Request, res: Response) => {
       totalAmountMinor: string
       previousBalanceMinor: string
       paidAmountMinor: string
+      pagoNoMesMinor: string
       openAmountMinor: string
       semantic: {
         reportedPreviousInvoiceTotalMinor: string
@@ -831,6 +832,7 @@ router.post('/projection', async (req: Request, res: Response) => {
           totalAmountMinor: semantic.totalInvoiceMinor.toString(),
           previousBalanceMinor: semantic.reportedPreviousInvoiceTotalMinor.toString(),
           paidAmountMinor: semantic.reportedPreviousInvoicePaidMinor.toString(),
+          pagoNoMesMinor: semantic.paymentsAllocatedMinor.toString(),
           openAmountMinor: semantic.effectiveOpenMinor.toString(),
           semantic: {
             reportedPreviousInvoiceTotalMinor: semantic.reportedPreviousInvoiceTotalMinor.toString(),
