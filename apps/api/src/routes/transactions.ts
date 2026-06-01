@@ -1155,7 +1155,7 @@ router.post('/statement/import', async (req: Request, res: Response) => {
       competencyMonth: row.competencyMonth,
       amountMinor: row.amountMinor,
       normalizedDescription,
-      occurredYmd: row.occurredAt.toISOString().slice(0, 10),
+      occurredYmd: new Date(row.occurredAt).toISOString().slice(0, 10),
     }))
     if (row.providerTransactionId) existingProviderIds.add(row.providerTransactionId)
   }
@@ -1398,7 +1398,7 @@ router.post('/', async (req: Request, res: Response) => {
     amountMinor: amountMinor.toString(),
     balanceAfterMinor: values.balanceAfterMinor?.toString() ?? null,
     categoryId: values.categoryId,
-    occurredAt: values.occurredAt.toISOString(),
+    occurredAt: new Date(values.occurredAt).toISOString(),
   })
 })
 
@@ -1433,7 +1433,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     }
   }
 
-  const occurredAt = body.occurredAt ?? existing.occurredAt.toISOString()
+  const occurredAt = body.occurredAt ?? new Date(existing.occurredAt).toISOString()
   const description = body.description ?? existing.description
   const amountMinor = body.amountMinor !== undefined ? toMinor(body.amountMinor) : existing.amountMinor
   const competencyMonth = body.competencyMonth ?? existing.competencyMonth
@@ -1476,7 +1476,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     ...responsePatch,
     amountMinor: amountMinor.toString(),
     balanceAfterMinor: responsePatch.balanceAfterMinor?.toString() ?? null,
-    occurredAt: responsePatch.occurredAt.toISOString(),
+    occurredAt: new Date(responsePatch.occurredAt).toISOString(),
     categoryId: responsePatch.categoryId ?? null,
   })
 })

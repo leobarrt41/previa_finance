@@ -7,7 +7,7 @@
  * POST /api/subscription/cancel          — cancela assinatura no Stripe
  */
 
-import { Router, type Request, type Response, type NextFunction } from 'express'
+import { Router, type Request, type Response, type NextFunction, type IRouter } from 'express'
 import Stripe from 'stripe'
 import { eq } from 'drizzle-orm'
 import { getDatabase } from '../config/database.js'
@@ -16,7 +16,7 @@ import { requireClerkAuth } from '../middlewares/auth.js'
 import { createError } from '../middlewares/errorHandler.js'
 import { subscriptions } from '@previa/db'
 
-export const subscriptionRouter = Router()
+export const subscriptionRouter: IRouter = Router()
 
 // ---------------------------------------------------------------------------
 // Instância Stripe (lazy — só inicializa se a chave estiver configurada)
