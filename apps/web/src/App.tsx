@@ -16,11 +16,18 @@ import ReceiptDocuments from './pages/ReceiptDocuments'
 import { PreviaBot } from './pages/PreviaBot'
 import { Upgrade } from './pages/Upgrade'
 
+const DEV_AUTH_BYPASS = import.meta.env.VITE_DEV_AUTH_BYPASS === 'true'
+
 /**
  * ProtectedRoute — redireciona para /sign-in se não autenticado.
  * Usa SignedIn/SignedOut do Clerk para proteger as rotas internas.
+ * Em dev, quando VITE_DEV_AUTH_BYPASS=true, o acesso é liberado sem Clerk.
  */
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  if (DEV_AUTH_BYPASS) {
+    return <>{children}</>
+  }
+
   return (
     <>
       <SignedIn>{children}</SignedIn>
@@ -36,37 +43,41 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         {/* ── Rotas públicas ──────────────────────────────────────── */}
-        <Route path="/" element={<Landing />} />
+        <Route path="/" element={<Landing devAuthBypass={DEV_AUTH_BYPASS} />} />
 
         {/* Clerk Hosted Components embutidos nas rotas */}
-        <Route
-          path="/sign-in/*"
-          element={
-            <div style={{
-              minHeight: '100vh',
-              background: '#0f1117',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <SignIn routing="path" path="/sign-in" afterSignInUrl="/dashboard" />
-            </div>
-          }
-        />
-        <Route
-          path="/sign-up/*"
-          element={
-            <div style={{
-              minHeight: '100vh',
-              background: '#0f1117',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <SignUp routing="path" path="/sign-up" afterSignUpUrl="/dashboard" />
-            </div>
-          }
-        />
+        {!DEV_AUTH_BYPASS && (
+          <>
+            <Route
+              path="/sign-in/*"
+              element={
+                <div style={{
+                  minHeight: '100vh',
+                  background: '#0f1117',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  <SignIn routing="path" path="/sign-in" afterSignInUrl="/dashboard" />
+                </div>
+              }
+            />
+            <Route
+              path="/sign-up/*"
+              element={
+                <div style={{
+                  minHeight: '100vh',
+                  background: '#0f1117',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  <SignUp routing="path" path="/sign-up" afterSignUpUrl="/dashboard" />
+                </div>
+              }
+            />
+          </>
+        )}
 
         {/* ── Rotas autenticadas ───────────────────────────────────── */}
         <Route

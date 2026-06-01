@@ -60,6 +60,47 @@ function commitmentColor(pct: number): string {
   return '#4ade80'
 }
 
+function formatCategoryLabel(categoryId: string): string {
+  if (categoryId === 'sem_categoria') return 'Sem categoria'
+  if (categoryId === 'outros') return 'Outros'
+
+  return categoryId
+    .replace(/[_-]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((part: string) => {
+      if (/^\d+$/.test(part)) return part
+      return part.charAt(0).toUpperCase() + part.slice(1)
+    })
+    .join(' ')
+}
+
+
+function truncateLabel(label: string, maxLength = 20): string {
+  if (label.length <= maxLength) return label
+  return `${label.slice(0, maxLength - 1)}…`
+}
+
+function renderCategoryTick(props: any) {
+  const { x, y, payload } = props ?? {}
+  const label = String(payload?.value ?? '')
+  return (
+    <g transform={`translate(${Number(x) || 0},${(Number(y) || 0) + 4})`}>
+      <title>{label}</title>
+      <text
+        x={0}
+        y={0}
+        dy={0}
+        textAnchor="end"
+        fill="#cbd5e1"
+        fontSize={11}
+      >
+        {truncateLabel(label)}
+      </text>
+    </g>
+  )
+}
+
 function buildMonthOptions(): { value: string; label: string }[] {
   const opts = []
   const now = new Date()
@@ -278,9 +319,11 @@ export function Budget() {
 
   const chartData = result?.categoryBreakdown
     .filter(c => c.amountMinor > 0)
-    .slice(0, 8)
+    .sort((a, b) => b.pctOfIncome - a.pctOfIncome)
+    .slice(0, 6)
     .map(c => ({
       name: c.categoryId,
+      label: formatCategoryLabel(c.categoryId),
       valor: Math.round(c.amountMinor / 100),
       pct: c.pctOfIncome,
     })) ?? []
@@ -570,19 +613,40 @@ export function Budget() {
           {/* Gráfico de categorias */}
           {chartData.length > 0 && (
             <Card style={{ marginBottom: '1.5rem' }}>
-              <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: '1rem' }}>
-                Categorias mais impactantes (% da renda)
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'baseline', marginBottom: '1rem' }}>
+                <div style={{ fontSize: '0.95rem', color: '#e5e7eb', fontWeight: 700 }}>
+                  Categorias mais impactantes
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#9ca3af' }}>
+                  Top {chartData.length} categorias por impacto na renda
+                </div>
               </div>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={chartData} layout="vertical" margin={{ left: 40, right: 20 }}>
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={chartData} layout="vertical" margin={{ left: 110, right: 28, top: 8, bottom: 8 }} barCategoryGap={10}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e2130" />
-                  <XAxis type="number" tick={{ fill: '#6b7280', fontSize: 11 }} tickFormatter={v => `${v}%`} />
-                  <YAxis type="category" dataKey="name" tick={{ fill: '#9ca3af', fontSize: 11 }} width={80} />
-                  <Tooltip
-                    contentStyle={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8 }}
-                    formatter={(v: unknown) => [`${(v as number)}%`, 'da renda']}
+                  <XAxis
+                    type="number"
+                    domain={[0, 'dataMax']}
+                    tick={{ fill: '#6b7280', fontSize: 11 }}
+                    tickFormatter={(v) => `${v}%`}
+                    axisLine={{ stroke: '#2a2f45' }}
+                    tickLine={{ stroke: '#2a2f45' }}
                   />
-                  <Bar dataKey="pct" radius={[0, 4, 4, 0]}>
+                  <YAxis
+                    type="category"
+                    dataKey="label"
+                    tick={renderCategoryTick}
+                    width={150}
+                    axisLine={{ stroke: '#2a2f45' }}
+                    tickLine={{ stroke: '#2a2f45' }}
+                  />
+                  <Tooltip
+                    cursor={{ fill: 'rgba(99, 102, 241, 0.08)' }}
+                    contentStyle={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 10 }}
+                    labelStyle={{ color: '#e5e7eb', fontWeight: 700 }}
+                    formatter={(v: unknown, _name, props) => [`${(v as number)}%`, props.payload?.label ?? 'da renda']}
+                  />
+                  <Bar dataKey="pct" radius={[0, 8, 8, 0]} barSize={18}>
                     {chartData.map((entry, i) => (
                       <Cell key={i} fill={commitmentColor(entry.pct)} />
                     ))}

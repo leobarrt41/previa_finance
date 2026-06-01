@@ -40,16 +40,22 @@ const FEATURES = [
   },
 ]
 
-export function Landing() {
+export function Landing({ devAuthBypass = false }: { devAuthBypass?: boolean }) {
   const navigate = useNavigate()
 
-  // Se já autenticado, vai directo para o dashboard
+  // Em dev bypass, entra directo no app sem passar pela tela pública.
+  // Se Clerk estiver autenticado, também vai para o dashboard.
   useEffect(() => {
+    if (devAuthBypass) {
+      navigate('/dashboard', { replace: true })
+      return
+    }
+
     const clerk = (window as any).Clerk
     if (clerk?.session) {
       navigate('/dashboard', { replace: true })
     }
-  }, [navigate])
+  }, [devAuthBypass, navigate])
 
   return (
     <div
@@ -172,7 +178,7 @@ export function Landing() {
 
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
           <a
-            href={SIGN_UP_URL}
+            href={devAuthBypass ? '/dashboard' : SIGN_UP_URL}
             style={{
               padding: '0.85rem 2rem',
               borderRadius: 10,
@@ -185,10 +191,10 @@ export function Landing() {
               cursor: 'pointer',
             }}
           >
-            Começar grátis por 15 dias
+            {devAuthBypass ? 'Entrar no app' : 'Começar grátis por 15 dias'}
           </a>
           <a
-            href={SIGN_IN_URL}
+            href={devAuthBypass ? '/dashboard' : SIGN_IN_URL}
             style={{
               padding: '0.85rem 2rem',
               borderRadius: 10,
@@ -201,7 +207,7 @@ export function Landing() {
               cursor: 'pointer',
             }}
           >
-            Já tenho conta
+            {devAuthBypass ? 'Abrir dashboard' : 'Já tenho conta'}
           </a>
         </div>
       </section>

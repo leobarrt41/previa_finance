@@ -1,3 +1,16 @@
+## [2026-05-31 00:00]
+
+ID: 20260531-0000-001  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Arquitetura  
+TÍTULO: Produção separada da app e banco em VPS dedicada  
+DESCRIÇÃO: Fechado o desenho de deploy para o Previa Finance: a branch `previa_finance_main` será a linha de produção, com a aplicação principal em uma pasta/checkout dedicado na VPS da app, e o banco de dados de produção ficará em uma VPS separada (`24.152.39.231`). A base do produto seguirá com Clerk como autenticação normal de uso diário, sem `DEV_AUTH_BYPASS` em produção. Para desenvolvimento/teste local, o bypass continua disponível apenas em ambiente de dev. A separação de ambientes será por pastas e branches distintas (produção vs staging), evitando trocar branch manualmente na mesma pasta. O banco em VPS dedicada reduz a superfície de ataque e permite restringir o MySQL apenas ao IP da API, sem expor 3306 publicamente.  
+TAGS: deploy,production,staging,database,vps,security,architecture  
+PRIORIDADE: Alta  
+STATUS: Concluído
+
+---
+
 # Caixa de entrada Synapse — Previa Finance
 
 Este arquivo contém apenas notas canônicas do Synapse.

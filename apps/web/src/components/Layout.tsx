@@ -3,6 +3,10 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { UserButton, useUser } from '@clerk/clerk-react'
 import { api, type SubscriptionStatus } from '../services/api'
 
+const DEV_AUTH_BYPASS = import.meta.env.VITE_DEV_AUTH_BYPASS === 'true'
+const DEV_USER_OPEN_ID = import.meta.env.VITE_DEV_USER_OPEN_ID ?? 'dev-user-2'
+const DEV_USER_LABEL = import.meta.env.VITE_DEV_USER_NAME ?? 'Dev User2'
+
 const NAV_ITEMS = [
   { to: '/dashboard',          label: 'Dashboard',       icon: '🏠' },
   { to: '/cashflow',           label: 'Fluxo de caixa',  icon: '📈' },
@@ -22,11 +26,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate()
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null)
 
-  const displayName = user?.firstName
-    ? `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`
-    : user?.emailAddresses?.[0]?.emailAddress ?? 'Utilizador'
+  const displayName = DEV_AUTH_BYPASS
+    ? `${DEV_USER_LABEL} (${DEV_USER_OPEN_ID})`
+    : user?.firstName
+      ? `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`
+      : user?.emailAddresses?.[0]?.emailAddress ?? 'Utilizador'
 
   useEffect(() => {
+    if (DEV_AUTH_BYPASS) {
+      return
+    }
+
     api.subscription.me().then(setSubscription).catch(() => {
       // Silenciar erros de rede — não bloquear o layout
     })

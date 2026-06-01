@@ -615,6 +615,9 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
       ? assertValidDate(parseInputDate(body.closingDate, 'closingDate'), 'closingDate')
       : null
 
+    const dueDateForDb = new Date(dueDate.getTime())
+    const closingDateForDb = closingDate ? new Date(closingDate.getTime()) : null
+
     let cardInvoiceId: number
     const [existingInvoice] = await db
       .select({ id: cardInvoices.id })
@@ -657,8 +660,8 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           userId: owner.id,
           accountId,
           invoiceMonth: body.invoiceMonth,
-          dueDate,
-          ...(closingDate ? { closingDate } : {}),
+          dueDate: dueDateForDb,
+          ...(closingDateForDb ? { closingDate: closingDateForDb } : {}),
           totalAmountMinor,
           paidAmountMinor,
           previousBalanceMinor,
@@ -682,9 +685,10 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
         console.error('[import] failed to create card_invoice:', {
           invoiceMonth: body.invoiceMonth,
           dueMonth: body.dueMonth,
-          dueDate: dueDate?.toISOString?.(),
+          dueDate: dueDateForDb?.toISOString?.(),
           dueDateType: typeof dueDate,
           dueDateIsDate: dueDate instanceof Date,
+          closingDate: closingDateForDb?.toISOString?.(),
           closingDateType: typeof closingDate,
           closingDateIsDate: closingDate instanceof Date,
           error: msg,
@@ -718,7 +722,7 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
     let skipped = 0
 
     for (const tx of body.transactions) {
-      const occurredAt = assertValidDate(parseInputDate(tx.date, 'transaction.date'), 'transaction.date')
+      const occurredAt = new Date(assertValidDate(parseInputDate(tx.date, 'transaction.date'), 'transaction.date').getTime())
       const amountMinor = BigInt(tx.amountMinor)
       const { fingerprint, normalizedDescription } = buildFingerprintFromRaw({
         competencyMonth: tx.competencyMonth,
