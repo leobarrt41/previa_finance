@@ -845,3 +845,16 @@ DESCRIÇÃO: O app já está com a base principal do MVP encaminhada: auth com C
 TAGS: mvp,dashboard,landing-page,clerk,cashflow,reconciliation,read-models,performance
 PRIORIDADE: Alta
 STATUS: Pendente
+
+## [2026-06-02 12:39]
+
+ID: 20260602123901-21618
+SOURCE: previa_finance/copilot
+CATEGORIA: Bug
+TÍTULO: Investigado o erro de import de fatura no endpoint POST /api/invoices/import
+DESCRIÇÃO: Investigado o erro de import de fatura no endpoint POST /api/invoices/import. Os logs confirmam que dueDate, closingDate e occurredAt estão chegando como Date válidos antes do insert, e que o erro value.toISOString is not a function acontece no primeiro write de card_invoices, não em tabelas intermediárias/read models nem no cashflow. A hipótese mais forte agora é um mismatch de runtime/schema/Drizzle no caminho de persistência da fatura. Também ficou pendente a evolução do Previa Bot para a landing/dashboard do MVP. Próximo passo: isolar o insert de card_invoices linha por linha e definir o prompt do Manus cobrindo tanto esse bug quanto o refinamento do Previa Bot.
+TAGS: drizzle,bug,ci,api
+PRIORIDADE: Média
+STATUS: Pendente
+
+---

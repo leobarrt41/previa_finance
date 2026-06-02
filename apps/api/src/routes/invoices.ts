@@ -510,6 +510,32 @@ function assertValidDate(value: Date, label: string): Date {
   return value
 }
 
+function describeDateValue(value: unknown) {
+  if (value === null) {
+    return { kind: 'null', type: 'object', instanceOfDate: false }
+  }
+  if (value === undefined) {
+    return { kind: 'undefined', type: 'undefined', instanceOfDate: false }
+  }
+  if (value instanceof Date) {
+    return {
+      kind: 'Date',
+      type: typeof value,
+      instanceOfDate: true,
+      isValid: !Number.isNaN(value.getTime()),
+      iso: value.toISOString(),
+      constructorName: value.constructor?.name ?? null,
+    }
+  }
+  return {
+    kind: typeof value,
+    type: typeof value,
+    instanceOfDate: false,
+    constructorName: (value as { constructor?: { name?: string } })?.constructor?.name ?? null,
+    value,
+  }
+}
+
 router.post('/import', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = importBodySchema.parse(req.body)
@@ -617,6 +643,14 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
 
     const dueDateForDb = new Date(dueDate.getTime())
     const closingDateForDb = closingDate ? new Date(closingDate.getTime()) : null
+
+    console.log('[invoices/import] timestamp payload prepared', {
+      invoiceMonth: body.invoiceMonth,
+      dueDate: describeDateValue(dueDate),
+      dueDateForDb: describeDateValue(dueDateForDb),
+      closingDate: describeDateValue(closingDate),
+      closingDateForDb: describeDateValue(closingDateForDb),
+    })
 
     let cardInvoiceId: number
     const [existingInvoice] = await db
@@ -742,6 +776,15 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
       }
 
       try {
+        console.log('[invoices/import] card_transaction payload', {
+          invoiceMonth: body.invoiceMonth,
+          txDate: tx.date,
+          occurredAt: describeDateValue(occurredAt),
+          amountMinor: amountMinor.toString(),
+          description: tx.description,
+          installment: tx.installment ?? null,
+        })
+
         await db.insert(cardTransactions).values({
           userId: owner.id,
           cardInvoiceId,
