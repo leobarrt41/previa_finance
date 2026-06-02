@@ -14,6 +14,7 @@ import { assessRouter } from './assess.js'
 import { receiptDocumentsRouter } from './receiptDocuments.js'
 import { readModelsRouter } from './readModels.js'
 import { subscriptionRouter } from './subscription.js'
+import { chatRouter } from './chat.js'
 
 export function setupRoutes(): Router {
   const router: Router = Router()
@@ -49,6 +50,7 @@ export function setupRoutes(): Router {
   router.use('/receipt-documents', receiptDocumentsRouter)
   router.use('/read-models', readModelsRouter)
   router.use('/subscription', subscriptionRouter)
+  router.use('/chat', chatRouter)
 
   return router
 }

@@ -57,7 +57,7 @@ const timestamps = {
   updatedAt: timestamp("updated_at")
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`)
-    .$onUpdate(() => sql`CURRENT_TIMESTAMP`),
+    .$onUpdate(() => new Date()),
 };
 
 // ---------------------------------------------------------------------------

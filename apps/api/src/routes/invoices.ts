@@ -22,8 +22,8 @@ import { parseBBInvoice, invoiceToForecast } from '@previa/parser-bb'
 import { parseItauInvoice, itauInvoiceToForecast } from '@previa/parser-itau'
 import { parseBradescoInvoice, bradescoInvoiceToForecast } from '@previa/parser-bradesco'
 import { accounts, categories, cardInvoices, cardTransactions, receiptDocuments } from '@previa/db'
-import { buildFingerprintFromRaw } from '@previa/core'
-import { eq, and, desc, sql } from 'drizzle-orm'
+import { buildFingerprintFromRaw, normalizeDescription } from '@previa/core'
+import { eq, and, desc, sql, inArray } from 'drizzle-orm'
 import { getDatabase } from '../config/database.js'
 import { config } from '../config/env.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
@@ -607,6 +607,45 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
       .where(eq(categories.id, categoryIds[0]))
     // If not found, we don't block — categoryId will be null on insert
   }
+  // -------------------------------------------------------------------------
+  // 2b. Build category history map from previous card_transactions
+  //     Matches by normalizedDescription → reuses the last user-assigned category
+  //     Only applies to transactions that don't already have a categoryId
+  // -------------------------------------------------------------------------
+  const txsWithoutCategory = body.transactions.filter(t => !t.categoryId)
+  const historyMap = new Map<string, { categoryId: string; assignedBy: string }>()
+  if (txsWithoutCategory.length > 0) {
+    const normalizedDescs = [...new Set(
+      txsWithoutCategory.map(t => normalizeDescription(t.description))
+    )].filter(Boolean)
+    if (normalizedDescs.length > 0) {
+      const historicTxs = await db
+        .select({
+          normalizedDescription: cardTransactions.normalizedDescription,
+          categoryId: cardTransactions.categoryId,
+          categoryAssignedBy: cardTransactions.categoryAssignedBy,
+        })
+        .from(cardTransactions)
+        .where(
+          and(
+            eq(cardTransactions.userId, owner.id),
+            inArray(cardTransactions.normalizedDescription, normalizedDescs),
+          )
+        )
+        .orderBy(desc(cardTransactions.id))
+        .limit(500)
+      for (const row of historicTxs) {
+        const key = row.normalizedDescription ?? ''
+        if (!key || historyMap.has(key)) continue
+        if (row.categoryId) {
+          historyMap.set(key, {
+            categoryId: row.categoryId,
+            assignedBy: row.categoryAssignedBy ?? 'history',
+          })
+        }
+      }
+    }
+  }
 
   const totalImported = body.transactions
     .reduce((sum, t) => sum + BigInt(t.amountMinor), 0n)
@@ -798,10 +837,10 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           competencyMonth: tx.competencyMonth,
           description: tx.description,
           normalizedDescription,
-          categoryId: tx.categoryId ?? null,
+          categoryId: tx.categoryId ?? historyMap.get(normalizedDescription)?.categoryId ?? null,
           providerCategory: tx.providerCategory ?? null,
           providerCategoryRaw: tx.providerCategoryRaw ?? null,
-          categoryAssignedBy: tx.categoryAssignedBy ?? (tx.categoryId ? 'user' : null),
+          categoryAssignedBy: tx.categoryAssignedBy ?? (tx.categoryId ? 'user' : historyMap.get(normalizedDescription) ? 'history' : null),
           installmentNumber,
           installmentTotal,
           installmentGroupId,
