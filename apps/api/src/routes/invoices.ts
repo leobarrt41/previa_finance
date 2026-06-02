@@ -647,6 +647,53 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
     }
   }
 
+  // -------------------------------------------------------------------------
+  // 2c. Classify remaining unclassified transactions with AI
+  //     Fetches categories from DB and calls classifyTransactionsWithAI
+  //     for transactions that have no categoryId from frontend or history.
+  //     Best-effort: never blocks the import on failure.
+  // -------------------------------------------------------------------------
+  const aiCategoryMap = new Map<string, { categoryId: string; subcategoryId: string | null }>()
+  if (config.ai.apiKey) {
+    const txsStillUnclassified = body.transactions.filter((t) => {
+      if (t.categoryId) return false
+      const norm = normalizeDescription(t.description)
+      if (historyMap.has(norm)) return false
+      return true
+    })
+    if (txsStillUnclassified.length > 0) {
+      try {
+        const allCategories = await db
+          .select({
+            id: categories.id,
+            name: categories.name,
+            slug: categories.slug,
+            type: categories.type,
+            parentId: categories.parentId,
+          })
+          .from(categories)
+        const aiTxs = txsStillUnclassified.map((t, i) => ({
+          id: `ai-${i}`,
+          description: t.description,
+          amountMinor: t.amountMinor,
+          installment: t.installment,
+        }))
+        const suggestions = await classifyTransactionsWithAI(aiTxs, allCategories)
+        // Map back from ai-{i} index to original description
+        txsStillUnclassified.forEach((t, i) => {
+          const suggestion = suggestions[`ai-${i}`]
+          if (suggestion) {
+            const norm = normalizeDescription(t.description)
+            aiCategoryMap.set(norm, suggestion)
+          }
+        })
+        console.log(`[import] AI classified ${aiCategoryMap.size}/${txsStillUnclassified.length} transactions`)
+      } catch (err) {
+        console.warn('[import] AI classification failed (non-blocking):', err)
+      }
+    }
+  }
+
   const totalImported = body.transactions
     .reduce((sum, t) => sum + BigInt(t.amountMinor), 0n)
 
@@ -837,10 +884,18 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           competencyMonth: tx.competencyMonth,
           description: tx.description,
           normalizedDescription,
-          categoryId: tx.categoryId ?? historyMap.get(normalizedDescription)?.categoryId ?? null,
+          categoryId: tx.categoryId
+            ?? historyMap.get(normalizedDescription)?.categoryId
+            ?? aiCategoryMap.get(normalizedDescription)?.subcategoryId
+            ?? aiCategoryMap.get(normalizedDescription)?.categoryId
+            ?? null,
           providerCategory: tx.providerCategory ?? null,
           providerCategoryRaw: tx.providerCategoryRaw ?? null,
-          categoryAssignedBy: tx.categoryAssignedBy ?? (tx.categoryId ? 'user' : historyMap.get(normalizedDescription) ? 'history' : null),
+          categoryAssignedBy: tx.categoryAssignedBy
+            ?? (tx.categoryId ? 'user'
+              : historyMap.get(normalizedDescription) ? 'history'
+              : aiCategoryMap.get(normalizedDescription) ? 'ai'
+              : null),
           installmentNumber,
           installmentTotal,
           installmentGroupId,

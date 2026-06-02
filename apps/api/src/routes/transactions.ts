@@ -1160,6 +1160,91 @@ router.post('/statement/import', async (req: Request, res: Response) => {
     if (row.providerTransactionId) existingProviderIds.add(row.providerTransactionId)
   }
 
+  // -------------------------------------------------------------------------
+  // Auto-classify: 1) history from previous transactions, 2) AI for the rest
+  // -------------------------------------------------------------------------
+  const historyNorms = [...new Set(
+    prepared.filter(p => !p.values.categoryId).map(p => p.normalizedDescription)
+  )]
+  const historyMap = new Map<string, string>() // normalizedDescription -> categoryId
+  if (historyNorms.length > 0) {
+    try {
+      const historyRows = await db
+        .select({
+          normalizedDescription: transactions.normalizedDescription,
+          categoryId: transactions.categoryId,
+        })
+        .from(transactions)
+        .where(
+          and(
+            eq(transactions.userId, owner.id),
+            inArray(transactions.normalizedDescription, historyNorms),
+          )
+        )
+        .orderBy(desc(transactions.occurredAt))
+        .limit(historyNorms.length * 3)
+      for (const row of historyRows) {
+        if (!row.categoryId || !row.normalizedDescription) continue
+        if (!historyMap.has(row.normalizedDescription)) {
+          historyMap.set(row.normalizedDescription, row.categoryId)
+        }
+      }
+      console.log(`[statement/import] history matched ${historyMap.size}/${historyNorms.length} descriptions`)
+    } catch (err) {
+      console.warn('[statement/import] history lookup failed (non-blocking):', err)
+    }
+  }
+
+  const aiCategoryMap = new Map<string, { categoryId: string; subcategoryId: string | null }>()
+  const stmtApiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY || ''
+  if (stmtApiKey) {
+    const stillUnclassified = prepared.filter(p => {
+      if (p.values.categoryId) return false
+      if (historyMap.has(p.normalizedDescription)) return false
+      return true
+    })
+    if (stillUnclassified.length > 0) {
+      try {
+        const allCategories = await db
+          .select({ id: categories.id, name: categories.name, slug: categories.slug, type: categories.type, parentId: categories.parentId })
+          .from(categories)
+        const expenseItems = stillUnclassified
+          .filter(p => p.values.movementType === 'expense' || p.values.amountMinor < 0n)
+          .map((p, i) => ({ id: `exp-${i}`, description: p.values.description as string, amountMinor: Number(p.values.amountMinor) }))
+        const incomeItems = stillUnclassified
+          .filter(p => p.values.movementType === 'income' || (p.values.amountMinor > 0n && p.values.movementType !== 'expense'))
+          .map((p, i) => ({ id: `inc-${i}`, description: p.values.description as string, amountMinor: Number(p.values.amountMinor) }))
+        const [expSuggestions, incSuggestions] = await Promise.all([
+          expenseItems.length > 0 ? classifyTransactionsWithAI(expenseItems, allCategories, 'expense') : Promise.resolve({}),
+          incomeItems.length > 0 ? classifyTransactionsWithAI(incomeItems, allCategories, 'income') : Promise.resolve({}),
+        ])
+        const expFiltered = stillUnclassified.filter(p => p.values.movementType === 'expense' || p.values.amountMinor < 0n)
+        const incFiltered = stillUnclassified.filter(p => p.values.movementType === 'income' || (p.values.amountMinor > 0n && p.values.movementType !== 'expense'))
+        expFiltered.forEach((p, i) => { const s = expSuggestions[`exp-${i}`]; if (s) aiCategoryMap.set(p.normalizedDescription, s) })
+        incFiltered.forEach((p, i) => { const s = incSuggestions[`inc-${i}`]; if (s) aiCategoryMap.set(p.normalizedDescription, s) })
+        console.log(`[statement/import] AI classified ${aiCategoryMap.size}/${stillUnclassified.length} transactions`)
+      } catch (err) {
+        console.warn('[statement/import] AI classification failed (non-blocking):', err)
+      }
+    }
+  }
+
+  // Apply history + AI to prepared items that lack a category
+  for (const item of prepared) {
+    if (item.values.categoryId) continue
+    const histCat = historyMap.get(item.normalizedDescription)
+    if (histCat) {
+      item.values.categoryId = histCat
+      item.values.categoryAssignedBy = 'history'
+      continue
+    }
+    const ai = aiCategoryMap.get(item.normalizedDescription)
+    if (ai) {
+      item.values.categoryId = ai.subcategoryId ?? ai.categoryId
+      item.values.categoryAssignedBy = 'ai'
+    }
+  }
+
   const toInsert: Array<typeof transactions.$inferInsert> = []
   for (const item of prepared) {
     if (item.providerTransactionId && existingProviderIds.has(item.providerTransactionId)) {
