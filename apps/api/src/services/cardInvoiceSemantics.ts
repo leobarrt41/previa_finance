@@ -88,6 +88,7 @@ export async function syncCardInvoiceSemanticFields(
   db: any,
   cardInvoiceId: number,
 ): Promise<CardInvoiceSemanticSnapshot | null> {
+  console.log('[cardInvoiceSemantics] sync start', { cardInvoiceId })
   const [invoice] = await db
     .select({
       id: cardInvoices.id,
@@ -105,7 +106,26 @@ export async function syncCardInvoiceSemanticFields(
     .where(eq(cardInvoices.id, cardInvoiceId))
     .limit(1)
 
-  if (!invoice) return null
+  if (!invoice) {
+    console.log('[cardInvoiceSemantics] invoice not found', { cardInvoiceId })
+    return null
+  }
+
+  console.log('[cardInvoiceSemantics] invoice loaded', {
+    cardInvoiceId,
+    invoice: {
+      id: invoice.id,
+      totalAmountMinor: invoice.totalAmountMinor?.toString?.() ?? String(invoice.totalAmountMinor),
+      previousBalanceMinor: invoice.previousBalanceMinor?.toString?.() ?? String(invoice.previousBalanceMinor),
+      paidAmountMinor: invoice.paidAmountMinor?.toString?.() ?? String(invoice.paidAmountMinor),
+      openAmountMinor: invoice.openAmountMinor?.toString?.() ?? String(invoice.openAmountMinor),
+      reportedPreviousBalanceMinor: invoice.reportedPreviousBalanceMinor?.toString?.() ?? String(invoice.reportedPreviousBalanceMinor),
+      reportedPaidAmountMinor: invoice.reportedPaidAmountMinor?.toString?.() ?? String(invoice.reportedPaidAmountMinor),
+      carriedOpenAmountMinor: invoice.carriedOpenAmountMinor?.toString?.() ?? String(invoice.carriedOpenAmountMinor),
+      effectiveOpenAmountMinor: invoice.effectiveOpenAmountMinor?.toString?.() ?? String(invoice.effectiveOpenAmountMinor),
+      paymentsAllocatedMinor: invoice.paymentsAllocatedMinor?.toString?.() ?? String(invoice.paymentsAllocatedMinor),
+    },
+  })
 
   const [paymentAgg] = await db
     .select({
@@ -113,6 +133,11 @@ export async function syncCardInvoiceSemanticFields(
     })
     .from(cardInvoicePayments)
     .where(eq(cardInvoicePayments.cardInvoiceId, cardInvoiceId))
+
+  console.log('[cardInvoiceSemantics] payment aggregation loaded', {
+    cardInvoiceId,
+    allocatedMinor: paymentAgg?.allocatedMinor?.toString?.() ?? String(paymentAgg?.allocatedMinor),
+  })
 
   const totalAmountMinor = BigInt(invoice.totalAmountMinor ?? 0n)
   const previousBalanceMinor = BigInt(invoice.previousBalanceMinor ?? 0n)
@@ -132,16 +157,28 @@ export async function syncCardInvoiceSemanticFields(
         ? totalAmountMinor
         : maxBigInt(openAmountMinor, 0n)
 
-  await db
-    .update(cardInvoices)
-    .set({
-      reportedPreviousBalanceMinor,
-      reportedPaidAmountMinor,
-      carriedOpenAmountMinor,
-      paymentsAllocatedMinor,
-      effectiveOpenAmountMinor,
-    })
-    .where(eq(cardInvoices.id, cardInvoiceId))
+  console.log('[cardInvoiceSemantics] before update', {
+    cardInvoiceId,
+    reportedPreviousBalanceMinor: reportedPreviousBalanceMinor.toString(),
+    reportedPaidAmountMinor: reportedPaidAmountMinor.toString(),
+    carriedOpenAmountMinor: carriedOpenAmountMinor.toString(),
+    paymentsAllocatedMinor: paymentsAllocatedMinor.toString(),
+    effectiveOpenAmountMinor: effectiveOpenAmountMinor.toString(),
+  })
+
+  await db.execute(sql`
+    update card_invoices
+    set
+      reported_previous_balance_minor = ${reportedPreviousBalanceMinor.toString()},
+      reported_paid_amount_minor = ${reportedPaidAmountMinor.toString()},
+      carried_open_amount_minor = ${carriedOpenAmountMinor.toString()},
+      payments_allocated_minor = ${paymentsAllocatedMinor.toString()},
+      effective_open_amount_minor = ${effectiveOpenAmountMinor.toString()},
+      updated_at = CURRENT_TIMESTAMP
+    where id = ${cardInvoiceId}
+  `)
+
+  console.log('[cardInvoiceSemantics] update completed', { cardInvoiceId })
 
   return {
     reportedPreviousBalanceMinor,

@@ -492,25 +492,99 @@ function parseCsvStatement(buffer: Buffer) {
   const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0)
   if (lines.length < 2) return [] as Array<Record<string, unknown>>
 
-  const delimiter = (lines[0].match(/;/g)?.length ?? 0) >= (lines[0].match(/,/g)?.length ?? 0)
-    ? ';'
-    : ','
-  const rawHeaders = parseCsvLine(lines[0], delimiter).map(normalizeHeader)
+  const delimiters = [';', ',', '\t', '|']
+  const headerSearchLimit = Math.min(lines.length, 10)
 
-  const dateIdx = headerIndex(rawHeaders, ['data', 'date', 'dt'])
-  const descIdx = headerIndex(rawHeaders, ['descricao', 'historico', 'memo', 'description', 'narrativa'])
-  const amountIdx = headerIndex(rawHeaders, ['valor', 'amount', 'valorfinal', 'vlr'])
-  const debitIdx = headerIndex(rawHeaders, ['debito', 'debit', 'valor debito', 'valordebito'])
-  const creditIdx = headerIndex(rawHeaders, ['credito', 'credit', 'valor credito', 'valorcredito'])
-  const fitIdIdx = headerIndex(rawHeaders, ['fitid', 'id', 'idtransacao', 'transacaoid'])
+  let delimiter = delimiters[0]
+  let headerLineIndex = 0
+  let rawHeaders: string[] = []
+  let dateIdx = -1
+  let descIdx = -1
+  let amountIdx = -1
+  let debitIdx = -1
+  let creditIdx = -1
+  let fitIdIdx = -1
 
-  if (dateIdx < 0 || descIdx < 0 || (amountIdx < 0 && debitIdx < 0 && creditIdx < 0)) {
+  for (let i = 0; i < headerSearchLimit; i += 1) {
+    const line = lines[i]
+    for (const candidateDelimiter of delimiters) {
+      const candidateHeaders = parseCsvLine(line, candidateDelimiter).map(normalizeHeader)
+      const candidateDateIdx = headerIndex(candidateHeaders, [
+        'data',
+        'date',
+        'dt',
+        'datalancamento',
+        'datamovimento',
+        'datamovimentacao',
+        'datatransacao',
+        'datatransacoes',
+        'datahora',
+      ])
+      const candidateDescIdx = headerIndex(candidateHeaders, [
+        'descricao',
+        'historico',
+        'histrico',
+        'memo',
+        'description',
+        'narrativa',
+        'lancamento',
+        'movimento',
+        'transacao',
+        'transacoes',
+        'descricaooperacao',
+        'historicooperacao',
+        'descricaodetalhada',
+      ])
+      const candidateAmountIdx = headerIndex(candidateHeaders, [
+        'valor',
+        'amount',
+        'valorfinal',
+        'vlr',
+        'valorliquido',
+        'valorbruto',
+        'valortransacao',
+        'valoroperacao',
+        'valormovimento',
+      ])
+      const candidateDebitIdx = headerIndex(candidateHeaders, [
+        'debito',
+        'debit',
+        'valordebito',
+        'debitoemr',
+        'debitoemreais',
+      ])
+      const candidateCreditIdx = headerIndex(candidateHeaders, [
+        'credito',
+        'credit',
+        'valorcredito',
+        'creditoemr',
+        'creditoemreais',
+      ])
+      const candidateFitIdIdx = headerIndex(candidateHeaders, ['fitid', 'id', 'idtransacao', 'transacaoid', 'identificador'])
+
+      if (candidateDateIdx >= 0 && candidateDescIdx >= 0 && (candidateAmountIdx >= 0 || candidateDebitIdx >= 0 || candidateCreditIdx >= 0)) {
+        delimiter = candidateDelimiter
+        headerLineIndex = i
+        rawHeaders = candidateHeaders
+        dateIdx = candidateDateIdx
+        descIdx = candidateDescIdx
+        amountIdx = candidateAmountIdx
+        debitIdx = candidateDebitIdx
+        creditIdx = candidateCreditIdx
+        fitIdIdx = candidateFitIdIdx
+        break
+      }
+    }
+    if (rawHeaders.length > 0) break
+  }
+
+  if (rawHeaders.length === 0) {
     throw createError('CSV sem colunas mínimas. Esperado: data + descrição + valor (ou débito/crédito).', 400)
   }
 
   const parsed: Array<Record<string, unknown>> = []
 
-  for (let lineNo = 1; lineNo < lines.length; lineNo += 1) {
+  for (let lineNo = headerLineIndex + 1; lineNo < lines.length; lineNo += 1) {
     const cells = parseCsvLine(lines[lineNo], delimiter)
     const dateYmd = parseLooseDateToYmd(cells[dateIdx] ?? '')
     const description = (cells[descIdx] ?? '').trim()
@@ -535,7 +609,7 @@ function parseCsvStatement(buffer: Buffer) {
         : (amountMinor < 0 ? 'expense' : 'income')
 
     parsed.push({
-      id: `row-${parsed.length + 1}`,
+      id: 'row-' + (parsed.length + 1),
       date: dateYmd,
       description,
       amountMinor,
@@ -569,17 +643,27 @@ function normalizeBankAccountId(value: string | null): string | null {
   return normalized || null
 }
 
+function extractLast4Digits(value: string | null): string | null {
+  if (!value) return null
+  const digits = value.replace(/\D/g, '')
+  if (!digits) return null
+  return digits.slice(-4)
+}
+
 function parseOfxStatement(buffer: Buffer) {
   const text = buffer.toString('latin1')
   const txBlocks = [...text.matchAll(/<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi)]
   const parsed: Array<Record<string, unknown>> = []
 
-  const providerAccountId = normalizeBankAccountId(parseOfxTag(text, 'ACCTID'))
+  const rawAccountId = parseOfxTag(text, 'ACCTID')
+  const providerAccountId = normalizeBankAccountId(rawAccountId)
   const org = parseOfxTag(text, 'ORG')
   const fid = parseOfxTag(text, 'FID')
   const institutionName = org ?? fid ?? null
-  const accountLast4 = providerAccountId
-    ? providerAccountId.slice(-4) || null
+  const hasExplicitAccountSuffix = Boolean(rawAccountId && /[^0-9]/.test(rawAccountId))
+  const accountLast4 = hasExplicitAccountSuffix
+    ? extractLast4Digits(rawAccountId)
+      ?? (providerAccountId ? providerAccountId.slice(-4) || null : null)
     : null
 
   for (const [_, block] of txBlocks) {
@@ -659,6 +743,7 @@ type StatementSourceAccount = {
 async function detectStatementAccount(ownerId: number, sourceAccount: StatementSourceAccount) {
   const db = getDatabase()
   const normalizedProviderAccountId = normalizeBankAccountId(sourceAccount.providerAccountId)
+  const desiredLast4 = sourceAccount.accountLast4 ?? extractLast4Digits(sourceAccount.providerAccountId)
 
   if (normalizedProviderAccountId) {
     const [byProvider] = await db
@@ -676,7 +761,7 @@ async function detectStatementAccount(ownerId: number, sourceAccount: StatementS
   }
 
   if (sourceAccount.institutionName) {
-    const [byInstitution] = await db
+    const institutionAccounts = await db
       .select({
         id: accounts.id,
         displayName: accounts.displayName,
@@ -691,13 +776,21 @@ async function detectStatementAccount(ownerId: number, sourceAccount: StatementS
         ),
       )
       .orderBy(desc(accounts.id))
-      .limit(1)
 
-    if (byInstitution) {
-      const existingProviderAccountId = normalizeBankAccountId(byInstitution.providerAccountId)
-      if (!normalizedProviderAccountId || existingProviderAccountId === normalizedProviderAccountId) {
-        return { id: byInstitution.id, displayName: byInstitution.displayName }
+    if (institutionAccounts.length > 0) {
+      if (desiredLast4) {
+        const matchedBySuffix = institutionAccounts.find((account) => {
+          const providerSuffix = extractLast4Digits(account.providerAccountId)
+          const displaySuffix = account.displayName.match(/(\d{4})(?!.*\d)/)?.[1] ?? null
+          return providerSuffix === desiredLast4 || displaySuffix === desiredLast4
+        })
+        if (matchedBySuffix) {
+          return { id: matchedBySuffix.id, displayName: matchedBySuffix.displayName }
+        }
       }
+
+      const fallback = institutionAccounts[institutionAccounts.length - 1]
+      return { id: fallback.id, displayName: fallback.displayName }
     }
   }
 
@@ -733,7 +826,9 @@ async function resolveStatementAccountId(
 
   if (sourceAccount.providerAccountId || sourceAccount.institutionName || sourceAccount.accountLast4) {
     const suffix = sourceAccount.accountLast4
-      ?? (sourceAccount.providerAccountId ? sourceAccount.providerAccountId.slice(-4) : null)
+      ?? (sourceAccount.providerAccountId && /[^0-9]/.test(sourceAccount.providerAccountId)
+        ? sourceAccount.providerAccountId.slice(-4)
+        : null)
     const displayName = sourceAccount.institutionName
       ? `${sourceAccount.institutionName}${suffix ? ` ••••${suffix}` : ''}`
       : `Conta importada${suffix ? ` ••••${suffix}` : ''}`
@@ -844,37 +939,50 @@ router.get('/', async (req: Request, res: Response) => {
   })
 })
 
-router.post('/statement/parse', statementUpload.single('file'), async (req: Request, res: Response) => {
-  const owner = await resolveOwnerId(req.authUser!.clerkUserId)
+router.post('/statement/parse', statementUpload.single('file'), async (req: Request, res: Response, next) => {
+  try {
+    const owner = await resolveOwnerId(req.authUser!.clerkUserId)
 
-  if (!req.file) {
-    throw createError('Nenhum arquivo enviado. Use multipart/form-data com field "file".', 400)
+    if (!req.file) {
+      throw createError('Nenhum arquivo enviado. Use multipart/form-data com field "file".', 400)
+    }
+
+    const lowerName = req.file.originalname.toLowerCase()
+    const parsedOutput = lowerName.endsWith('.ofx')
+      ? (() => {
+          const parsed = parseOfxStatement(req.file.buffer)
+          return {
+            ...parsed,
+            sourceAccount: {
+              ...parsed.sourceAccount,
+              institutionName: parsed.sourceAccount.institutionName ?? inferInstitutionFromName(req.file.originalname),
+            },
+          }
+        })()
+      : {
+          transactions: parseCsvStatement(req.file.buffer),
+          sourceAccount: {
+            institutionName: inferInstitutionFromName(req.file.originalname),
+            providerAccountId: null,
+            accountLast4: null,
+          },
+        }
+
+    if (parsedOutput.transactions.length === 0) {
+      throw createError('Nenhuma transação encontrada no arquivo.', 400)
+    }
+
+    const detectedAccount = await detectStatementAccount(owner.id, parsedOutput.sourceAccount)
+
+    res.json({
+      fileName: req.file.originalname,
+      sourceAccount: parsedOutput.sourceAccount,
+      detectedAccount,
+      transactions: parsedOutput.transactions,
+    })
+  } catch (error) {
+    next(error)
   }
-
-  const lowerName = req.file.originalname.toLowerCase()
-  const parsedOutput = lowerName.endsWith('.ofx')
-    ? parseOfxStatement(req.file.buffer)
-    : {
-        transactions: parseCsvStatement(req.file.buffer),
-        sourceAccount: {
-          institutionName: inferInstitutionFromName(req.file.originalname),
-          providerAccountId: null,
-          accountLast4: null,
-        },
-      }
-
-  if (parsedOutput.transactions.length === 0) {
-    throw createError('Nenhuma transação encontrada no arquivo.', 400)
-  }
-
-  const detectedAccount = await detectStatementAccount(owner.id, parsedOutput.sourceAccount)
-
-  res.json({
-    fileName: req.file.originalname,
-    sourceAccount: parsedOutput.sourceAccount,
-    detectedAccount,
-    transactions: parsedOutput.transactions,
-  })
 })
 
 router.post('/statement/classify', async (req: Request, res: Response) => {

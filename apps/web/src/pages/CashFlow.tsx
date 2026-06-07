@@ -93,20 +93,13 @@ function sumPendingRecurringExpenseMinor(recurring: CashFlowRecurringTransaction
 function toChartData(
   monthly: MonthlyCashFlow[],
   recurring: CashFlowRecurringTransaction[],
-  cardOpenByMonth = new Map<string, number>(),
 ) {
   const activeMonth = currentMonth()
-  let rollingCardOpenMinor = 0
 
   return monthly.map((m) => {
     const pendingRecurringExpenseMinor = sumPendingRecurringExpenseMinor(recurring, m.competencyMonth)
     const statementOutflowMinor = Number(m.statementOutflowMinor ?? 0)
-
-    if (cardOpenByMonth.has(m.competencyMonth)) {
-      rollingCardOpenMinor = cardOpenByMonth.get(m.competencyMonth) ?? 0
-    }
-
-    const orangeMinor = m.competencyMonth < activeMonth ? 0 : rollingCardOpenMinor
+    const orangeMinor = m.competencyMonth < activeMonth ? 0 : Number(m.debtOpenMinor ?? 0)
 
     return {
       month: m.competencyMonth,
@@ -288,11 +281,6 @@ export function CashFlow() {
 
   const cardInvoicesByMonth = state.status === 'success' ? state.data.cardInvoicesByMonth ?? [] : []
   const currentCardInvoiceRows = cardInvoicesByMonth.filter((f) => f.invoiceMonth === startMonth)
-  const cardOpenByMonth = cardInvoicesByMonth.reduce((acc, row) => {
-    const current = acc.get(row.invoiceMonth) ?? 0
-    acc.set(row.invoiceMonth, current + Number(row.openAmountMinor || 0))
-    return acc
-  }, new Map<string, number>())
   // Validation
   function validate(): boolean {
     const e: Record<string, string> = {}
@@ -434,7 +422,7 @@ export function CashFlow() {
 
   const chartData =
     state.status === 'success'
-      ? toChartData(state.data.monthly, recurring, cardOpenByMonth)
+      ? toChartData(state.data.monthly, recurring)
       : []
   const recurringExpenseItems = recurring.filter((item) => item.amountMinor < 0)
 

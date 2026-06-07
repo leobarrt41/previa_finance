@@ -83,7 +83,10 @@ function DropZone({ onFile }: { onFile: (file: File) => void }) {
       <p style={{ color: '#6b7280', fontSize: '0.82rem' }}>
         ou clique para selecionar o arquivo
       </p>
-      <p style={{ color: '#4b5563', fontSize: '0.74rem', marginTop: '0.55rem' }}>
+      <p style={{ color: '#fbbf24', fontSize: '0.74rem', marginTop: '0.55rem', fontWeight: 600 }}>
+        Extrato bancário: OFX ou CSV. PDF de fatura não entra aqui.
+      </p>
+      <p style={{ color: '#fbbf24', fontSize: '0.72rem', marginTop: '0.2rem' }}>
         Suportado: .ofx e .csv
       </p>
       <input

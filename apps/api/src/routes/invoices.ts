@@ -776,6 +776,17 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
       `)
     } else {
       try {
+        console.log('[invoices/import] about to insert card_invoice', {
+          invoiceMonth: body.invoiceMonth,
+          accountId,
+          dueDateForDb: describeDateValue(dueDateForDb),
+          closingDateForDb: describeDateValue(closingDateForDb),
+          totalAmountMinor: totalAmountMinor.toString(),
+          previousBalanceMinor: previousBalanceMinor.toString(),
+          paidAmountMinor: paidAmountMinor.toString(),
+          openAmountMinor: openAmountMinor.toString(),
+        })
+
         await db.insert(cardInvoices).values({
           userId: owner.id,
           accountId,
@@ -799,6 +810,10 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
               : body.bank?.toLowerCase() === 'bb'
                 ? 'bb_v1'
                 : undefined,
+        })
+        console.log('[invoices/import] card_invoice insert completed', {
+          invoiceMonth: body.invoiceMonth,
+          accountId,
         })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -831,7 +846,15 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
       cardInvoiceId = created.id
     }
 
+    console.log('[invoices/import] before syncCardInvoiceSemanticFields', {
+      cardInvoiceId,
+      invoiceMonth: body.invoiceMonth,
+    })
     await syncCardInvoiceSemanticFields(db, cardInvoiceId)
+    console.log('[invoices/import] after syncCardInvoiceSemanticFields', {
+      cardInvoiceId,
+      invoiceMonth: body.invoiceMonth,
+    })
 
     // -------------------------------------------------------------------------
     // 4. Insert each purchase into card_transactions

@@ -1,21 +1,113 @@
-## [2026-05-31 00:00]
+s tabelas para # Caixa de entrada Synapse — Previa Finance
 
-ID: 20260531-0000-001  
+Este arquivo é o inbox oficial do Synapse para o repositório Previa Finance.
+Ele existe para manter memória operacional durável e estruturada durante o desenvolvimento.
+O objetivo é permitir que ferramentas (ex.: Synapse) e assistentes recuperem eventos, decisões e bugs relevantes diretamente do repositório.
+
+Regras importantes (em português, direto e claro):
+
+- O que é: este arquivo é uma fila durável de notas de projeto (insights, tarefas, decisões, bugs, etc.).
+- Por que existe: para preservar histórico observável do desenvolvimento e fornecer contexto persistente para agentes e integrações automáticas.
+- Como usar: novas notas devem SEMPRE ser acrescentadas ao final do arquivo — nunca reescrever ou remover notas anteriores.
+- Cada nota deve incluir data e hora (formato YYYY-MM-DD HH:mm) e um ID único.
+- As notas só podem usar as categorias permitidas (ver seção "Categorias permitidas" abaixo).
+- Bugs devem conter descrição do problema, causa provável/raiz e a solução aplicada quando disponível.
+- Este arquivo foi projetado para sobreviver a reinícios de chat; assistentes humanos e automáticos devem lê-lo antes de continuar trabalho quando o contexto histórico é necessário.
+- Se um item gera uma regra técnica ampla, crie também uma nota do tipo "Decisão" ou "Arquitetura" separada.
+
+Como usar (passo a passo):
+1. Ao identificar um evento relevante (bug, decisão, tarefa, insight, etc.), abra este arquivo.
+2. Adicione uma nova nota AO FINAL usando o formato requerido (veja template abaixo).
+3. Nunca apague notas antigas; edições só em casos excepcionais com justificativa e histórico registrado em nova nota.
+4. Mantenha as notas objetivas, com fatos e contexto suficiente para entender o que mudou e por quê.
+5. Permita que o Synapse importe esse arquivo periodicamente; mantenha-o coerente e append-only.
+
+Categorias permitidas
+- Insight
+- Tarefa
+- Decisão
+- Arquitetura
+- Bug
+- Oportunidade
+- Monetização
+- Roadmap
+- Pesquisa
+
+---
+
+# Template de nota (exemplo)
+
+Use estritamente este formato. Substitua os campos entre colchetes pelo conteúdo real.
+
+## [YYYY-MM-DD HH:mm]
+
+ID: [YYYYMMDD-HHMM-<uniq>]  
+SOURCE: previa_finance/copilot  
+CATEGORIA: [uma das categorias permitidas]  
+TÍTULO: [título curto e específico]  
+DESCRIÇÃO: [descrição clara: o que aconteceu, o que foi descoberto, o que mudou. Para BUGs inclua causa provável/raiz e solução aplicada se conhecida]  
+TAGS: [tag1,tag2,...]  
+PRIORIDADE: [Alta|Média|Baixa]  
+
+---
+
+## 2026-04-23 15:45
+
+ID: 20260423-1545-frontend-manus  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Decisão  
+TÍTULO: Frontend será gerado pelo Manus  
+DESCRIÇÃO: Decisão arquitetural importante - o frontend da aplicação Previa Finance será gerado automaticamente pelo assistente Manus, não desenvolvido manualmente. Isso acelera drasticamente a Phase 2 do roadmap, permitindo focar recursos no backend e integrações. A API já está 100% funcional e pronta para consumo por qualquer frontend.  
+TAGS: frontend,manus,automacao,phase2,decisao-arquitetural  
+PRIORIDADE: Alta  
+
+## 2026-04-23 15:46
+
+ID: 20260423-1546-auth-clerk  
 SOURCE: previa_finance/copilot  
 CATEGORIA: Arquitetura  
-TÍTULO: Produção separada da app e banco em VPS dedicada  
-DESCRIÇÃO: Fechado o desenho de deploy para o Previa Finance: a branch `previa_finance_main` será a linha de produção, com a aplicação principal em uma pasta/checkout dedicado na VPS da app, e o banco de dados de produção ficará em uma VPS separada (`24.152.39.231`). A base do produto seguirá com Clerk como autenticação normal de uso diário, sem `DEV_AUTH_BYPASS` em produção. Para desenvolvimento/teste local, o bypass continua disponível apenas em ambiente de dev. A separação de ambientes será por pastas e branches distintas (produção vs staging), evitando trocar branch manualmente na mesma pasta. O banco em VPS dedicada reduz a superfície de ataque e permite restringir o MySQL apenas ao IP da API, sem expor 3306 publicamente.  
-TAGS: deploy,production,staging,database,vps,security,architecture  
+TÍTULO: Autenticação via Clerk - sem tabela users local  
+DESCRIÇÃO: A arquitetura atual usa Clerk para autenticação externa. Não existe tabela 'users' no banco local - o user_id é referência externa ao Clerk. Todas as tabelas do schema usam int("user_id") com comentário @external-fk: users.id para marcar esta dependência externa. JWT do Clerk é validado no middleware da API.  
+TAGS: auth,clerk,external-fk,user-id,jwt  
+PRIORIDADE: Média  
+
+## 2026-04-23 15:47
+
+ID: 20260423-1547-db-config  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Insight  
+TÍTULO: Configuração DB via variáveis ambiente sem .env  
+DESCRIÇÃO: O banco está configurado via env.ts com fallbacks locais: DB_HOST=localhost, DB_USERNAME=root, DB_PASSWORD='', DB_NAME=previa_finance. Não existe arquivo .env no repositório. Para produção, usar DATABASE_URL no drizzle.config.ts ou definir as variáveis específicas (DB_HOST, DB_PORT, etc). MySQL 8+ é requerido.  
+TAGS: database,mysql,env-vars,config,localhost  
+PRIORIDADE: Média  
+STATUS: [Pendente|Em andamento|Concluído]
+
+---
+
+# Exemplo preenchido
+
+## 2026-04-12 14:30
+
+ID: 20260412-1430-001  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Tarefa  
+TÍTULO: Adicionar tabela `categories` ao pacote db  
+DESCRIÇÃO: Implementada a tabela `categories` no módulo `@previa/db` com suporte a hierarquia (parent_id), índices e escopo por `external_owner_id`. Não há referência direta a `users`.  
+TAGS: categories,db,drizzle  
 PRIORIDADE: Alta  
 STATUS: Concluído
 
 ---
 
-# Caixa de entrada Synapse — Previa Finance
+# Boas práticas rápidas
+- Gere IDs estáveis (ex.: `YYYYMMDD-HHMM-###` ou UUID) para rastreabilidade.
+- Use slugs consistentes quando mencionar recursos (ex.: `transporte`, `alimentacao`).
+- Para bugs, sempre anexe passos para reproduzir quando possível.
+- Para decisões/arquitetura, inclua referência ao ticket/PR se existir.
 
-Este arquivo contém apenas notas canônicas do Synapse.
-As instruções de formato e o template ficam em:
-- `.synapse/synapse_inbox_format.md`
+---
+
+Observação final: este arquivo é a fonte de verdade para notas do Synapse dentro deste repositório — mantenha-o append-only, factual e legível por humanos e por ferramentas.
 
 ## [2026-04-12 17:40]
 
@@ -163,19 +255,6 @@ CATEGORIA: Tarefa
 TÍTULO: Estado atual de retomada remota via SSH/VS Code  
 DESCRIÇÃO: Handoff operacional para retomada do trabalho em outra sessão. Branch ativa: `feat/frontend-manus`. Commit de checkpoint enviado ao remoto: `7d6214c` (`feat: checkpoint assess and receipt flows`). Estado atual: ajustes já feitos em `assess`, `DebtAssessor`, `Budget`, `receipt_documents` e UI de `Notas Fiscais`, incluindo exibição de hints de OCR na tela. Próxima direção acordada: trabalhar por módulos, começando por Extrato/Caixa, depois Cartão/Fatura, Fluxo de caixa, Notas fiscais/Comprovantes, Recorrências/Projeções e só então avaliadores. Regra de retomada: evitar empurrar semântica financeira para o frontend; contratos semânticos devem sair do backend.  
 TAGS: handoff,ssh,vscode,checkpoint,retomada  
-PRIORIDADE: Alta  
-STATUS: Em andamento
-
----
-
-## [2026-05-06 23:57]
-
-ID: 20260506-2357-schema-branch  
-SOURCE: previa_finance/copilot  
-CATEGORIA: Decisão  
-TÍTULO: Refatoração de schema e reconciliação deve sair em branch separado  
-DESCRIÇÃO: Decidido que a próxima etapa estrutural, envolvendo novas tabelas e deslocamento de lógica de processamento/conciliação hoje espalhada no frontend para o backend, deve ocorrer em branch separado do `feat/frontend-manus`. Justificativa: mudança de schema é alteração estrutural e tende a afetar migrations, invariantes de domínio, DTOs e semântica financeira; manter isso isolado reduz risco de regressão e facilita validação incremental por módulo. O branch atual permanece como linha de integração funcional, enquanto a refatoração de domínio deve abrir uma trilha própria.  
-TAGS: branch,db,schema,reconciliation,backend,arquitetura  
 PRIORIDADE: Alta  
 STATUS: Em andamento
 TÍTULO: Refactor categories schema to coalesce external_owner_id and document uniqueness
@@ -751,110 +830,48 @@ PRIORIDADE: Alta
 STATUS: Concluido
 
 ---
-## [2026-05-02 00:00]
+## [2026-05-02] Avaliadores IA + Notas Fiscais — Rebase sobre 3351f6c
 
-ID: 20260502-0000-assess-receipt-rebase  
-SOURCE: previa_finance/copilot  
-CATEGORIA: Implementação  
-TÍTULO: Avaliadores IA e receipt_documents refeitos sobre base 3351f6c  
-DESCRIÇÃO: O trabalho de avaliadores com IA e notas fiscais foi refeito sobre a base corrigida do CashFlow (`3351f6c`), após identificação de que uma linha anterior havia sido desenvolvida sobre versão desatualizada de `cashflow.ts`. O pacote implementado incluiu três telas de avaliação com IA (`/budget`, `/assess/spending`, `/assess/debt`) com endpoints reais em `apps/api/src/routes/assess.ts`, além do módulo `receipt_documents` com migration `packages/db/migrations/0009_receipt_documents.sql`, schema Drizzle, rota `apps/api/src/routes/receiptDocuments.ts` e tela `/receipt-documents`. A integração com o Fluxo de caixa foi feita sem alterar o `CashFlowEngine`: notas `projected` com `expectedInvoiceMonth` entram como `cardInvoice` sintética na barra laranja; notas `projected` sem `expectedInvoiceMonth` entram como `expense` na barra vermelha; notas `reconciled` deixam de influenciar a projeção. Também foi implementada reconciliação automática best-effort em `invoices.ts` e `transactions.ts`, por valor + merchant fuzzy + mês de competência. Regras respeitadas: `CashFlowEngine` intacto, lógica azul/laranja preservada, `.env` fora do repositório e rebase feito sobre a base corrigida. Migration pendente em produção à época: `mysql -u root previa_finance < packages/db/migrations/0009_receipt_documents.sql`.  
-TAGS: assess,receipt_documents,ocr,reconciliation,cashflow,ai,rebase  
-PRIORIDADE: Alta  
-STATUS: Concluido
+### Contexto
+Trabalho anterior foi feito sobre versão desatualizada do cashflow.ts.
+O Codex subiu a versão correta (commit 3351f6c) e o Manus refez tudo sobre essa base.
 
----
-## [2026-05-06 23:57]
+### O que foi implementado (commit 3fb0823)
 
-ID: 20260506-2357-schema-reconciliation-branch-decision  
-SOURCE: previa_finance/codex  
-CATEGORIA: Arquitetura  
-TÍTULO: Refatoração de schema e reconciliação deve seguir em branch próprio  
-DESCRIÇÃO: Decidido isolar a próxima etapa estrutural em um branch novo, separado de `feat/frontend-manus`. Motivo: a mudança envolve novas tabelas e/ou campos para processamento, reconciliação e semântica financeira hoje inferida no frontend. Esse tipo de alteração afeta migrations, invariantes de domínio, DTOs e contratos do backend; misturar isso com o branch de integração funcional aumenta o risco de regressão e dificulta validação. A recomendação é manter `feat/frontend-manus` como branch de integração atual e abrir um branch específico para a refatoração de backend/schema/reconciliação.  
-TAGS: arquitetura,schema,reconciliacao,backend,frontend,branch,migrations  
-PRIORIDADE: Alta  
-STATUS: Ativo
+#### 3 Telas de Avaliação com IA
+- **Orçamento (`/budget`):** Avaliação 100% automática. Removidos campos manuais. IA analisa renda, faturas, extratos e categorias. Exibe gauge de comprometimento, diagnóstico, alertas e recomendações.
+- **Avaliador de Gastos (`/assess/spending`):** Tela dedicada. Seleção de categoria (pré-selecionável via `?categoryId=` na URL). Histórico, tendência, risco, impacto na renda.
+- **Avaliador de Dívidas (`/assess/debt`):** Faturas em aberto, parcelas futuras, risco de atraso, pressão sobre renda.
+- **API:** `apps/api/src/routes/assess.ts` — 3 endpoints com chamadas reais a `POST /v1/chat/completions` (mesmo padrão de invoices.ts).
 
----
-## [2026-05-07 00:40]
+#### Módulo receipt_documents (Notas Fiscais)
+- **Migration:** `packages/db/migrations/0009_receipt_documents.sql`
+- **Schema Drizzle:** `packages/db/src/schema/receipt_documents.ts`
+- **API:** `apps/api/src/routes/receiptDocuments.ts` — CRUD + reconciliação manual
+- **Tela:** `/receipt-documents` com botão rápido (FAB) para uso no estabelecimento
 
-ID: 20260507-0040-reconciliation-schema-phase1  
-SOURCE: previa_finance/codex  
-CATEGORIA: Implementação  
-TÍTULO: Fase 1 aditiva do branch feat/backend-reconciliation-schema iniciada  
-DESCRIÇÃO: Aberto o branch `feat/backend-reconciliation-schema` a partir de `feat/frontend-manus`. Criada a migration aditiva `0010_backend_reconciliation_semantics.sql` com foco em `card_invoices`, `card_invoice_payments`, `receipt_documents`, `transactions` e `cashflow_forecast_month_status`. Os campos legados foram mantidos. O pacote adiciona campos semânticos novos para separar valores reportados, pagamentos reais alocados, saldo carregado, saldo efetivo, status mensal explícito e hints persistidos de OCR/cartão. O backfill foi aplicado no banco local `previa_finance`, a migration ficou registrada e o backend foi ajustado para escrever os campos novos em paralelo aos legados: import de fatura sincroniza os novos campos, alocação de pagamento real atualiza `payments_allocated/effective_open`, `receipt_documents` persiste `payment_kind` e dados de cartão/OCR em colunas próprias, e a reconciliação automática liga também `receipt_document_id` no lado de `transactions` e `card_transactions`. Validações concluídas: `pnpm -C packages/db build`, `pnpm -C apps/api build` e `pnpm -C packages/db db:setup`.  
-TAGS: schema,reconciliacao,card_invoices,card_invoice_payments,receipt_documents,transactions,cashflow_forecast_month_status,backend,migration  
-PRIORIDADE: Alta  
-STATUS: Em andamento
+#### Integração no CashFlow (SEM alterar o CashFlowEngine)
+- Notas `projected` com `expectedInvoiceMonth` → injetadas como `cardInvoice` sintética → **barra laranja**
+- Notas `projected` sem `expectedInvoiceMonth` (débito) → injetadas como `expense` → **barra vermelha**
+- Notas `reconciled` → ignoradas (dado real assume o controle)
+- Injeção feita em `cashflow.ts` (API), NUNCA no CashFlowEngine
 
----
-## [2026-05-08 00:20]
+#### Reconciliação Automática
+- **Cartão:** `invoices.ts` — após insert de `card_transactions`, cruza notas por `amount_minor` + `merchant_name` fuzzy (8 chars) + `purchase_month`
+- **Débito:** `transactions.ts` — após insert de `transactions`, mesmo critério
+- Best-effort: não bloqueia o import em caso de erro
 
-ID: 20260508-0020-categories-seed-wiring  
-SOURCE: previa_finance/codex  
-CATEGORIA: Implementação  
-TÍTULO: Seed de categorias operacionalizado e taxonomia canônica consolidada  
-DESCRIÇÃO: Resolvidos os dois primeiros pontos pendentes do item “Category Schema with Hierarchy and Seed Script”. O seed foi exposto como comando oficial em `packages/db/package.json` (`db:seed:categories`) e também como fluxo composto (`db:setup:categories`). A taxonomia completa foi centralizada em `packages/db/scripts/categoryTaxonomy.ts`, e `seedCategories.ts` passou a consumir essa fonte canônica em vez de manter uma segunda lista hardcoded. A migration `0007_categories_table.sql` foi mantida apenas como bootstrap mínimo e documentada como tal; a taxonomia completa passa a ser aplicada operacionalmente pelo seed canônico. O script de seed também foi alinhado ao padrão de conexão do projeto (`DB_*`, com fallback para `DATABASE_URL`). Validações concluídas: `pnpm -C packages/db typecheck` e `pnpm -C packages/db db:seed:categories`.  
-TAGS: categories,seed,taxonomy,hierarchy,db,operational,wiring  
-PRIORIDADE: Alta  
-STATUS: Concluido
+#### Menu e Navegação
+- Layout: "Notas Fiscais 🧾", "Aval. Gastos 📊", "Aval. Dívidas 💳"
+- Botão "Avaliar" em cada categoria → `/assess/spending?categoryId=...`
 
----
-## [2026-05-08 00:38]
+### Migrations pendentes em produção
+```bash
+mysql -u root previa_finance < packages/db/migrations/0009_receipt_documents.sql
+```
 
-ID: 20260508-0038-categories-ownership-scope  
-SOURCE: previa_finance/codex  
-CATEGORIA: Implementação  
-TÍTULO: Categorias agora respeitam ownership real no backend  
-DESCRIÇÃO: Fechado o item 3 do trabalho de categorias: a rota `apps/api/src/routes/categories.ts` passou a usar `requireClerkAuth` e `resolveOwnerId`, aplicando visibilidade combinada de categorias de sistema (`is_system = true`) com categorias custom do owner atual (`external_owner_id = owner.id`). O contrato do frontend foi mantido: `GET /api/categories` e `GET /api/categories/tree` continuam retornando a mesma estrutura, mas agora filtrada corretamente. `POST` grava `externalOwnerId` nas categorias custom. `PUT` e `DELETE` passaram a bloquear alteração/remoção de categorias de sistema ou de outro owner. Validação concluída com `pnpm -C apps/api build`.  
-TAGS: categories,ownership,externalOwnerId,api,auth,hierarchy  
-PRIORIDADE: Alta  
-STATUS: Concluido
-
----
-## [2026-05-08 00:48]
-
-ID: 20260508-0048-open-finance-category-semantics  
-SOURCE: previa_finance/codex  
-CATEGORIA: Implementação  
-TÍTULO: Campos mínimos adicionados para coexistência entre categorias internas e Open Finance  
-DESCRIÇÃO: Implementado o pacote mínimo para evitar conflito semântico entre taxonomia interna e categorias vindas de Open Finance/provedores. Foi criada a migration `0011_open_finance_category_semantics.sql`, adicionando em `transactions` e `card_transactions` os campos `provider_category`, `provider_category_raw` e `category_assigned_by`. A regra fica explícita: `category_id` continua sendo a categoria final interna do app, enquanto `provider_category*` preserva a classificação de origem do provedor. O backfill marca registros antigos classificados como `legacy` em `category_assigned_by`. Validações concluídas com `pnpm -C packages/db build` e `pnpm -C packages/db db:setup`.  
-TAGS: open-finance,categories,provider-category,transactions,card-transactions,migration  
-PRIORIDADE: Média  
-STATUS: Concluido
-
----
-## [2026-05-08 00:58]
-
-ID: 20260508-0058-category-provenance-new-imports  
-SOURCE: previa_finance/codex  
-CATEGORIA: Implementação  
-TÍTULO: Novos imports preservam origem da categoria sem tocar no histórico  
-DESCRIÇÃO: Ajustados os contratos e inserts de `transactions` e `card_transactions` para aceitar e persistir, em imports novos, os campos `providerCategory`, `providerCategoryRaw` e `categoryAssignedBy`. No extrato (`apps/api/src/routes/transactions.ts`), o payload de import agora aceita esses campos opcionalmente e grava `categoryAssignedBy = 'user'` quando a linha chega com `categoryId` confirmado mas sem provenance explícita. No import de faturas (`apps/api/src/routes/invoices.ts`), o mesmo padrão foi aplicado às `card_transactions`. Isso permite começar a conviver com Open Finance sem reclassificar histórico: dados antigos ficam como `legacy`; dados novos passam a carregar provenance explícita quando disponível. Validação concluída com `pnpm -C apps/api build`.  
-TAGS: categories,provenance,imports,transactions,card-transactions,open-finance  
-PRIORIDADE: Média  
-STATUS: Concluido
-
----
-## [2026-05-31 00:00]
-
-ID: 20260531-0000-mvp-status-final-prep
-SOURCE: previa_finance/codex
-CATEGORIA: Roadmap
-TÍTULO: Estado atual do MVP e próximos passos para fechamento
-DESCRIÇÃO: O app já está com a base principal do MVP encaminhada: auth com Clerk sem `users` local, conciliação de faturas via `liability_payment`, painel de faturas com `Pago no mês`, gráfico de fluxo ajustado para usar saldo aberto conciliado e forecast de receita que não duplica quando já existe receita real no mês. O commit mais recente foi enviado para o GitHub na branch `feat/backend-reconciliation-schema` (commit `eded184`). Próximos passos prioritários: organizar o dashboard, criar uma landing page pública para acesso/cadastro/login, e implementar tabelas intermediárias/read models para acelerar carregamento do dashboard e do cashflow.
-TAGS: mvp,dashboard,landing-page,clerk,cashflow,reconciliation,read-models,performance
-PRIORIDADE: Alta
-STATUS: Pendente
-
-## [2026-06-02 12:39]
-
-ID: 20260602123901-21618
-SOURCE: previa_finance/copilot
-CATEGORIA: Bug
-TÍTULO: Investigado o erro de import de fatura no endpoint POST /api/invoices/import
-DESCRIÇÃO: Investigado o erro de import de fatura no endpoint POST /api/invoices/import. Os logs confirmam que dueDate, closingDate e occurredAt estão chegando como Date válidos antes do insert, e que o erro value.toISOString is not a function acontece no primeiro write de card_invoices, não em tabelas intermediárias/read models nem no cashflow. A hipótese mais forte agora é um mismatch de runtime/schema/Drizzle no caminho de persistência da fatura. Também ficou pendente a evolução do Previa Bot para a landing/dashboard do MVP. Próximo passo: isolar o insert de card_invoices linha por linha e definir o prompt do Manus cobrindo tanto esse bug quanto o refinamento do Previa Bot.
-TAGS: drizzle,bug,ci,api
-PRIORIDADE: Média
-STATUS: Pendente
-
----
+### Regras respeitadas
+- CashFlowEngine NÃO foi alterado
+- Lógica azul/laranja intacta
+- Sem .env commitado
+- git pull feito antes de iniciar o trabalho (base 3351f6c)

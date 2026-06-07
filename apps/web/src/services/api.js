@@ -236,6 +236,13 @@ export const api = {
             body: JSON.stringify(body),
         }),
     },
+    // ── Chat (Previa Bot) ──────────────────────────────────────────────────
+    chat: {
+        send: (body) => request('/api/chat', {
+            method: 'POST',
+            body: JSON.stringify(body),
+        }),
+    },
 };
 // ---------------------------------------------------------------------------
 // Formatting helpers

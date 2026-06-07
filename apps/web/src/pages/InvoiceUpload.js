@@ -3,7 +3,7 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
  * InvoiceUpload.tsx — Upload e Preview de Fatura
  *
  * Fluxo:
- *  1. Utilizador selecciona PDF ou CSV
+ *  1. Utilizador selecciona um PDF de fatura
  *  2. Frontend envia para POST /api/invoices/parse (multipart)
  *  3. API retorna lista de transacções extraídas (preview)
  *  4. Utilizador pode categorizar cada linha e ajustar o mês de competência
@@ -36,7 +36,7 @@ function DropZone({ onFile }) {
             cursor: 'pointer',
             background: drag ? 'rgba(99,102,241,0.05)' : '#0f1117',
             transition: 'all 0.2s',
-        }, children: [_jsx("div", { style: { fontSize: '2.5rem', marginBottom: '0.75rem' }, children: "\uD83D\uDCC4" }), _jsx("p", { style: { color: '#e5e7eb', fontWeight: 600, marginBottom: '0.35rem' }, children: "Arraste o PDF ou CSV da fatura aqui" }), _jsx("p", { style: { color: '#6b7280', fontSize: '0.82rem' }, children: "ou clique para seleccionar o arquivo" }), _jsx("p", { style: { color: '#4b5563', fontSize: '0.75rem', marginTop: '0.5rem' }, children: "Suportado: Nubank PDF \u00B7 Nubank CSV \u00B7 (Ita\u00FA em breve)" }), _jsx("input", { ref: inputRef, type: "file", accept: ".pdf,.csv", style: { display: 'none' }, onChange: (e) => { const f = e.target.files?.[0]; if (f)
+        }, children: [_jsx("div", { style: { fontSize: '2.5rem', marginBottom: '0.75rem' }, children: "\uD83D\uDCC4" }), _jsx("p", { style: { color: '#e5e7eb', fontWeight: 600, marginBottom: '0.35rem' }, children: "Arraste o PDF da fatura aqui" }), _jsx("p", { style: { color: '#6b7280', fontSize: '0.82rem' }, children: "ou clique para seleccionar o arquivo" }), _jsx("p", { style: { color: '#fbbf24', fontSize: '0.75rem', marginTop: '0.5rem', fontWeight: 600 }, children: "Fatura de cartão: apenas PDF. OFX não é usado neste fluxo." }), _jsx("p", { style: { color: '#fbbf24', fontSize: '0.72rem', marginTop: '0.2rem' }, children: "Suportado: Banco do Brasil PDF \u00B7 Bradesco PDF \u00B7 Ita\u00FA PDF" }), _jsx("input", { ref: inputRef, type: "file", accept: ".pdf", style: { display: 'none' }, onChange: (e) => { const f = e.target.files?.[0]; if (f)
                     onFile(f); } })] }));
 }
 function TransactionPreviewRow({ tx, categoryOptions, onChange, }) {

@@ -9,7 +9,7 @@
  */
 import { useState, useRef, useEffect, FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../services/api'
+import { api, ApiError } from '../services/api'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -43,7 +43,7 @@ const QUICK_ACTIONS = [
   { label: 'Importar fatura', to: '/invoices/upload', icon: '📄' },
   { label: 'Ver cashflow', to: '/cashflow', icon: '📈' },
   { label: 'Transações', to: '/transactions', icon: '💳' },
-  { label: 'Avaliar compra', to: '/assess', icon: '🧮' },
+  { label: 'Simular compra', to: '/budget', icon: '🛒' },
 ]
 
 // ---------------------------------------------------------------------------
@@ -60,6 +60,48 @@ O que você gostaria de saber?`
 function currentMonth(): string {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
+
+const MONTH_ALIASES: Record<string, number> = {
+  janeiro: 1,
+  fevereiro: 2,
+  marco: 3,
+  abril: 4,
+  maio: 5,
+  junho: 6,
+  julho: 7,
+  agosto: 8,
+  setembro: 9,
+  outubro: 10,
+  novembro: 11,
+  dezembro: 12,
+}
+
+function shiftMonth(month: string, offset: number): string {
+  const [year, monthIndex] = month.split('-').map(Number)
+  const d = new Date(Date.UTC(year, monthIndex - 1 + offset, 1))
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+}
+
+function normalizeMonthText(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+}
+
+function detectMonthFromText(text: string): string | null {
+  const normalized = normalizeMonthText(text)
+  if (/\b(este|esse|nesse) mes\b|\bmes atual\b/.test(normalized)) return currentMonth()
+  if (/\bmes passado\b|\bultimo mes\b|\bmes anterior\b/.test(normalized)) return shiftMonth(currentMonth(), -1)
+
+  const explicit = normalized.match(/\b(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+de\s+(\d{4}))?\b/)
+  if (!explicit) return null
+
+  const month = MONTH_ALIASES[explicit[1]]
+  const year = explicit[2] ? Number(explicit[2]) : new Date().getFullYear()
+  if (!month || !Number.isInteger(year)) return null
+  return `${year}-${String(month).padStart(2, '0')}`
 }
 
 function renderMarkdown(text: string): string {
@@ -81,6 +123,16 @@ export function PreviaBot() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
+  function formatChatError(error: unknown): string {
+    if (error instanceof ApiError) {
+      return 'Erro ao consultar o chat (' + String(error.status) + '): ' + error.message
+    }
+    if (error instanceof Error) {
+      return 'Falha ao consultar o chat: ' + error.message
+    }
+    return 'Falha ao consultar o chat: erro desconhecido.'
+  }
+
   async function sendMessage(text: string) {
     if (!text.trim() || loading) return
     setShowOnboarding(false)
@@ -92,14 +144,15 @@ export function PreviaBot() {
     try {
       const res = await api.chat.send({
         message: text.trim(),
-        month: currentMonth(),
+        month: detectMonthFromText(text.trim()) ?? currentMonth(),
         history: newHistory.slice(-10),
       })
       setMessages([...newHistory, { role: 'assistant', content: res.reply }])
-    } catch {
+    } catch (error) {
+      console.error('[PreviaBot] chat send failed:', error)
       setMessages([...newHistory, {
         role: 'assistant',
-        content: 'Não consegui processar sua pergunta agora. Verifique sua conexão e tente novamente.',
+        content: formatChatError(error),
       }])
     } finally {
       setLoading(false)

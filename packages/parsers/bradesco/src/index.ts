@@ -474,7 +474,9 @@ function parsePageLines(pageText: string, fallbackYear: number, dueDate: Date | 
       break
     }
 
-    if (shouldSkipDescription(line)) continue
+    // Only evaluate skip rules after extracting the left-side description.
+    // Bradesco appends right-column text like "Demais faturas R$ ..." to the same
+    // physical line, and that must not cause a real transaction to be dropped.
 
     // Must start with a date prefix "DD/MM "
     const dateMatch = datePrefixRegex.exec(line)

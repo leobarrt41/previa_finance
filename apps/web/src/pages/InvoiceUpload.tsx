@@ -2,7 +2,7 @@
  * InvoiceUpload.tsx — Upload e Preview de Fatura
  *
  * Fluxo:
- *  1. Utilizador selecciona PDF ou CSV
+ *  1. Utilizador selecciona um PDF de fatura
  *  2. Frontend envia para POST /api/invoices/parse (multipart)
  *  3. API retorna lista de transacções extraídas (preview)
  *  4. Utilizador pode categorizar cada linha e ajustar o mês de competência
@@ -66,18 +66,21 @@ function DropZone({ onFile }: { onFile: (f: File) => void }) {
     >
       <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>📄</div>
       <p style={{ color: '#e5e7eb', fontWeight: 600, marginBottom: '0.35rem' }}>
-        Arraste o PDF ou CSV da fatura aqui
+        Arraste o PDF da fatura aqui
       </p>
       <p style={{ color: '#6b7280', fontSize: '0.82rem' }}>
         ou clique para seleccionar o arquivo
       </p>
-      <p style={{ color: '#4b5563', fontSize: '0.75rem', marginTop: '0.5rem' }}>
-        Suportado: Nubank PDF · Nubank CSV · (Itaú em breve)
+      <p style={{ color: '#fbbf24', fontSize: '0.75rem', marginTop: '0.5rem', fontWeight: 600 }}>
+        Fatura de cartão: apenas PDF. OFX não é usado neste fluxo.
+      </p>
+      <p style={{ color: '#fbbf24', fontSize: '0.72rem', marginTop: '0.2rem' }}>
+        Suportado: Banco do Brasil PDF · Bradesco PDF · Itaú PDF
       </p>
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf,.csv"
+        accept=".pdf"
         style={{ display: 'none' }}
         onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f) }}
       />
