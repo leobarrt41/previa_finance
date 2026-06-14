@@ -243,6 +243,21 @@ export const api = {
             body: JSON.stringify(body),
         }),
     },
+    // ── Subscription (Stripe) ──────────────────────────────────────────────
+    subscription: {
+        /** Retorna o estado da assinatura; cria trial de 15 dias se não existe. */
+        me: () => request('/api/subscription/me'),
+        /** Cria uma sessão de checkout Stripe e retorna a URL de pagamento. */
+        createCheckout: (opts) => request('/api/subscription/create-checkout', {
+            method: 'POST',
+            body: JSON.stringify(opts ?? {}),
+        }),
+        /** Cancela a assinatura no final do período atual. */
+        cancel: () => request('/api/subscription/cancel', {
+            method: 'POST',
+            body: JSON.stringify({}),
+        }),
+    },
 };
 // ---------------------------------------------------------------------------
 // Formatting helpers

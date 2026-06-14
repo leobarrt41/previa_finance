@@ -47,6 +47,12 @@ cleanup() {
 }
 
 start_services() {
+  pnpm --filter @previa/core build
+  pnpm --filter @previa/db build
+  pnpm --filter @previa/parser-bb build
+  pnpm --filter @previa/parser-bradesco build
+  pnpm --filter @previa/parser-itau build
+
   pnpm --filter @previa/api dev &
   API_PID=$!
 

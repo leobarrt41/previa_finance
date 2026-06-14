@@ -17,6 +17,8 @@ import { PreviaBot } from './pages/PreviaBot'
 import { Upgrade } from './pages/Upgrade'
 
 const DEV_AUTH_BYPASS = import.meta.env.VITE_DEV_AUTH_BYPASS === 'true'
+const AFTER_SIGN_IN_URL = import.meta.env.VITE_CLERK_AFTER_SIGN_IN_URL ?? '/dashboard'
+const AFTER_SIGN_UP_URL = import.meta.env.VITE_CLERK_AFTER_SIGN_UP_URL ?? '/dashboard'
 
 /**
  * ProtectedRoute — redireciona para /sign-in se não autenticado.
@@ -58,7 +60,7 @@ export default function App() {
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}>
-                  <SignIn routing="path" path="/sign-in" afterSignInUrl="/dashboard" />
+                  <SignIn routing="path" path="/sign-in" afterSignInUrl={AFTER_SIGN_IN_URL} />
                 </div>
               }
             />
@@ -72,7 +74,7 @@ export default function App() {
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}>
-                  <SignUp routing="path" path="/sign-up" afterSignUpUrl="/dashboard" />
+                  <SignUp routing="path" path="/sign-up" afterSignUpUrl={AFTER_SIGN_UP_URL} />
                 </div>
               }
             />

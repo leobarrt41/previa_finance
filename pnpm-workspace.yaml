@@ -4,3 +4,6 @@ packages:
   - "packages/domains/*"
   - "packages/libs/*"
   - "packages/parsers/*"
+allowBuilds:
+  '@clerk/shared': true
+  esbuild: true
