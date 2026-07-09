@@ -17,6 +17,7 @@ import { createError } from '../middlewares/errorHandler.js'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
+import { shouldProjectInstallmentSeries } from '../services/installmentProjection.js'
 import { config } from '../config/env.js'
 
 const router: Router = Router()
@@ -423,6 +424,7 @@ router.post('/budget', async (req: Request, res: Response) => {
       totalAmountMinor: cardInvoices.totalAmountMinor,
       previousBalanceMinor: cardInvoices.previousBalanceMinor,
       openAmountMinor: cardInvoices.openAmountMinor,
+      effectiveOpenAmountMinor: cardInvoices.effectiveOpenAmountMinor,
       paidAmountMinor: cardInvoices.paidAmountMinor,
       institutionName: accounts.displayName,
     })
@@ -464,8 +466,8 @@ router.post('/budget', async (req: Request, res: Response) => {
     .reduce((s, t) => s + spendMinor(t.amountMinor), 0)
 
   const openDebtMinor = invoicesData
-    .filter(i => i.status === 'open' || i.status === 'partial')
-    .reduce((s, i) => s + Math.abs(Number(i.openAmountMinor ?? 0)), 0)
+    .filter((i) => Number(i.effectiveOpenAmountMinor ?? 0) > 0)
+    .reduce((s, i) => s + Math.abs(Number(i.effectiveOpenAmountMinor ?? 0)), 0)
 
   const installmentDebtMinor = installmentTxs
     .reduce((s, t) => s + spendMinor(t.amountMinor), 0)
@@ -759,8 +761,16 @@ Regras:
     })),
     historicalMonths: histSummary,
     openInvoices: invoicesData
-      .filter(i => i.status === 'open' || i.status === 'partial')
-      .map(i => ({ card: i.institutionName, month: i.invoiceMonth, openMinor: Number(i.openAmountMinor ?? 0), dueDate: i.dueDate })),
+      .filter((i) => Number(i.effectiveOpenAmountMinor ?? 0) > 0)
+      .map((i) => ({
+        card: i.institutionName,
+        month: i.invoiceMonth,
+        openMinor: Number(i.effectiveOpenAmountMinor ?? 0),
+        dueDate: i.dueDate,
+        totalMinor: Number(i.totalAmountMinor ?? 0),
+        paidMinor: Number(i.paidAmountMinor ?? 0),
+        status: 'open',
+      })),
     projectedItems: projectedItems.slice(0, 30).map(item => ({
       source: item.source,
       kind: item.kind,
@@ -1290,6 +1300,7 @@ router.post('/debt', async (req: Request, res: Response) => {
     const n = Number(tx.installmentNumber ?? 0)
     const t = Number(tx.installmentTotal ?? 0)
     if (t <= 0 || n <= 0 || t <= n) return []
+    if (!shouldProjectInstallmentSeries(tx.description ?? '')) return []
     const baseMonth = tx.competencyMonth
     const rows: ProjectedInstallment[] = []
     for (let step = 1; step <= (t - n); step++) {
@@ -1543,29 +1554,15 @@ router.post('/debt', async (req: Request, res: Response) => {
     month: row.competencyMonth,
   }))
 
-  const selectedMonthRawCardDebtMinor = invoiceSummaryRows
-    .filter((invoice) => invoice.invoiceMonth === month)
-    .reduce((sum, invoice) => sum + Number(invoice.totalMinor ?? 0), 0)
-
   const selectedMonthEffectiveOpenDebtMinor = effectiveInvoiceRows
     .filter((invoice) => invoice.invoiceMonth === month)
     .reduce((sum, invoice) => sum + Number(invoice.openMinor ?? 0), 0)
-
-  const currentUtcMonth = (() => {
-    const now = new Date()
-    return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
-  })()
-
-  const useRawCurrentMonthCardTotals = month >= currentUtcMonth
-  const cardDebtMinor = useRawCurrentMonthCardTotals
-    ? selectedMonthRawCardDebtMinor
-    : selectedMonthEffectiveOpenDebtMinor
 
   const pendingCashflowExpenseMinor = pendingCashflowForecasts
     .filter((forecast) => forecast.kind === 'expense')
     .reduce((sum, forecast) => sum + Math.abs(Number(forecast.amountMinor ?? 0)), 0)
 
-  const openDebtMinor = cardDebtMinor + pendingCashflowExpenseMinor
+  const openDebtMinor = selectedMonthEffectiveOpenDebtMinor + pendingCashflowExpenseMinor
   const totalDebtExposureMinor = openDebtMinor + futureInstallmentsMinor
 
   const currentMonthInvoiceBreakdown = invoiceSummaryRows
@@ -1613,8 +1610,8 @@ Regras:
 - Formato monetário obrigatório: \`R$ 1.234,56\`
 - Se a renda real do mês ainda não apareceu no extrato, use a renda prevista e diga explicitamente que ela ainda é previsão.
 - Considere como panorama principal os campos \`fixedExpensesBRL\`, \`cardPurchasesBRL\` e \`netBalanceBRL\`.
-- Para a competência selecionada, considere como dívida corrente o total bruto da fatura do mês (\`cashflowInvoicesSummary.totalMinor\`); pagamentos alocados à fatura anterior são histórico e não reduzem a competência corrente.
-- Sempre cite explicitamente todas as faturas da competência selecionada; não omita nenhuma linha do Banco do Brasil, Itaú ou qualquer outro cartão presente em \`currentMonthInvoiceBreakdown\`.
+- Para a competência selecionada, considere como dívida corrente apenas o saldo em aberto da fatura (\`cashflowInvoicesSummary.openMinor\` / \`invoicesSummary.openMinor\`); o total bruto da fatura do mês deve ser usado só como contextualização de compras e nunca como alerta de fatura já paga.
+- Sempre cite explicitamente todas as faturas da competência selecionada; não omita nenhuma linha do Banco do Brasil, Itaú ou qualquer outro cartão presente em \`currentMonthInvoiceBreakdown\`, mas não classifique como "em aberto" aquilo que tiver \`openMinor = 0\`.
 - Para a leitura de dívidas, considere também o gasto do mês no extrato e as projeções pendentes do Fluxo de caixa que ainda não foram marcadas como pagas.
 - Pagamentos alocados à fatura anterior aparecem em \`paidAllocatedToPreviousInvoiceMinor\` e não devem ser somados como pagamento do mês atual.
 - O campo \`paidThisMonthMinor\` já representa apenas o que saiu no extrato no mês selecionado; não some novamente pagamentos históricos das faturas.

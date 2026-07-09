@@ -8,13 +8,14 @@ import { Router, Request, Response } from 'express'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import { CashFlowEngine, CashFlowInput } from '@previa/core'
-import { transactions, accounts, cardInvoices, cardTransactions, cashflowForecasts, cashflowForecastMonthStatus, receiptDocuments } from '@previa/db'
+import { transactions, accounts, cardInvoices, cardTransactions, cardInvoiceComponents, cashflowForecasts, cashflowForecastMonthStatus, receiptDocuments } from '@previa/db'
 import { and, eq, inArray, gte, lte, sql } from 'drizzle-orm'
 import { createError } from '../middlewares/errorHandler.js'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
-import { buildCardInvoiceSemanticView } from '../services/cardInvoiceSemantics.js'
+import { buildCardInvoiceSemanticView, syncCardInvoiceSemanticFields } from '../services/cardInvoiceSemantics.js'
+import { shouldProjectInstallmentSeries } from '../services/installmentProjection.js'
 
 const router: Router = Router()
 router.use(requireClerkAuth)
@@ -169,7 +170,8 @@ const CashFlowRequestSchema = z.object({
     competencyMonth: z.string(),
     dueMonth: z.string(),
     amountMinor: z.union([z.number(), z.bigint()]),
-    paidMinor: z.union([z.number(), z.bigint()]).optional()
+    paidMinor: z.union([z.number(), z.bigint()]).optional(),
+    sourceType: z.enum(['statement', 'installment', 'synthetic']).optional()
   })).optional(),
   
   // Previsões opcionais (forecast support)
@@ -456,14 +458,39 @@ router.post('/projection', async (req: Request, res: Response) => {
     const dbInstallments = useDbCardInvoices
       ? await db
           .select({
+            cardInvoiceId: cardTransactions.cardInvoiceId,
             id: cardTransactions.id,
             competencyMonth: cardTransactions.competencyMonth,
+            description: cardTransactions.description,
             amountMinor: cardTransactions.amountMinor,
             installmentNumber: cardTransactions.installmentNumber,
             installmentTotal: cardTransactions.installmentTotal,
           })
           .from(cardTransactions)
           .where(eq(cardTransactions.userId, owner.id))
+      : []
+
+    const dbComponentInstallments = useDbCardInvoices
+      ? await db
+          .select({
+            componentId: cardInvoiceComponents.id,
+            cardInvoiceId: cardInvoiceComponents.cardInvoiceId,
+            invoiceMonth: cardInvoices.invoiceMonth,
+            description: cardInvoiceComponents.description,
+            amountMinor: cardInvoiceComponents.amountMinor,
+            installmentNumber: cardInvoiceComponents.installmentNumber,
+            installmentTotal: cardInvoiceComponents.installmentTotal,
+          })
+          .from(cardInvoiceComponents)
+          .innerJoin(cardInvoices, eq(cardInvoices.id, cardInvoiceComponents.cardInvoiceId))
+          .where(
+            and(
+              eq(cardInvoiceComponents.userId, owner.id),
+              eq(cardInvoiceComponents.componentScope, 'line_item'),
+              eq(cardInvoiceComponents.componentType, 'installment_principal'),
+              lte(cardInvoices.invoiceMonth, endMonth),
+            ),
+          )
       : []
 
     const dbLiabilityPayments = useDbCardInvoices && useDbTransactions
@@ -524,18 +551,20 @@ router.post('/projection', async (req: Request, res: Response) => {
             const totalFromTransactions = sumByInvoiceId.get(String(ci.id)) ?? 0n
             const resolvedAmount = totalFromInvoice > 0n ? totalFromInvoice : totalFromTransactions
 
-            return {
-              id: String(ci.id),
-              competencyMonth: ci.invoiceMonth,
-              dueMonth,
-              amountMinor: resolvedAmount,
-              paidMinor: toBigInt(ci.paidAmountMinor ?? 0n),
-            }
-          })
+          return {
+            id: String(ci.id),
+            competencyMonth: ci.invoiceMonth,
+            dueMonth,
+            amountMinor: resolvedAmount,
+            paidMinor: toBigInt(ci.paidAmountMinor ?? 0n),
+            sourceType: 'statement' as const,
+          }
+      })
       : data.cardInvoices!.map((ci) => ({
           ...ci,
           amountMinor: BigInt(ci.amountMinor),
           paidMinor: ci.paidMinor !== undefined ? BigInt(ci.paidMinor) : undefined,
+          sourceType: ci.sourceType ?? 'statement',
         }))
 
     const inferredPaidCardInvoices = useDbCardInvoices
@@ -588,32 +617,121 @@ router.post('/projection', async (req: Request, res: Response) => {
         })()
       : normalizedCardInvoices
 
+    const componentInstallmentInvoiceIds = new Set(dbComponentInstallments.map((row) => String(row.cardInvoiceId)))
+    const selectedInstallments = useDbCardInvoices
+      ? [
+          ...dbComponentInstallments.map((row) => ({
+            sourceId: `component-${row.componentId}`,
+            invoiceId: String(row.cardInvoiceId),
+            baseMonth: row.invoiceMonth,
+            description: row.description ?? '',
+            amountMinor: toBigInt(row.amountMinor),
+            installmentNumber: row.installmentNumber ?? 0,
+            installmentTotal: row.installmentTotal ?? 0,
+          })),
+          ...dbInstallments
+          .filter((row) => !componentInstallmentInvoiceIds.has(String(row.cardInvoiceId)))
+          .map((row) => ({
+            sourceId: `tx-${row.id}`,
+            invoiceId: String(row.cardInvoiceId),
+            baseMonth: row.competencyMonth,
+            description: row.description ?? '',
+            amountMinor: toBigInt(row.amountMinor),
+            installmentNumber: row.installmentNumber ?? 0,
+            installmentTotal: row.installmentTotal ?? 0,
+          })),
+        ]
+      : []
+
     const projectedInstallmentInvoices = useDbCardInvoices
-      ? dbInstallments.flatMap((tx) => {
-          const n = tx.installmentNumber ?? 0
-          const t = tx.installmentTotal ?? 0
-          if (t <= 0 || n <= 0 || t <= n) return []
+      ? (() => {
+          type InstallmentSeriesRow = {
+            sourceId: string
+            invoiceId: string
+            baseMonth: string
+            description: string
+            amountMinor: bigint
+            installmentNumber: number
+            installmentTotal: number
+          }
 
-          const remaining = t - n
-          const amountMinor = toBigInt(tx.amountMinor)
-          const baseMonth = tx.competencyMonth
-          const rows: Array<{ id: string; competencyMonth: string; dueMonth: string; amountMinor: bigint; paidMinor: bigint }> = []
+          type InstallmentSeriesBucket = {
+            invoiceId: string
+            descriptionKey: string
+            installmentTotal: number
+            amountMinor: bigint
+            baseMonth: string
+            maxCurrent: number
+            currentNumbers: Set<number>
+            sourceIds: string[]
+          }
 
-          for (let step = 1; step <= remaining; step++) {
-            const dueMonth = addMonths(baseMonth, step)
-            if (dueMonth < startMonth || dueMonth > endMonth) continue
-            rows.push({
-              id: `inst-${tx.id}-${step}`,
-              competencyMonth: baseMonth,
-              dueMonth,
-              amountMinor,
-              paidMinor: 0n,
-            })
+          const normalizeSeriesText = (value: string) => value
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toUpperCase()
+
+          const seriesBuckets = new Map<string, InstallmentSeriesBucket>()
+
+          for (const row of selectedInstallments as InstallmentSeriesRow[]) {
+            const current = Number(row.installmentNumber ?? 0)
+            const total = Number(row.installmentTotal ?? 0)
+            if (current <= 0 || total <= 0) continue
+            if (!shouldProjectInstallmentSeries(row.description)) continue
+
+            const descriptionKey = normalizeSeriesText(row.description)
+            const bucketKey = [row.invoiceId, descriptionKey, total, row.amountMinor.toString()].join('|')
+            const bucket = seriesBuckets.get(bucketKey) ?? {
+              invoiceId: row.invoiceId,
+              descriptionKey,
+              installmentTotal: total,
+              amountMinor: row.amountMinor,
+              baseMonth: row.baseMonth,
+              maxCurrent: 0,
+              currentNumbers: new Set<number>(),
+              sourceIds: [],
+            }
+
+            bucket.maxCurrent = Math.max(bucket.maxCurrent, current)
+            bucket.baseMonth = bucket.baseMonth > row.baseMonth ? bucket.baseMonth : row.baseMonth
+            bucket.currentNumbers.add(current)
+            bucket.sourceIds.push(row.sourceId)
+            seriesBuckets.set(bucketKey, bucket)
+          }
+
+          const rows: Array<{ id: string; competencyMonth: string; dueMonth: string; amountMinor: bigint; paidMinor: bigint; sourceType: 'installment' }> = []
+
+          for (const bucket of seriesBuckets.values()) {
+            const total = bucket.installmentTotal
+            const current = bucket.maxCurrent
+            if (total <= 0 || current <= 0 || total <= current) continue
+
+            const remaining = total - current
+            for (let step = 1; step <= remaining; step++) {
+              const dueMonth = addMonths(bucket.baseMonth, step)
+              if (dueMonth < startMonth || dueMonth > endMonth) continue
+              rows.push({
+                id: `inst-${bucket.invoiceId}-${bucket.descriptionKey}-${current}-${step}`,
+                competencyMonth: bucket.baseMonth,
+                dueMonth,
+                amountMinor: bucket.amountMinor,
+                paidMinor: 0n,
+                sourceType: 'installment',
+              })
+            }
           }
 
           return rows
-        })
+        })()
       : []
+
+    const installmentPaymentsByMonth = new Map<string, bigint>()
+    for (const row of projectedInstallmentInvoices) {
+      const current = installmentPaymentsByMonth.get(row.dueMonth) ?? 0n
+      installmentPaymentsByMonth.set(row.dueMonth, current + toBigInt(row.amountMinor))
+    }
 
     const finalCardInvoices = [...inferredPaidCardInvoices, ...projectedInstallmentInvoices]
 
@@ -652,6 +770,7 @@ router.post('/projection', async (req: Request, res: Response) => {
             dueMonth,
             amountMinor,
             paidMinor: 0n,
+            sourceType: 'synthetic',
           })
         }
       } else {
@@ -817,7 +936,14 @@ router.post('/projection', async (req: Request, res: Response) => {
         purchasesByInvoice.set(String(row.cardInvoiceId), toBigInt(row.sumPurchases))
       }
 
-      cardInvoicesPanel = invoices.map(inv => {
+      const refreshedInvoices = await Promise.all(
+        invoices.map(async (inv) => {
+          const semanticSnapshot = await syncCardInvoiceSemanticFields(db, inv.id)
+          return semanticSnapshot ? { ...inv, ...semanticSnapshot } : inv
+        }),
+      )
+
+      cardInvoicesPanel = refreshedInvoices.map(inv => {
         const purchasesMinor = purchasesByInvoice.get(String(inv.id)) ?? 0n
         const semantic = buildCardInvoiceSemanticView(inv, purchasesMinor)
         return {
@@ -853,6 +979,8 @@ router.post('/projection', async (req: Request, res: Response) => {
         totalIncomeMinor: month.totalIncomeMinor.toString(),
         totalExpenseMinor: month.totalExpenseMinor.toString(),
         totalLiabilityPaymentMinor: month.totalLiabilityPaymentMinor.toString(),
+        cardInvoicePaymentMinor: month.cardInvoicePaymentMinor.toString(),
+        installmentPaymentsMinor: (installmentPaymentsByMonth.get(month.competencyMonth) ?? 0n).toString(),
         statementOutflowMinor: (statementOutflowByMonth.get(month.competencyMonth) ?? 0n).toString(),
         totalCommittedMinor: month.totalCommittedMinor.toString(),
         projectedClosingBalanceMinor: month.projectedClosingBalanceMinor.toString(),
