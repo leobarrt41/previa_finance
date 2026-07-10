@@ -32,7 +32,6 @@ import {
   Card,
   Badge,
   Button,
-  Input,
   Alert,
   Spinner,
   SectionTitle,
@@ -175,32 +174,6 @@ function CommitmentGauge({ pct, color }: { pct: number; color?: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Tipos locais para purchaseImpact
-// ---------------------------------------------------------------------------
-interface PurchaseImpact {
-  description: string
-  totalAmountBRL: string
-  installments: number
-  monthlyBRL: string
-  type: 'credit' | 'debit'
-  impactThisMonthBRL: string
-  availableAfterBRL: string
-  availableAfterMinor: number
-  committedAfterMinor: number
-  commitmentAfterPct: number
-  canAfford: boolean
-  riskAfter: string
-}
-
-interface PurchaseVerdict {
-  canAfford: boolean
-  verdict: string
-  impactSummary: string
-  warnings?: string[]
-  alternatives?: string[]
-}
-
-// ---------------------------------------------------------------------------
 // Componente principal
 // ---------------------------------------------------------------------------
 export function Budget() {
@@ -210,16 +183,6 @@ export function Budget() {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<BudgetAssessResult | null>(null)
   const [manualProjectionCount, setManualProjectionCount] = useState(0)
-
-  // Estado do simulador de compra
-  const [purchaseDesc, setPurchaseDesc] = useState('')
-  const [purchaseValue, setPurchaseValue] = useState('')
-  const [purchaseInstallments, setPurchaseInstallments] = useState('1')
-  const [purchaseType, setPurchaseType] = useState<'credit' | 'debit'>('credit')
-  const [purchaseLoading, setPurchaseLoading] = useState(false)
-  const [purchaseImpact, setPurchaseImpact] = useState<PurchaseImpact | null>(null)
-  const [purchaseVerdict, setPurchaseVerdict] = useState<PurchaseVerdict | null>(null)
-  const [purchaseError, setPurchaseError] = useState<string | null>(null)
 
   async function handleAnalyze(includeAi = false) {
     setLoading(true)
@@ -244,49 +207,6 @@ export function Budget() {
       setError(e instanceof Error ? e.message : 'Erro ao avaliar orçamento')
     } finally {
       setLoading(false)
-    }
-  }
-
-  async function handleSimulatePurchase() {
-    const valueNum = parseFloat(purchaseValue.replace(',', '.'))
-    if (!purchaseDesc.trim() || isNaN(valueNum) || valueNum <= 0) {
-      setPurchaseError('Preencha a descrição e o valor da compra.')
-      return
-    }
-    setPurchaseLoading(true)
-    setPurchaseError(null)
-    setPurchaseImpact(null)
-    setPurchaseVerdict(null)
-    try {
-      const manualProjections = loadManualProjections()
-      const data = await api.assess.budget({
-        month: selectedMonth,
-        includeAi: true,
-        extraForecasts: manualProjections.map((tx) => ({
-          id: tx.id,
-          competencyMonth: tx.competencyMonth,
-          amountMinor: tx.type === 'expense' ? -Math.abs(tx.amountMinor) : Math.abs(tx.amountMinor),
-          recurrence: 'one-time',
-          description: tx.description,
-          isActive: true,
-        })),
-        purchaseIntent: {
-          description: purchaseDesc.trim(),
-          totalAmountMinor: Math.round(valueNum * 100),
-          installments: Math.max(1, parseInt(purchaseInstallments) || 1),
-          type: purchaseType,
-        },
-      } as Parameters<typeof api.assess.budget>[0])
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const anyData = data as any
-      if (anyData.purchaseImpact) setPurchaseImpact(anyData.purchaseImpact as PurchaseImpact)
-      if (anyData.ai?.purchaseVerdict) setPurchaseVerdict(anyData.ai.purchaseVerdict as PurchaseVerdict)
-      // Actualiza o resultado principal também
-      setResult(data)
-    } catch (e: unknown) {
-      setPurchaseError(e instanceof Error ? e.message : 'Erro ao simular compra')
-    } finally {
-      setPurchaseLoading(false)
     }
   }
 
@@ -327,12 +247,6 @@ export function Budget() {
       valor: Math.round(c.amountMinor / 100),
       pct: c.pctOfIncome,
     })) ?? []
-
-  const installmentsNum = Math.max(1, parseInt(purchaseInstallments) || 1)
-  const purchaseValueNum = parseFloat(purchaseValue.replace(',', '.')) || 0
-  const previewMonthly = purchaseValueNum > 0 && installmentsNum > 1
-    ? purchaseValueNum / installmentsNum
-    : null
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto' }}>
@@ -457,158 +371,7 @@ export function Budget() {
             </Card>
           )}
 
-          {/* ----------------------------------------------------------------- */}
-          {/* Simulador de Intenção de Compra                                    */}
-          {/* ----------------------------------------------------------------- */}
-          <Card style={{ marginBottom: '1.5rem', borderLeft: '3px solid #f59e0b' }}>
-            <div style={{ fontSize: '0.85rem', color: '#f59e0b', marginBottom: '1rem', fontWeight: 600 }}>
-              🛒 Simular compra
-            </div>
-            <p style={{ fontSize: '0.82rem', color: '#9ca3af', marginBottom: '1rem', marginTop: 0 }}>
-              Informe o que quer comprar e a IA avalia se cabe no seu orçamento agora.
-            </p>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem', alignItems: 'flex-end' }}>
-              <Input
-                label="O que quer comprar?"
-                placeholder="Ex: iPhone 15 Pro, Geladeira, Viagem..."
-                value={purchaseDesc}
-                onChange={e => setPurchaseDesc(e.target.value)}
-              />
-              <Input
-                label="Valor total (R$)"
-                placeholder="Ex: 3499,90"
-                value={purchaseValue}
-                onChange={e => setPurchaseValue(e.target.value)}
-                type="text"
-                inputMode="decimal"
-              />
-              <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', color: '#9ca3af', marginBottom: 4 }}>Parcelas</label>
-                <select
-                  value={purchaseInstallments}
-                  onChange={e => setPurchaseInstallments(e.target.value)}
-                  style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.55rem 0.85rem', color: '#e5e7eb', fontSize: '0.9rem', width: '100%' }}
-                >
-                  {[1,2,3,4,5,6,7,8,9,10,11,12,18,24,36,48].map(n => (
-                    <option key={n} value={n}>{n === 1 ? 'À vista' : `${n}x`}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', color: '#9ca3af', marginBottom: 4 }}>Forma</label>
-                <select
-                  value={purchaseType}
-                  onChange={e => setPurchaseType(e.target.value as 'credit' | 'debit')}
-                  style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.55rem 0.85rem', color: '#e5e7eb', fontSize: '0.9rem', width: '100%' }}
-                >
-                  <option value="credit">Crédito</option>
-                  <option value="debit">Débito</option>
-                </select>
-              </div>
-            </div>
-
-            {previewMonthly !== null && (
-              <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.75rem' }}>
-                Parcela estimada: <strong style={{ color: '#f59e0b' }}>{formatBRL(Math.round(previewMonthly * 100))}</strong>/mês
-              </div>
-            )}
-
-            {purchaseError && <Alert variant="error" style={{ marginBottom: '0.75rem' }}>{purchaseError}</Alert>}
-
-            <Button
-              onClick={() => void handleSimulatePurchase()}
-              disabled={purchaseLoading || !purchaseDesc.trim() || !purchaseValue}
-              variant="primary"
-            >
-              {purchaseLoading ? 'Consultando IA...' : '🤖 Posso comprar?'}
-            </Button>
-
-            {/* Resultado da simulação */}
-            {purchaseImpact && (
-              <div style={{ marginTop: '1.25rem', borderTop: '1px solid #1e2130', paddingTop: '1.25rem' }}>
-                {/* Veredicto principal */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.75rem',
-                  marginBottom: '1rem',
-                  padding: '0.75rem 1rem',
-                  borderRadius: 10,
-                  background: purchaseImpact.canAfford ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)',
-                  border: `1px solid ${purchaseImpact.canAfford ? '#4ade80' : '#f87171'}`,
-                }}>
-                  <span style={{ fontSize: '1.8rem' }}>{purchaseImpact.canAfford ? '✅' : '❌'}</span>
-                  <div>
-                    <div style={{ fontSize: '1rem', fontWeight: 700, color: purchaseImpact.canAfford ? '#4ade80' : '#f87171' }}>
-                      {purchaseImpact.canAfford ? 'Pode comprar' : 'Não recomendado agora'}
-                    </div>
-                    {purchaseVerdict?.verdict && (
-                      <div style={{ fontSize: '0.85rem', color: '#e5e7eb', marginTop: 2 }}>
-                        {purchaseVerdict.verdict}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Impacto numérico */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
-                  {[
-                    { label: 'Impacto este mês', value: purchaseImpact.impactThisMonthBRL, color: '#f87171' },
-                    { label: 'Sobra após compra', value: purchaseImpact.availableAfterBRL, color: purchaseImpact.canAfford ? '#4ade80' : '#f87171' },
-                    { label: 'Comprometimento após', value: `${purchaseImpact.commitmentAfterPct}%`, color: commitmentColor(purchaseImpact.commitmentAfterPct) },
-                  ].map(m => (
-                    <div key={m.label} style={{ background: '#0f1117', borderRadius: 8, padding: '0.6rem 0.75rem' }}>
-                      <div style={{ fontSize: '0.72rem', color: '#6b7280', marginBottom: 2 }}>{m.label}</div>
-                      <div style={{ fontSize: '1rem', fontWeight: 700, color: m.color }}>{m.value}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Comparação de gauge antes/depois */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
-                  <div style={{ background: '#0f1117', borderRadius: 8, padding: '0.5rem', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.72rem', color: '#6b7280', marginBottom: 4 }}>Antes da compra</div>
-                    <CommitmentGauge pct={commitmentPct} />
-                  </div>
-                  <div style={{ background: '#0f1117', borderRadius: 8, padding: '0.5rem', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.72rem', color: '#6b7280', marginBottom: 4 }}>Após a compra</div>
-                    <CommitmentGauge pct={purchaseImpact.commitmentAfterPct} />
-                  </div>
-                </div>
-
-                {/* Análise da IA */}
-                {purchaseVerdict?.impactSummary && (
-                  <div style={{ fontSize: '0.85rem', color: '#e5e7eb', lineHeight: 1.6, marginBottom: '0.75rem', padding: '0.75rem', background: '#0f1117', borderRadius: 8 }}>
-                    {purchaseVerdict.impactSummary}
-                  </div>
-                )}
-
-                {/* Avisos */}
-                {purchaseVerdict?.warnings && purchaseVerdict.warnings.length > 0 && (
-                  <div style={{ marginBottom: '0.75rem' }}>
-                    {purchaseVerdict.warnings.map((w, i) => (
-                      <div key={i} style={{ fontSize: '0.82rem', color: '#fbbf24', display: 'flex', gap: 6, alignItems: 'flex-start', marginBottom: 4 }}>
-                        <span style={{ flexShrink: 0 }}>⚠️</span> {w}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Alternativas */}
-                {purchaseVerdict?.alternatives && purchaseVerdict.alternatives.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: '0.78rem', color: '#6366f1', fontWeight: 600, marginBottom: 4 }}>Alternativas sugeridas:</div>
-                    {purchaseVerdict.alternatives.map((a, i) => (
-                      <div key={i} style={{ fontSize: '0.82rem', color: '#e5e7eb', display: 'flex', gap: 6, alignItems: 'flex-start', marginBottom: 4 }}>
-                        <span style={{ color: '#6366f1', flexShrink: 0 }}>→</span> {a}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </Card>
+          {/* Simulador de compra disponível no Previa Hub */}
 
           {/* Gráfico de categorias */}
           {chartData.length > 0 && (
