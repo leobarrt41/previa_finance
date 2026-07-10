@@ -847,8 +847,11 @@ router.patch('/bank-transactions/:transactionId/card-invoice', async (req: Reque
         const [currentInvoice] = await tx
           .select({
             id: cardInvoices.id,
+            totalAmountMinor: cardInvoices.totalAmountMinor,
             paidAmountMinor: cardInvoices.paidAmountMinor,
             openAmountMinor: cardInvoices.openAmountMinor,
+            effectiveOpenAmountMinor: cardInvoices.effectiveOpenAmountMinor,
+            paymentsAllocatedMinor: cardInvoices.paymentsAllocatedMinor,
           })
           .from(cardInvoices)
           .where(and(eq(cardInvoices.id, payment.cardInvoiceId), eq(cardInvoices.userId, owner.id)))
@@ -856,17 +859,24 @@ router.patch('/bank-transactions/:transactionId/card-invoice', async (req: Reque
 
         if (currentInvoice) {
           const revertAmount = BigInt(payment.allocatedAmountMinor)
-          const nextPaid = BigInt(currentInvoice.paidAmountMinor) - revertAmount
-          const nextOpen = BigInt(currentInvoice.openAmountMinor) + revertAmount
-          await tx
-            .update(cardInvoices)
-            .set({
-              paidAmountMinor: nextPaid,
-              openAmountMinor: nextOpen,
-              status: nextOpen === 0n ? 'PAID' : 'OPEN',
-              updatedAt: new Date(),
-            })
-            .where(eq(cardInvoices.id, payment.cardInvoiceId))
+          // Usa effectiveOpenAmountMinor como base canónica para a reversão.
+          // Se o allocate era 0 (bug do Itaú), a reversão não altera nada nos campos
+          // directos — o syncCardInvoiceSemanticFields recalcula tudo a partir da pivô.
+          if (revertAmount > 0n) {
+            const currentEffectiveOpen = BigInt(currentInvoice.effectiveOpenAmountMinor ?? currentInvoice.openAmountMinor ?? 0n)
+            const currentPaid = BigInt(currentInvoice.paidAmountMinor ?? 0n)
+            const nextPaid = currentPaid - revertAmount > 0n ? currentPaid - revertAmount : 0n
+            const nextOpen = currentEffectiveOpen + revertAmount
+            await tx
+              .update(cardInvoices)
+              .set({
+                paidAmountMinor: nextPaid,
+                openAmountMinor: nextOpen,
+                status: 'OPEN',
+                updatedAt: new Date(),
+              })
+              .where(eq(cardInvoices.id, payment.cardInvoiceId))
+          }
         }
       }
 
@@ -1058,6 +1068,103 @@ router.patch('/card-transactions/:cardTransactionId/settlement', async (req: Req
     res.json({
       id: cardTransactionId,
       settledInvoiceId: targetCardInvoiceId,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+/**
+ * POST /api/accounts/repair-invoice-payments
+ * Corrige retroactivamente registos na pivô card_invoice_payments onde
+ * allocated_amount_minor = 0 (bug do Itaú e similares).
+ * Para cada registo afectado, recalcula o allocate com base em totalAmountMinor
+ * e re-executa syncCardInvoiceSemanticFields.
+ */
+router.post('/repair-invoice-payments', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const db = getDatabase()
+    const clerkUserId = req.authUser!.clerkUserId
+    const owner = await resolveOwnerId(clerkUserId)
+
+    // Buscar todos os registos com allocatedAmountMinor = 0 para este utilizador
+    const zeroPayments = await db
+      .select({
+        id: cardInvoicePayments.id,
+        transactionId: cardInvoicePayments.transactionId,
+        cardInvoiceId: cardInvoicePayments.cardInvoiceId,
+        allocatedAmountMinor: cardInvoicePayments.allocatedAmountMinor,
+      })
+      .from(cardInvoicePayments)
+      .where(and(
+        eq(cardInvoicePayments.userId, owner.id),
+        sql`${cardInvoicePayments.allocatedAmountMinor} = 0`,
+      ))
+
+    if (zeroPayments.length === 0) {
+      res.json({ repaired: 0, message: 'Nenhum registo com allocated_amount_minor=0 encontrado.' })
+      return
+    }
+
+    let repaired = 0
+    const invoiceIdsToSync = new Set<number>()
+
+    for (const payment of zeroPayments) {
+      // Buscar a transacção bancária para obter o valor real do pagamento
+      const [tx] = await db
+        .select({ id: transactions.id, amountMinor: transactions.amountMinor })
+        .from(transactions)
+        .where(and(eq(transactions.id, payment.transactionId), eq(transactions.userId, owner.id)))
+        .limit(1)
+
+      if (!tx) continue
+
+      // Buscar a fatura para obter totalAmountMinor e effectiveOpenAmountMinor
+      const [invoice] = await db
+        .select({
+          id: cardInvoices.id,
+          totalAmountMinor: cardInvoices.totalAmountMinor,
+          effectiveOpenAmountMinor: cardInvoices.effectiveOpenAmountMinor,
+          openAmountMinor: cardInvoices.openAmountMinor,
+        })
+        .from(cardInvoices)
+        .where(and(eq(cardInvoices.id, payment.cardInvoiceId), eq(cardInvoices.userId, owner.id)))
+        .limit(1)
+
+      if (!invoice) continue
+
+      const paymentAmount = BigInt(tx.amountMinor) < 0n ? -BigInt(tx.amountMinor) : BigInt(tx.amountMinor)
+      const invoiceEffectiveOpen = BigInt(invoice.effectiveOpenAmountMinor ?? invoice.openAmountMinor ?? 0n)
+      const invoiceTotal = BigInt(invoice.totalAmountMinor ?? 0n)
+
+      const invoiceBase = invoiceEffectiveOpen > 0n
+        ? invoiceEffectiveOpen
+        : invoiceTotal > 0n
+          ? invoiceTotal
+          : paymentAmount
+
+      const allocate = paymentAmount < invoiceBase ? paymentAmount : invoiceBase
+
+      if (allocate > 0n) {
+        await db
+          .update(cardInvoicePayments)
+          .set({ allocatedAmountMinor: allocate })
+          .where(eq(cardInvoicePayments.id, payment.id))
+
+        invoiceIdsToSync.add(payment.cardInvoiceId)
+        repaired++
+      }
+    }
+
+    // Re-sync semântico para todas as faturas afectadas
+    for (const invoiceId of invoiceIdsToSync) {
+      await syncCardInvoiceSemanticFields(db, invoiceId)
+    }
+
+    res.json({
+      repaired,
+      invoicesSynced: invoiceIdsToSync.size,
+      message: `${repaired} registo(s) corrigido(s). ${invoiceIdsToSync.size} fatura(s) re-sincronizada(s).`,
     })
   } catch (error) {
     next(error)

@@ -160,8 +160,11 @@ export async function reconcileInvoicePayment(
     const [selectedInvoice] = await db
       .select({
         id: cardInvoices.id,
+        totalAmountMinor: cardInvoices.totalAmountMinor,
         openAmountMinor: cardInvoices.openAmountMinor,
         paidAmountMinor: cardInvoices.paidAmountMinor,
+        effectiveOpenAmountMinor: cardInvoices.effectiveOpenAmountMinor,
+        paymentsAllocatedMinor: cardInvoices.paymentsAllocatedMinor,
       })
       .from(cardInvoices)
       .where(
@@ -174,11 +177,21 @@ export async function reconcileInvoicePayment(
 
     if (!selectedInvoice) return
 
-    const invoiceOpenAmountMinor = BigInt(selectedInvoice.openAmountMinor)
-    const invoicePaidAmountMinor = BigInt(selectedInvoice.paidAmountMinor)
-    const allocate = invoiceOpenAmountMinor > 0n
-      ? (paymentAmount < invoiceOpenAmountMinor ? paymentAmount : invoiceOpenAmountMinor)
-      : 0n
+    const invoiceTotalAmountMinor = BigInt(selectedInvoice.totalAmountMinor ?? 0n)
+    const invoiceEffectiveOpenAmountMinor = BigInt(selectedInvoice.effectiveOpenAmountMinor ?? selectedInvoice.openAmountMinor ?? 0n)
+    const invoicePaidAmountMinor = BigInt(selectedInvoice.paidAmountMinor ?? 0n)
+    const invoicePaymentsAllocatedMinor = BigInt(selectedInvoice.paymentsAllocatedMinor ?? 0n)
+
+    // Se a fatura já foi paga (effectiveOpenAmountMinor=0), usamos o totalAmountMinor
+    // como referência para calcular o allocate — a associação manual deve sempre
+    // registar o valor real do pagamento, mesmo que a fatura já esteja quitada.
+    const invoiceBaseForAllocate = invoiceEffectiveOpenAmountMinor > 0n
+      ? invoiceEffectiveOpenAmountMinor
+      : invoiceTotalAmountMinor > 0n
+        ? invoiceTotalAmountMinor
+        : paymentAmount
+
+    const allocate = paymentAmount < invoiceBaseForAllocate ? paymentAmount : invoiceBaseForAllocate
 
     await db.insert(cardInvoicePayments).values({
       userId,
@@ -192,16 +205,21 @@ export async function reconcileInvoicePayment(
       confidenceScore: '1.0000',
     }).onDuplicateKeyUpdate({ set: { allocatedAmountMinor: allocate } })
 
-    const newPaid = invoicePaidAmountMinor + allocate
-    const newOpen = invoiceOpenAmountMinor - allocate
-    await db.update(cardInvoices)
-      .set({
-        paidAmountMinor: newPaid,
-        openAmountMinor: newOpen,
-        status: newOpen === 0n ? 'PAID' : 'OPEN',
-      })
-      .where(eq(cardInvoices.id, selectedInvoice.id))
+    // Actualiza paidAmountMinor/openAmountMinor apenas se a fatura ainda tinha saldo em aberto.
+    // Se já estava paga, não revertemos o estado — o sync semântico recalcula tudo.
+    if (invoiceEffectiveOpenAmountMinor > 0n) {
+      const newPaid = invoicePaidAmountMinor + allocate
+      const newOpen = invoiceEffectiveOpenAmountMinor - allocate
+      await db.update(cardInvoices)
+        .set({
+          paidAmountMinor: newPaid,
+          openAmountMinor: newOpen > 0n ? newOpen : 0n,
+          status: newOpen <= 0n ? 'PAID' : 'OPEN',
+        })
+        .where(eq(cardInvoices.id, selectedInvoice.id))
+    }
 
+    // Recalcula sempre a semântica após qualquer mudança na pivô
     await syncCardInvoiceSemanticFields(db, selectedInvoice.id)
     return
   }
