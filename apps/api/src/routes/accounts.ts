@@ -614,16 +614,30 @@ router.get('/:accountId/month/:month/statement', async (req: Request, res: Respo
         .select({
           transactionId: cardInvoicePayments.transactionId,
           cardInvoiceId: cardInvoicePayments.cardInvoiceId,
+          invoiceMonth: cardInvoices.invoiceMonth,
+          dueDate: cardInvoices.dueDate,
+          totalAmountMinor: cardInvoices.totalAmountMinor,
+          paidAmountMinor: cardInvoices.paymentsAllocatedMinor,
+          openAmountMinor: cardInvoices.effectiveOpenAmountMinor,
+          invoiceStatus: sql<string>`CASE WHEN ${cardInvoices.effectiveOpenAmountMinor} > 0 THEN 'OPEN' ELSE 'PAID' END`,
+          institutionName: accounts.institutionName,
+          cardBrand: accounts.cardBrand,
+          cardLast4: accounts.cardLast4,
+          displayName: accounts.displayName,
         })
         .from(cardInvoicePayments)
+        .innerJoin(cardInvoices, eq(cardInvoices.id, cardInvoicePayments.cardInvoiceId))
+        .innerJoin(accounts, eq(accounts.id, cardInvoices.accountId))
         .where(inArray(cardInvoicePayments.transactionId, statementTransactionIds))
         .orderBy(asc(cardInvoicePayments.id))
     : []
 
   const cardInvoiceByTransactionId = new Map<number, number | null>()
+  const cardInvoiceSummaryByTransactionId = new Map<number, typeof paymentRows[number]>()
   for (const row of paymentRows) {
     if (!cardInvoiceByTransactionId.has(row.transactionId)) {
       cardInvoiceByTransactionId.set(row.transactionId, row.cardInvoiceId)
+      cardInvoiceSummaryByTransactionId.set(row.transactionId, row)
     }
   }
 
@@ -649,6 +663,22 @@ router.get('/:accountId/month/:month/statement', async (req: Request, res: Respo
       categoryId: row.categoryId,
       categoryName: row.categoryName,
       cardInvoiceId: cardInvoiceByTransactionId.get(row.id) ?? null,
+      cardInvoiceSummary: cardInvoiceSummaryByTransactionId.get(row.id)
+        ? {
+            id: cardInvoiceSummaryByTransactionId.get(row.id)!.cardInvoiceId,
+            accountId: 0,
+            invoiceMonth: cardInvoiceSummaryByTransactionId.get(row.id)!.invoiceMonth,
+            dueDate: cardInvoiceSummaryByTransactionId.get(row.id)!.dueDate,
+            totalAmountMinor: Number(cardInvoiceSummaryByTransactionId.get(row.id)!.totalAmountMinor ?? 0n),
+            paidAmountMinor: Number(cardInvoiceSummaryByTransactionId.get(row.id)!.paidAmountMinor ?? 0n),
+            openAmountMinor: Number(cardInvoiceSummaryByTransactionId.get(row.id)!.openAmountMinor ?? 0n),
+            status: cardInvoiceSummaryByTransactionId.get(row.id)!.invoiceStatus,
+            institutionName: cardInvoiceSummaryByTransactionId.get(row.id)!.institutionName,
+            cardBrand: cardInvoiceSummaryByTransactionId.get(row.id)!.cardBrand,
+            cardLast4: cardInvoiceSummaryByTransactionId.get(row.id)!.cardLast4,
+            displayName: cardInvoiceSummaryByTransactionId.get(row.id)!.displayName,
+          }
+        : null,
       settlementAllocatedMinor: statementSettlementByTransactionId.get(row.id)?.allocatedAmountMinor
         ? Number(statementSettlementByTransactionId.get(row.id)!.allocatedAmountMinor)
         : null,

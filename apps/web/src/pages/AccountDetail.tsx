@@ -471,18 +471,28 @@ export function AccountDetail() {
     currentInvoiceId: number | null,
     currentInvoiceSummary: OpenCardInvoiceSummary | null,
     occupiedInvoiceIds: Set<number>,
+    cardInvoiceSummary?: OpenCardInvoiceSummary | null,
   ) {
+    // Prioridade: settledInvoice > cardInvoiceSummary (do backend) > procura em openInvoices
     const currentInvoice = currentInvoiceSummary
+      ?? cardInvoiceSummary
       ?? (currentInvoiceId
-      ? openInvoices.find((invoice) => invoice.id === currentInvoiceId) ?? null
-      : null)
+        ? openInvoices.find((invoice) => invoice.id === currentInvoiceId) ?? null
+        : null)
 
+    // Se a fatura está associada mas já foi paga (não está em openInvoices),
+    // criamos uma opção de fallback para que o dropdown mostre a associação existente
     const currentOption = currentInvoice
       ? {
           id: currentInvoice.id,
           label: formatInvoicePaymentLabel(currentInvoice),
         }
-      : null
+      : currentInvoiceId
+        ? {
+            id: currentInvoiceId,
+            label: `Fatura #${currentInvoiceId} (já associada)`,
+          }
+        : null
 
     const availableInvoices = openInvoices.filter((invoice) => invoice.id === currentInvoiceId || !occupiedInvoiceIds.has(invoice.id))
     return buildInvoicePaymentOptions(currentOption, availableInvoices)
@@ -782,7 +792,7 @@ export function AccountDetail() {
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                     <InvoicePaymentSelector
                                       value={tx.cardInvoiceId ?? null}
-                                      options={getAvailableInvoiceOptions(tx.cardInvoiceId ?? null, tx.settledInvoice, occupiedInvoiceIds)}
+                                      options={getAvailableInvoiceOptions(tx.cardInvoiceId ?? null, tx.settledInvoice, occupiedInvoiceIds, tx.cardInvoiceSummary)}
                                       disabled={linkingPaymentId === tx.id}
                                     onChange={(invoiceId) => handleStatementInvoiceChange(tx.id, invoiceId)}
                                     style={{ width: '100%', minWidth: 0 }}
@@ -937,7 +947,7 @@ export function AccountDetail() {
                                   <td style={{ padding: '0.45rem', color: '#94a3b8', fontSize: '0.8rem', verticalAlign: 'top' }}>
                                     <InvoicePaymentSelector
                                       value={tx.cardInvoiceId ?? null}
-                                      options={getAvailableInvoiceOptions(tx.cardInvoiceId ?? null, tx.settledInvoice, occupiedInvoiceIds)}
+                                      options={getAvailableInvoiceOptions(tx.cardInvoiceId ?? null, tx.settledInvoice, occupiedInvoiceIds, tx.cardInvoiceSummary)}
                                       disabled={linkingPaymentId === tx.id}
                                       onChange={(invoiceId) => handleStatementInvoiceChange(tx.id, invoiceId)}
                                       style={{ width: '100%', minWidth: 0 }}
@@ -1016,7 +1026,7 @@ export function AccountDetail() {
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                     <InvoicePaymentSelector
                                       value={tx.cardInvoiceId ?? null}
-                                      options={getAvailableInvoiceOptions(tx.cardInvoiceId ?? null, tx.settledInvoice, occupiedInvoiceIds)}
+                                      options={getAvailableInvoiceOptions(tx.cardInvoiceId ?? null, tx.settledInvoice, occupiedInvoiceIds, tx.cardInvoiceSummary)}
                                       disabled={linkingPaymentId === tx.id}
                                       onChange={(invoiceId) => handleStatementInvoiceChange(tx.id, invoiceId)}
                                       style={{ width: '100%', minWidth: 0 }}

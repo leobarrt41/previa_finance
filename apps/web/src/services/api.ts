@@ -377,6 +377,7 @@ export interface AccountInvoiceLine {
   settledInvoice: OpenCardInvoiceSummary | null
   movementType?: string
   cardInvoiceId?: number | null
+  cardInvoiceSummary?: OpenCardInvoiceSummary | null
 }
 
 export interface AccountInvoiceLineCategoryUpdate {
@@ -439,6 +440,7 @@ export interface AccountBankTransactionLine {
   categoryId: string | null
   categoryName: string | null
   cardInvoiceId: number | null
+  cardInvoiceSummary?: OpenCardInvoiceSummary | null
   settlementAllocatedMinor?: number | null
   settledInvoice: OpenCardInvoiceSummary | null
 }
