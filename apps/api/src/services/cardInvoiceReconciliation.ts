@@ -168,7 +168,6 @@ export async function reconcileInvoicePayment(
         and(
           eq(cardInvoices.id, targetCardInvoiceId),
           eq(cardInvoices.userId, userId),
-          gt(cardInvoices.openAmountMinor, 0n),
         ),
       )
       .limit(1)
@@ -177,7 +176,9 @@ export async function reconcileInvoicePayment(
 
     const invoiceOpenAmountMinor = BigInt(selectedInvoice.openAmountMinor)
     const invoicePaidAmountMinor = BigInt(selectedInvoice.paidAmountMinor)
-    const allocate = paymentAmount < invoiceOpenAmountMinor ? paymentAmount : invoiceOpenAmountMinor
+    const allocate = invoiceOpenAmountMinor > 0n
+      ? (paymentAmount < invoiceOpenAmountMinor ? paymentAmount : invoiceOpenAmountMinor)
+      : 0n
 
     await db.insert(cardInvoicePayments).values({
       userId,

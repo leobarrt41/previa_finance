@@ -74,7 +74,7 @@ async function computeTransactionSummary(
 
   const rows = await db
     .select({
-      type: transactions.type,
+      movementType: transactions.movementType,
       amount: transactions.amountMinor,
     })
     .from(transactions)
@@ -90,7 +90,7 @@ async function computeTransactionSummary(
   let expense = 0n
   for (const row of rows) {
     const amt = toBigInt(row.amount)
-    if (row.type === 'income') income += amt
+    if (row.movementType === 'income') income += amt
     else expense += amt
   }
 

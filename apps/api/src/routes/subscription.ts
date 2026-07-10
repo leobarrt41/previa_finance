@@ -21,13 +21,13 @@ export const subscriptionRouter: IRouter = Router()
 // ---------------------------------------------------------------------------
 // Instância Stripe (lazy — só inicializa se a chave estiver configurada)
 // ---------------------------------------------------------------------------
-function getStripe(): Stripe {
+type StripeClient = InstanceType<typeof Stripe>
+
+function getStripe(): StripeClient {
   if (!config.billing.stripeSecretKey) {
     throw createError('Stripe não está configurado (STRIPE_SECRET_KEY ausente)', 500)
   }
-  return new Stripe(config.billing.stripeSecretKey, {
-    apiVersion: '2025-05-28.basil',
-  })
+  return new Stripe(config.billing.stripeSecretKey)
 }
 
 // ---------------------------------------------------------------------------
@@ -147,11 +147,9 @@ subscriptionRouter.post(
         `${config.frontend.url}/upgrade?checkout=canceled`
 
       // Reutilizar customer Stripe se já existir
-      const customerParams: Stripe.Checkout.SessionCreateParams['customer_creation'] =
-        undefined
       let customer: string | undefined = sub?.stripeCustomerId ?? undefined
 
-      const sessionParams: Stripe.Checkout.SessionCreateParams = {
+      const sessionParams: any = {
         mode: 'subscription',
         line_items: [
           {
@@ -199,7 +197,7 @@ subscriptionRouter.post(
     const isPlaceholder =
       !webhookSecret || webhookSecret === 'whsec_placeholder'
 
-    let event: Stripe.Event
+    let event: any
 
     try {
       const stripe = getStripe()
@@ -209,7 +207,7 @@ subscriptionRouter.post(
         // Modo dev: parsear o body diretamente sem verificação de assinatura
         const bodyStr =
           Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : JSON.stringify(rawBody)
-        event = JSON.parse(bodyStr) as Stripe.Event
+        event = JSON.parse(bodyStr) as any
       } else {
         event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret)
       }
@@ -281,13 +279,13 @@ subscriptionRouter.post(
 // ---------------------------------------------------------------------------
 async function handleStripeEvent(
   db: ReturnType<typeof getDatabase>,
-  event: Stripe.Event,
+  event: any,
 ): Promise<void> {
   const now = new Date()
 
   switch (event.type) {
     case 'checkout.session.completed': {
-      const session = event.data.object as Stripe.Checkout.Session
+      const session = event.data.object as any
       const clerkUserId = session.metadata?.clerkUserId
       if (!clerkUserId) {
         console.warn('[Stripe Webhook] checkout.session.completed sem clerkUserId')
@@ -309,7 +307,7 @@ async function handleStripeEvent(
       if (subscriptionId) {
         try {
           const stripe = getStripe()
-          const stripeSub = await stripe.subscriptions.retrieve(subscriptionId)
+          const stripeSub: any = await stripe.subscriptions.retrieve(subscriptionId)
           periodEnd = new Date(stripeSub.current_period_end * 1000)
         } catch {
           // Não bloquear o webhook por falha ao buscar detalhes
@@ -334,7 +332,7 @@ async function handleStripeEvent(
     }
 
     case 'customer.subscription.updated': {
-      const stripeSub = event.data.object as Stripe.Subscription
+      const stripeSub = event.data.object as any
       const clerkUserId = stripeSub.metadata?.clerkUserId
       if (!clerkUserId) return
 
@@ -368,7 +366,7 @@ async function handleStripeEvent(
     }
 
     case 'customer.subscription.deleted': {
-      const stripeSub = event.data.object as Stripe.Subscription
+      const stripeSub = event.data.object as any
       const clerkUserId = stripeSub.metadata?.clerkUserId
       if (!clerkUserId) return
 
@@ -386,7 +384,7 @@ async function handleStripeEvent(
     }
 
     case 'invoice.payment_failed': {
-      const invoice = event.data.object as Stripe.Invoice
+      const invoice = event.data.object as any
       const customerId =
         typeof invoice.customer === 'string'
           ? invoice.customer

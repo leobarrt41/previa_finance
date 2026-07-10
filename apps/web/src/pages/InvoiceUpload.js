@@ -14,9 +14,9 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
  */
 import { useState, useRef, useMemo, useEffect } from 'react';
 import { api, formatBRL, currentMonth, } from '../services/api';
+import { buildCategoryOptions } from '../utils/categoryOptions';
 import { Card, Button, Alert, Spinner, SectionTitle, } from '../components/ui';
 import { InvoicePaymentSelector, buildInvoicePaymentOptions } from '../components/InvoicePaymentSelector';
-import { buildCategoryOptions } from '../utils/categoryOptions';
 function getInitialDebugEnabled() {
     if (typeof window === 'undefined')
         return false;
@@ -147,7 +147,9 @@ export function InvoiceUpload() {
     const [parseDebug, setParseDebug] = useState(null);
     const [debugEnabled, setDebugEnabled] = useState(getInitialDebugEnabled());
     const [debugReprocessing, setDebugReprocessing] = useState(false);
-    const categoryOptions = useMemo(() => buildCategoryOptions(categories, 'expense'), [categories]);
+    const categoryOptions = useMemo(() => {
+        return buildCategoryOptions(categories, 'expense');
+    }, [categories]);
     const expenseCategories = useMemo(() => categories.filter((c) => c.type === 'expense'), [categories]);
     const invoiceOptions = useMemo(() => buildInvoicePaymentOptions(null, openInvoices), [openInvoices]);
     useEffect(() => {
@@ -317,7 +319,16 @@ export function InvoiceUpload() {
                 chargesMinor: invoiceSummary?.chargesMinor ?? undefined,
                 financedBalanceMinor: invoiceSummary?.financedBalanceMinor ?? undefined,
                 openBalanceMinor: invoiceSummary?.openBalanceMinor ?? undefined,
-                analysis: invoiceAnalysis ?? undefined,
+                analysis: invoiceAnalysis
+                    ? {
+                        ...invoiceAnalysis,
+                        installments: invoiceAnalysis.installments?.map((item) => ({
+                            ...item,
+                            current: item.current && item.current > 0 ? item.current : undefined,
+                            total: item.total && item.total > 0 ? item.total : undefined,
+                        })),
+                    }
+                    : undefined,
             });
             setImportResult({ imported: result.imported, skipped: result.skipped });
             setStep('done');

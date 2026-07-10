@@ -258,7 +258,7 @@ router.get('/open-card-invoices', async (req: Request, res: Response) => {
   const clerkUserId = req.authUser!.clerkUserId
   const owner = await resolveOwnerId(clerkUserId)
 
-  const openInvoices = await db
+  const invoices = await db
     .select({
       id: cardInvoices.id,
       accountId: cardInvoices.accountId,
@@ -277,12 +277,11 @@ router.get('/open-card-invoices', async (req: Request, res: Response) => {
     .innerJoin(accounts, eq(accounts.id, cardInvoices.accountId))
     .where(and(
       eq(cardInvoices.userId, owner.id),
-      gt(cardInvoices.effectiveOpenAmountMinor, 0n),
     ))
     .orderBy(cardInvoices.dueDate)
 
   res.json({
-    items: openInvoices.map((invoice) => ({
+    items: invoices.map((invoice) => ({
       id: invoice.id,
       accountId: invoice.accountId,
       invoiceMonth: invoice.invoiceMonth,
