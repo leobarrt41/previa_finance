@@ -1,26 +1,16 @@
 /**
- * Budget.tsx — Avaliação Automática de Orçamento com IA
+ * Budget.tsx — Avaliação de Orçamento
  *
- * Sem campos manuais. A avaliação é feita automaticamente com base em:
- *   - Renda/salário (transactions income)
- *   - Faturas (card_invoices)
- *   - Extratos (transactions)
- *   - Classificação em categorias
- *   - Contexto do mês
+ * UX: directo ao ponto. O utilizador vê imediatamente:
+ *   1. Semáforo do mês (% comprometido + risco + sobra)
+ *   2. Três blocos: Entra / Sai / Sobra com tendência
+ *   3. Categorias com barra de risco colorida
+ *   4. Diagnóstico + alertas + recomendações da IA (quando disponível)
+ *   5. Histórico comparativo
  *
  * Contrato de API: POST /api/assess/budget
  */
 import { useEffect, useState } from 'react'
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
-} from 'recharts'
 import {
   api,
   formatBRL,
@@ -59,10 +49,16 @@ function commitmentColor(pct: number): string {
   return '#4ade80'
 }
 
+function commitmentBg(pct: number): string {
+  if (pct >= 90) return 'rgba(248,113,113,0.08)'
+  if (pct >= 70) return 'rgba(251,191,36,0.08)'
+  if (pct >= 50) return 'rgba(251,146,60,0.08)'
+  return 'rgba(74,222,128,0.08)'
+}
+
 function formatCategoryLabel(categoryId: string): string {
   if (categoryId === 'sem_categoria') return 'Sem categoria'
   if (categoryId === 'outros') return 'Outros'
-
   return categoryId
     .replace(/[_-]+/g, ' ')
     .split(' ')
@@ -72,32 +68,6 @@ function formatCategoryLabel(categoryId: string): string {
       return part.charAt(0).toUpperCase() + part.slice(1)
     })
     .join(' ')
-}
-
-
-function truncateLabel(label: string, maxLength = 20): string {
-  if (label.length <= maxLength) return label
-  return `${label.slice(0, maxLength - 1)}…`
-}
-
-function renderCategoryTick(props: any) {
-  const { x, y, payload } = props ?? {}
-  const label = String(payload?.value ?? '')
-  return (
-    <g transform={`translate(${Number(x) || 0},${(Number(y) || 0) + 4})`}>
-      <title>{label}</title>
-      <text
-        x={0}
-        y={0}
-        dy={0}
-        textAnchor="end"
-        fill="#cbd5e1"
-        fontSize={11}
-      >
-        {truncateLabel(label)}
-      </text>
-    </g>
-  )
 }
 
 function buildMonthOptions(): { value: string; label: string }[] {
@@ -145,29 +115,97 @@ function loadManualProjections(): CashFlowTransaction[] {
 }
 
 // ---------------------------------------------------------------------------
-// Gauge visual de comprometimento
+// Subcomponentes
 // ---------------------------------------------------------------------------
-function CommitmentGauge({ pct, color }: { pct: number; color?: string }) {
+
+/** Barra de progresso colorida de comprometimento */
+function CommitmentBar({ pct }: { pct: number }) {
   const clamped = Math.min(100, Math.max(0, pct))
-  const c = color ?? commitmentColor(clamped)
+  const color = commitmentColor(clamped)
   return (
-    <div style={{ textAlign: 'center', padding: '1rem 0' }}>
-      <div style={{ position: 'relative', display: 'inline-block', width: 160, height: 90 }}>
-        <svg width="160" height="90" viewBox="0 0 160 90">
-          <path d="M 15 80 A 65 65 0 0 1 145 80" fill="none" stroke="#1e2130" strokeWidth="14" strokeLinecap="round" />
-          <path
-            d="M 15 80 A 65 65 0 0 1 145 80"
-            fill="none"
-            stroke={c}
-            strokeWidth="14"
-            strokeLinecap="round"
-            strokeDasharray={`${(clamped / 100) * 204} 204`}
-          />
-        </svg>
-        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, textAlign: 'center' }}>
-          <span style={{ fontSize: '1.6rem', fontWeight: 800, color: c }}>{clamped}%</span>
-          <div style={{ fontSize: '0.7rem', color: '#6b7280' }}>comprometido</div>
+    <div style={{ width: '100%' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+        <span style={{ fontSize: '0.72rem', color: '#6b7280' }}>0%</span>
+        <span style={{ fontSize: '0.72rem', color: '#6b7280' }}>100%</span>
+      </div>
+      <div style={{ height: 8, background: '#1e2130', borderRadius: 99, overflow: 'hidden' }}>
+        <div style={{
+          height: '100%',
+          width: `${clamped}%`,
+          background: color,
+          borderRadius: 99,
+          transition: 'width 0.6s ease',
+        }} />
+      </div>
+    </div>
+  )
+}
+
+/** Card de métrica principal com tendência */
+function MetricCard({
+  label,
+  value,
+  color,
+  sub,
+  trend,
+}: {
+  label: string
+  value: number
+  color: string
+  sub?: string
+  trend?: { direction: 'up' | 'down' | 'same'; label: string }
+}) {
+  const trendIcon = trend?.direction === 'up' ? '↑' : trend?.direction === 'down' ? '↓' : '→'
+  const trendColor = trend?.direction === 'up'
+    ? (color === '#4ade80' ? '#4ade80' : '#f87171')
+    : trend?.direction === 'down'
+      ? (color === '#4ade80' ? '#f87171' : '#4ade80')
+      : '#6b7280'
+
+  return (
+    <Card style={{ flex: 1 }}>
+      <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginBottom: 6, fontWeight: 500 }}>{label}</div>
+      <div style={{ fontSize: '1.5rem', fontWeight: 800, color, marginBottom: sub ? 4 : 0 }}>
+        {formatBRL(value)}
+      </div>
+      {sub && <div style={{ fontSize: '0.72rem', color: '#6b7280' }}>{sub}</div>}
+      {trend && (
+        <div style={{ fontSize: '0.75rem', color: trendColor, marginTop: 6, display: 'flex', alignItems: 'center', gap: 3 }}>
+          <span>{trendIcon}</span>
+          <span>{trend.label}</span>
         </div>
+      )}
+    </Card>
+  )
+}
+
+/** Linha de categoria com barra de risco */
+function CategoryRow({
+  label,
+  amountMinor,
+  pct,
+}: {
+  label: string
+  amountMinor: number
+  pct: number
+}) {
+  const color = commitmentColor(pct)
+  return (
+    <div style={{ marginBottom: '0.75rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <span style={{ fontSize: '0.85rem', color: '#e5e7eb' }}>{label}</span>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'baseline' }}>
+          <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#e5e7eb' }}>{formatBRL(amountMinor)}</span>
+          <span style={{ fontSize: '0.75rem', color, fontWeight: 700, minWidth: 36, textAlign: 'right' }}>{pct}%</span>
+        </div>
+      </div>
+      <div style={{ height: 5, background: '#1e2130', borderRadius: 99, overflow: 'hidden' }}>
+        <div style={{
+          height: '100%',
+          width: `${Math.min(100, pct)}%`,
+          background: color,
+          borderRadius: 99,
+        }} />
       </div>
     </div>
   )
@@ -177,15 +215,19 @@ function CommitmentGauge({ pct, color }: { pct: number; color?: string }) {
 // Componente principal
 // ---------------------------------------------------------------------------
 export function Budget() {
-  const monthOptions = buildMonthOptions()
   const [selectedMonth, setSelectedMonth] = useState(currentMonth())
   const [loading, setLoading] = useState(false)
+  const [aiLoading, setAiLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<BudgetAssessResult | null>(null)
   const [manualProjectionCount, setManualProjectionCount] = useState(0)
 
-  async function handleAnalyze(includeAi = false) {
-    setLoading(true)
+  async function loadBudget(includeAi = false) {
+    if (includeAi) {
+      setAiLoading(true)
+    } else {
+      setLoading(true)
+    }
     setError(null)
     try {
       const manualProjections = loadManualProjections()
@@ -207,14 +249,18 @@ export function Budget() {
       setError(e instanceof Error ? e.message : 'Erro ao avaliar orçamento')
     } finally {
       setLoading(false)
+      setAiLoading(false)
     }
   }
 
   useEffect(() => {
-    void handleAnalyze(false)
+    void loadBudget(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMonth])
 
+  // ---------------------------------------------------------------------------
+  // Derivações
+  // ---------------------------------------------------------------------------
   const ai = result?.ai
   const projectedIncomeMinor = result?.projectedIncomeMinor ?? 0
   const projectedExpenseMinor = result?.projectedExpenseMinor ?? 0
@@ -223,228 +269,264 @@ export function Budget() {
   const usedProjectedIncome = result?.usedProjectedIncome ?? false
   const usedProjectedExpense = result?.usedProjectedExpense ?? false
   const usedProjectedLiability = result?.usedProjectedLiability ?? false
-  const consideredIncomeMinor = result?.consideredIncomeMinor ?? (result ? result.incomeMinor + projectedIncomeMinor : 0)
-  const consideredExpenseMinor = result?.consideredExpenseMinor ?? (result ? result.expenseMinor + projectedExpenseMinor : 0)
-  const consideredLiabilityMinor = result?.consideredLiabilityMinor ?? (result ? result.liabilityMinor + result.openDebtMinor + projectedLiabilityMinor : 0)
-  const consideredCommittedMinor = result?.totalCommittedMinor ?? (consideredExpenseMinor + consideredLiabilityMinor)
+
+  const consideredIncomeMinor = result?.consideredIncomeMinor
+    ?? (result ? result.incomeMinor + projectedIncomeMinor : 0)
+  const consideredExpenseMinor = result?.consideredExpenseMinor
+    ?? (result ? result.expenseMinor + projectedExpenseMinor : 0)
+  const consideredLiabilityMinor = result?.consideredLiabilityMinor
+    ?? (result ? result.liabilityMinor + result.openDebtMinor + projectedLiabilityMinor : 0)
+  const consideredCommittedMinor = result?.totalCommittedMinor
+    ?? (consideredExpenseMinor + consideredLiabilityMinor)
+
   const commitmentPct = ai?.commitmentPct ?? (
     consideredIncomeMinor > 0
       ? Math.round(consideredCommittedMinor / consideredIncomeMinor * 100)
       : 0
   )
 
-  const availableMinor = ai?.availableMinor ?? (
-    result?.availableMinor ?? (consideredIncomeMinor - consideredCommittedMinor)
-  )
+  const availableMinor = ai?.availableMinor
+    ?? (result?.availableMinor ?? (consideredIncomeMinor - consideredCommittedMinor))
 
-  const chartData = result?.categoryBreakdown
+  // Tendência vs mês anterior (histórico[0] = mês mais recente anterior ao actual)
+  const prevMonth = result?.historicalMonths?.[0]
+  const incomeTrend = prevMonth && prevMonth.incomeMinor > 0
+    ? (consideredIncomeMinor > prevMonth.incomeMinor
+        ? { direction: 'up' as const, label: `+${formatBRL(consideredIncomeMinor - prevMonth.incomeMinor)} vs mês anterior` }
+        : consideredIncomeMinor < prevMonth.incomeMinor
+          ? { direction: 'down' as const, label: `-${formatBRL(prevMonth.incomeMinor - consideredIncomeMinor)} vs mês anterior` }
+          : { direction: 'same' as const, label: 'Igual ao mês anterior' })
+    : undefined
+
+  const expenseTrend = prevMonth && prevMonth.expenseMinor > 0
+    ? (consideredExpenseMinor > prevMonth.expenseMinor
+        ? { direction: 'up' as const, label: `+${formatBRL(consideredExpenseMinor - prevMonth.expenseMinor)} vs mês anterior` }
+        : consideredExpenseMinor < prevMonth.expenseMinor
+          ? { direction: 'down' as const, label: `-${formatBRL(prevMonth.expenseMinor - consideredExpenseMinor)} vs mês anterior` }
+          : { direction: 'same' as const, label: 'Igual ao mês anterior' })
+    : undefined
+
+  const categoryRows = result?.categoryBreakdown
     .filter(c => c.amountMinor > 0)
     .sort((a, b) => b.pctOfIncome - a.pctOfIncome)
-    .slice(0, 6)
-    .map(c => ({
-      name: c.categoryId,
-      label: formatCategoryLabel(c.categoryId),
-      valor: Math.round(c.amountMinor / 100),
-      pct: c.pctOfIncome,
-    })) ?? []
+    .slice(0, 8) ?? []
 
+  const hasData = result && (consideredIncomeMinor > 0 || consideredExpenseMinor > 0)
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto' }}>
-      <SectionTitle>Orçamento</SectionTitle>
-      <p style={{ color: '#9ca3af', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-        Avaliação automática com base na sua renda, extratos, faturas, previsões e projeções avulsas do mês.
-      </p>
-
-      {/* Controles */}
-      <Card style={{ marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <label style={{ display: 'block', fontSize: '0.8rem', color: '#9ca3af', marginBottom: 4 }}>
-              Mês de referência
-            </label>
-            <select
-              value={selectedMonth}
-              onChange={e => setSelectedMonth(e.target.value)}
-              style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.55rem 0.85rem', color: '#e5e7eb', fontSize: '0.9rem', width: '100%' }}
-            >
-              {buildMonthOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-          <Button onClick={() => void handleAnalyze(true)} disabled={loading} variant="primary">
-            {loading ? 'Analisando...' : '🤖 Detalhar com IA'}
+    <div style={{ maxWidth: 860, margin: '0 auto' }}>
+      {/* Cabeçalho com selector de mês */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <SectionTitle style={{ margin: 0 }}>Orçamento</SectionTitle>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            value={selectedMonth}
+            onChange={e => setSelectedMonth(e.target.value)}
+            style={{
+              background: '#141624',
+              border: '1px solid #2a2f45',
+              borderRadius: 8,
+              padding: '0.5rem 0.85rem',
+              color: '#e5e7eb',
+              fontSize: '0.9rem',
+            }}
+          >
+            {buildMonthOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <Button
+            onClick={() => void loadBudget(true)}
+            disabled={loading || aiLoading}
+            variant="primary"
+          >
+            {aiLoading ? 'Analisando...' : '🤖 Análise com IA'}
           </Button>
         </div>
-      </Card>
+      </div>
 
       {manualProjectionCount > 0 && (
         <Alert variant="info" style={{ marginBottom: '1rem' }}>
-          {manualProjectionCount} projeção(ões) avulsa(s) foram carregada(s) do Fluxo de caixa para esta avaliação.
+          {manualProjectionCount} projeção(ões) avulsa(s) do Fluxo de Caixa incluída(s) nesta avaliação.
         </Alert>
       )}
 
       {error && <Alert variant="error" style={{ marginBottom: '1rem' }}>{error}</Alert>}
+
       {loading && (
-        <div style={{ textAlign: 'center', padding: '3rem' }}>
+        <div style={{ textAlign: 'center', padding: '4rem' }}>
           <Spinner />
-          <p style={{ color: '#9ca3af', marginTop: '1rem' }}>A IA está analisando seus dados financeiros...</p>
+          <p style={{ color: '#9ca3af', marginTop: '1rem', fontSize: '0.9rem' }}>Carregando avaliação...</p>
         </div>
       )}
 
-      {result && !loading && (
-        <>
-          {/* Gauge + Pode gastar? */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
-            <Card>
-              <div style={{ fontSize: '0.8rem', color: '#9ca3af', marginBottom: 4 }}>Comprometimento da renda</div>
-              <CommitmentGauge pct={commitmentPct} />
-              <div style={{ textAlign: 'center', marginTop: 4 }}>
-                <Badge variant={riskVariant(ai?.riskLevel)}>
-                  Risco {riskLabel(ai?.riskLevel)}
-                </Badge>
-              </div>
-            </Card>
-            <Card>
-              <div style={{ fontSize: '0.8rem', color: '#9ca3af', marginBottom: 8 }}>Pode gastar?</div>
-              {ai?.canSpend !== undefined && (
-                <div style={{
-                  fontSize: '2rem',
-                  fontWeight: 800,
-                  color: ai.canSpend ? '#4ade80' : '#f87171',
-                  marginBottom: 8,
-                }}>
-                  {ai.canSpend ? '✓ Sim' : '✗ Não'}
-                </div>
-              )}
-              <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: 4 }}>Sobra disponível</div>
-              <div style={{
-                fontSize: '1.4rem',
-                fontWeight: 700,
-                color: availableMinor >= 0 ? '#4ade80' : '#f87171',
-              }}>
-                {formatBRL(availableMinor)}
-              </div>
-            </Card>
+      {/* ------------------------------------------------------------------ */}
+      {/* Sem dados                                                           */}
+      {/* ------------------------------------------------------------------ */}
+      {result && !loading && !hasData && (
+        <Card style={{ textAlign: 'center', padding: '3rem' }}>
+          <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>📂</div>
+          <div style={{ fontSize: '1rem', fontWeight: 700, color: '#e5e7eb', marginBottom: '0.5rem' }}>
+            Nenhum dado encontrado para este mês
           </div>
+          <p style={{ color: '#9ca3af', fontSize: '0.88rem', maxWidth: 380, margin: '0 auto 1.5rem' }}>
+            Importe uma fatura de cartão ou adicione transações para ver a avaliação do orçamento.
+          </p>
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+            <Button variant="primary" onClick={() => window.location.href = '/invoices'}>
+              Importar fatura
+            </Button>
+            <Button variant="secondary" onClick={() => window.location.href = '/transactions'}>
+              Ver transações
+            </Button>
+          </div>
+        </Card>
+      )}
 
-          {/* Métricas */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
-            {[
-              {
-                label: 'Renda considerada',
-                value: consideredIncomeMinor,
-                color: '#4ade80',
-                meta: `Realizada ${formatBRL(result.incomeMinor)}${usedProjectedIncome ? ` • Prevista ${formatBRL(projectedIncomeMinor)}` : ''}`,
-              },
-              {
-                label: 'Gastos considerados',
-                value: consideredExpenseMinor,
-                color: '#f87171',
-                meta: `Realizados ${formatBRL(result.expenseMinor)}${usedProjectedExpense ? ` • Projetados ${formatBRL(projectedExpenseMinor)}` : ''}`,
-              },
-              {
-                label: 'Dívida em aberto',
-                value: consideredLiabilityMinor,
-                color: '#fbbf24',
-                meta: `Aberta ${formatBRL(result.openDebtMinor)}${installmentDebtMinor > 0 ? ` • Parcelas ${formatBRL(installmentDebtMinor)}` : ''}${usedProjectedLiability ? ` • Projetada ${formatBRL(projectedLiabilityMinor)}` : ''}`,
-              },
-                { label: availableMinor >= 0 ? 'Sobra' : 'Déficit', value: Math.abs(availableMinor), color: availableMinor >= 0 ? '#4ade80' : '#f87171' },
-            ].map(m => (
-              <Card key={m.label}>
-                <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: 4 }}>{m.label}</div>
-                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: m.color }}>{formatBRL(m.value)}</div>
-                {'meta' in m && m.meta && (
-                  <div style={{ fontSize: '0.72rem', color: '#6b7280', marginTop: 4 }}>{m.meta}</div>
+      {/* ------------------------------------------------------------------ */}
+      {/* Conteúdo principal                                                  */}
+      {/* ------------------------------------------------------------------ */}
+      {result && !loading && hasData && (
+        <>
+          {/* Semáforo do mês */}
+          <Card style={{
+            marginBottom: '1.5rem',
+            background: commitmentBg(commitmentPct),
+            border: `1px solid ${commitmentColor(commitmentPct)}33`,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '2rem', fontWeight: 900, color: commitmentColor(commitmentPct) }}>
+                  {commitmentPct}%
+                </span>
+                <div>
+                  <div style={{ fontSize: '0.78rem', color: '#9ca3af' }}>da renda comprometido</div>
+                  <Badge variant={riskVariant(ai?.riskLevel)}>
+                    Risco {riskLabel(ai?.riskLevel)}
+                  </Badge>
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginBottom: 2 }}>
+                  {availableMinor >= 0 ? 'Sobra disponível' : 'Déficit'}
+                </div>
+                <div style={{
+                  fontSize: '1.6rem',
+                  fontWeight: 800,
+                  color: availableMinor >= 0 ? '#4ade80' : '#f87171',
+                }}>
+                  {formatBRL(Math.abs(availableMinor))}
+                </div>
+                {ai?.canSpend !== undefined && (
+                  <div style={{ fontSize: '0.78rem', color: ai.canSpend ? '#4ade80' : '#f87171', marginTop: 2 }}>
+                    {ai.canSpend ? '✓ Pode gastar' : '✗ Não recomendado gastar'}
+                  </div>
                 )}
-              </Card>
-            ))}
+              </div>
+            </div>
+            <CommitmentBar pct={commitmentPct} />
+          </Card>
+
+          {/* Três métricas principais */}
+          <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+            <MetricCard
+              label="Entrou"
+              value={consideredIncomeMinor}
+              color="#4ade80"
+              sub={usedProjectedIncome ? `Realizado ${formatBRL(result.incomeMinor)} + Previsto ${formatBRL(projectedIncomeMinor)}` : undefined}
+              trend={incomeTrend}
+            />
+            <MetricCard
+              label="Saiu"
+              value={consideredCommittedMinor}
+              color="#f87171"
+              sub={(() => {
+                const parts: string[] = []
+                if (result.expenseMinor > 0) parts.push(`Gastos ${formatBRL(result.expenseMinor)}`)
+                if (result.openDebtMinor > 0) parts.push(`Dívida ${formatBRL(result.openDebtMinor)}`)
+                if (installmentDebtMinor > 0) parts.push(`Parcelas ${formatBRL(installmentDebtMinor)}`)
+                if (usedProjectedExpense && projectedExpenseMinor > 0) parts.push(`Projetado ${formatBRL(projectedExpenseMinor)}`)
+                if (usedProjectedLiability && projectedLiabilityMinor > 0) parts.push(`Dívida prev. ${formatBRL(projectedLiabilityMinor)}`)
+                return parts.length > 0 ? parts.join(' · ') : undefined
+              })()}
+              trend={expenseTrend}
+            />
+            <MetricCard
+              label={availableMinor >= 0 ? 'Sobra' : 'Déficit'}
+              value={Math.abs(availableMinor)}
+              color={availableMinor >= 0 ? '#4ade80' : '#f87171'}
+            />
           </div>
 
           {/* Diagnóstico da IA */}
           {ai?.diagnosis && (
             <Card style={{ marginBottom: '1.5rem', borderLeft: '3px solid #6366f1' }}>
-              <div style={{ fontSize: '0.8rem', color: '#6366f1', marginBottom: 6, fontWeight: 600 }}>
-                🤖 Diagnóstico
+              <div style={{ fontSize: '0.78rem', color: '#6366f1', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Diagnóstico da IA
               </div>
-              <p style={{ color: '#e5e7eb', fontSize: '0.9rem', lineHeight: 1.6, margin: 0 }}>
+              <p style={{ color: '#e5e7eb', fontSize: '0.9rem', lineHeight: 1.65, margin: 0 }}>
                 {ai.diagnosis}
               </p>
-            </Card>
-          )}
-
-          {/* Simulador de compra disponível no Previa Hub */}
-
-          {/* Gráfico de categorias */}
-          {chartData.length > 0 && (
-            <Card style={{ marginBottom: '1.5rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'baseline', marginBottom: '1rem' }}>
-                <div style={{ fontSize: '0.95rem', color: '#e5e7eb', fontWeight: 700 }}>
-                  Categorias mais impactantes
+              {ai.trend && (
+                <div style={{ marginTop: '0.75rem', fontSize: '0.82rem', color: '#9ca3af' }}>
+                  Tendência: <strong style={{ color: ai.trend === 'crescente' ? '#f87171' : ai.trend === 'decrescente' ? '#4ade80' : '#9ca3af' }}>
+                    {ai.trend === 'crescente' ? '↑ Gastos crescendo' : ai.trend === 'decrescente' ? '↓ Gastos reduzindo' : '→ Estável'}
+                  </strong>
+                  {ai.trendDescription && <span style={{ marginLeft: 6 }}>— {ai.trendDescription}</span>}
                 </div>
-                <div style={{ fontSize: '0.78rem', color: '#9ca3af' }}>
-                  Top {chartData.length} categorias por impacto na renda
-                </div>
-              </div>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={chartData} layout="vertical" margin={{ left: 110, right: 28, top: 8, bottom: 8 }} barCategoryGap={10}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e2130" />
-                  <XAxis
-                    type="number"
-                    domain={[0, 'dataMax']}
-                    tick={{ fill: '#6b7280', fontSize: 11 }}
-                    tickFormatter={(v) => `${v}%`}
-                    axisLine={{ stroke: '#2a2f45' }}
-                    tickLine={{ stroke: '#2a2f45' }}
-                  />
-                  <YAxis
-                    type="category"
-                    dataKey="label"
-                    tick={renderCategoryTick}
-                    width={150}
-                    axisLine={{ stroke: '#2a2f45' }}
-                    tickLine={{ stroke: '#2a2f45' }}
-                  />
-                  <Tooltip
-                    cursor={{ fill: 'rgba(99, 102, 241, 0.08)' }}
-                    contentStyle={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 10 }}
-                    labelStyle={{ color: '#e5e7eb', fontWeight: 700 }}
-                    formatter={(v: unknown, _name, props) => [`${(v as number)}%`, props.payload?.label ?? 'da renda']}
-                  />
-                  <Bar dataKey="pct" radius={[0, 8, 8, 0]} barSize={18}>
-                    {chartData.map((entry, i) => (
-                      <Cell key={i} fill={commitmentColor(entry.pct)} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              )}
             </Card>
           )}
 
           {/* Alertas */}
           {ai?.alerts && ai.alerts.length > 0 && (
-            <Card style={{ marginBottom: '1.5rem' }}>
-              <div style={{ fontSize: '0.85rem', color: '#fbbf24', marginBottom: '0.75rem', fontWeight: 600 }}>
-                ⚠️ Alertas
+            <Card style={{ marginBottom: '1.5rem', borderLeft: '3px solid #fbbf24' }}>
+              <div style={{ fontSize: '0.78rem', color: '#fbbf24', marginBottom: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Atenção
               </div>
-              <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {ai.alerts.map((a, i) => (
-                  <li key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: '0.88rem', color: '#e5e7eb' }}>
-                    <span style={{ color: '#fbbf24', flexShrink: 0 }}>•</span>
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: '0.88rem', color: '#e5e7eb' }}>
+                    <span style={{ color: '#fbbf24', flexShrink: 0, marginTop: 1 }}>⚠</span>
                     {a}
-                  </li>
+                  </div>
                 ))}
-              </ul>
+              </div>
+            </Card>
+          )}
+
+          {/* Categorias */}
+          {categoryRows.length > 0 && (
+            <Card style={{ marginBottom: '1.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
+                <div style={{ fontSize: '0.88rem', color: '#e5e7eb', fontWeight: 700 }}>
+                  Onde o dinheiro foi
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                  % da renda
+                </div>
+              </div>
+              {categoryRows.map(c => (
+                <CategoryRow
+                  key={c.categoryId}
+                  label={formatCategoryLabel(c.categoryId)}
+                  amountMinor={c.amountMinor}
+                  pct={c.pctOfIncome}
+                />
+              ))}
             </Card>
           )}
 
           {/* Recomendações */}
           {ai?.recommendations && ai.recommendations.length > 0 && (
-            <Card style={{ marginBottom: '1.5rem' }}>
-              <div style={{ fontSize: '0.85rem', color: '#4ade80', marginBottom: '0.75rem', fontWeight: 600 }}>
-                💡 Recomendações
+            <Card style={{ marginBottom: '1.5rem', borderLeft: '3px solid #4ade80' }}>
+              <div style={{ fontSize: '0.78rem', color: '#4ade80', marginBottom: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                O que fazer
               </div>
               <ol style={{ margin: 0, padding: '0 0 0 1.2rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {ai.recommendations.map((r, i) => (
-                  <li key={i} style={{ fontSize: '0.88rem', color: '#e5e7eb', lineHeight: 1.5 }}>
+                  <li key={i} style={{ fontSize: '0.88rem', color: '#e5e7eb', lineHeight: 1.55 }}>
                     {r}
                   </li>
                 ))}
@@ -452,33 +534,67 @@ export function Budget() {
             </Card>
           )}
 
-          {/* Histórico */}
+          {/* Histórico comparativo */}
           {result.historicalMonths.length > 0 && (
             <Card>
-              <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: '0.75rem' }}>
-                Histórico dos últimos meses
+              <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: '1rem', fontWeight: 600 }}>
+                Histórico
               </div>
-              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                {result.historicalMonths.map(h => (
-                  <div key={h.month} style={{ flex: 1, minWidth: 120, background: '#0f1117', borderRadius: 8, padding: '0.75rem' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: 4 }}>{h.month}</div>
-                    <div style={{ fontSize: '0.8rem', color: '#4ade80' }}>↑ {formatBRL(h.incomeMinor)}</div>
-                    <div style={{ fontSize: '0.8rem', color: '#f87171' }}>↓ {formatBRL(h.expenseMinor)}</div>
-                  </div>
-                ))}
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(result.historicalMonths.length, 5)}, 1fr)`, gap: '0.75rem' }}>
+                {result.historicalMonths.slice(0, 5).map(h => {
+                  const balance = h.incomeMinor - h.expenseMinor
+                  return (
+                    <div key={h.month} style={{ background: '#0f1117', borderRadius: 8, padding: '0.75rem' }}>
+                      <div style={{ fontSize: '0.72rem', color: '#6b7280', marginBottom: 6 }}>
+                        {new Date(h.month + '-01').toLocaleDateString('pt-BR', { month: 'short', year: '2-digit', timeZone: 'UTC' })}
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: '#4ade80', marginBottom: 2 }}>
+                        ↑ {formatBRL(h.incomeMinor)}
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: '#f87171', marginBottom: 4 }}>
+                        ↓ {formatBRL(h.expenseMinor)}
+                      </div>
+                      <div style={{
+                        fontSize: '0.78rem',
+                        fontWeight: 700,
+                        color: balance >= 0 ? '#4ade80' : '#f87171',
+                        borderTop: '1px solid #1e2130',
+                        paddingTop: 4,
+                        marginTop: 2,
+                      }}>
+                        {balance >= 0 ? '+' : ''}{formatBRL(balance)}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </Card>
           )}
-        </>
-      )}
 
-      {!result && !loading && (
-        <Card style={{ textAlign: 'center', padding: '3rem' }}>
-          <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🎯</div>
-          <p style={{ color: '#9ca3af' }}>
-            Selecione o mês para carregar a avaliação automática. Se quiser texto mais detalhado, clique em <strong style={{ color: '#6366f1' }}>Detalhar com IA</strong>.
-          </p>
-        </Card>
+          {/* Prompt para análise com IA quando ainda não foi feita */}
+          {!ai?.diagnosis && !aiLoading && (
+            <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
+              <p style={{ color: '#6b7280', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                Quer um diagnóstico detalhado com alertas e recomendações personalizadas?
+              </p>
+              <Button
+                onClick={() => void loadBudget(true)}
+                disabled={aiLoading}
+                variant="primary"
+              >
+                {aiLoading ? 'Analisando...' : '🤖 Analisar com IA'}
+              </Button>
+            </div>
+          )}
+          {aiLoading && (
+            <div style={{ textAlign: 'center', padding: '1.5rem' }}>
+              <Spinner />
+              <p style={{ color: '#9ca3af', marginTop: '0.75rem', fontSize: '0.85rem' }}>
+                A IA está analisando seus dados financeiros...
+              </p>
+            </div>
+          )}
+        </>
       )}
     </div>
   )
