@@ -13,8 +13,51 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
  * simula o preview com dados de exemplo para permitir testar o fluxo.
  */
 import { useState, useRef, useMemo, useEffect } from 'react';
-import { api, formatBRL, currentMonth } from '../services/api';
+import { api, formatBRL, currentMonth, } from '../services/api';
 import { Card, Button, Alert, Spinner, SectionTitle, } from '../components/ui';
+import { InvoicePaymentSelector, buildInvoicePaymentOptions } from '../components/InvoicePaymentSelector';
+import { buildCategoryOptions } from '../utils/categoryOptions';
+function getInitialDebugEnabled() {
+    if (typeof window === 'undefined')
+        return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('debug') === '1' || params.get('debug') === 'true';
+}
+function normalizeCategoryText(value) {
+    return value
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .toLowerCase();
+}
+function toCompetencyMonth(value, fallbackDate) {
+    if (value && /^\d{4}-\d{2}$/.test(value))
+        return value;
+    if (value && /^\d{4}-\d{2}-\d{2}$/.test(value))
+        return value.slice(0, 7);
+    if (fallbackDate && /^\d{4}-\d{2}-\d{2}$/.test(fallbackDate))
+        return fallbackDate.slice(0, 7);
+    return value?.slice(0, 7) || '';
+}
+function isCreditCardInvoiceCategoryId(categoryId, categories) {
+    if (!categoryId)
+        return false;
+    const byId = new Map(categories.map((category) => [category.id, category]));
+    let current = byId.get(categoryId) ?? null;
+    let sawPayment = false;
+    let sawInvoice = false;
+    let sawCard = false;
+    while (current) {
+        const text = normalizeCategoryText(`${current.name} ${current.slug ?? ''}`);
+        if (/(pagament|pagos?)/.test(text))
+            sawPayment = true;
+        if (/fatura/.test(text))
+            sawInvoice = true;
+        if (/cartao|credito/.test(text))
+            sawCard = true;
+        current = current.parentId ? byId.get(current.parentId) ?? null : null;
+    }
+    return sawPayment && sawInvoice && sawCard;
+}
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
@@ -39,15 +82,49 @@ function DropZone({ onFile }) {
         }, children: [_jsx("div", { style: { fontSize: '2.5rem', marginBottom: '0.75rem' }, children: "\uD83D\uDCC4" }), _jsx("p", { style: { color: '#e5e7eb', fontWeight: 600, marginBottom: '0.35rem' }, children: "Arraste o PDF da fatura aqui" }), _jsx("p", { style: { color: '#6b7280', fontSize: '0.82rem' }, children: "ou clique para seleccionar o arquivo" }), _jsx("p", { style: { color: '#fbbf24', fontSize: '0.75rem', marginTop: '0.5rem', fontWeight: 600 }, children: "Fatura de cart\u00E3o: apenas PDF. OFX n\u00E3o \u00E9 usado neste fluxo." }), _jsx("p", { style: { color: '#fbbf24', fontSize: '0.72rem', marginTop: '0.2rem' }, children: "Suportado: Banco do Brasil PDF \u00B7 Bradesco PDF \u00B7 Ita\u00FA PDF" }), _jsx("input", { ref: inputRef, type: "file", accept: ".pdf", style: { display: 'none' }, onChange: (e) => { const f = e.target.files?.[0]; if (f)
                     onFile(f); } })] }));
 }
-function TransactionPreviewRow({ tx, categoryOptions, onChange, }) {
-    return (_jsxs("tr", { style: { borderBottom: '1px solid #1a1e2e', opacity: tx.include ? 1 : 0.4 }, children: [_jsx("td", { style: { padding: '0.45rem 0.5rem', textAlign: 'center' }, children: _jsx("input", { type: "checkbox", checked: tx.include, onChange: (e) => onChange(tx.id, { include: e.target.checked }), style: { cursor: 'pointer' } }) }), _jsx("td", { style: { padding: '0.45rem 0.5rem', fontSize: '0.8rem', color: '#9ca3af' }, children: tx.date }), _jsxs("td", { style: { padding: '0.45rem 0.5rem', fontSize: '0.82rem', color: '#e5e7eb' }, children: [tx.description, tx.installment && (_jsxs("span", { style: { marginLeft: 6, fontSize: '0.72rem', color: '#6366f1' }, children: ["parcela ", tx.installment] }))] }), _jsx("td", { style: { padding: '0.45rem 0.5rem', textAlign: 'right', fontSize: '0.85rem', color: '#f87171', fontWeight: 600 }, children: formatBRL(tx.amountMinor) }), _jsx("td", { style: { padding: '0.45rem 0.5rem' }, children: _jsx("input", { value: tx.competencyMonth, onChange: (e) => onChange(tx.id, { competencyMonth: e.target.value }), placeholder: "YYYY-MM", style: {
+function TransactionPreviewRow({ tx, categoryOptions, invoiceOptions, showInvoiceSelector, onChange, }) {
+    return (_jsxs("tr", { style: { borderBottom: '1px solid #1a1e2e', opacity: tx.include ? 1 : 0.4 }, children: [_jsx("td", { style: { padding: '0.45rem 0.5rem', textAlign: 'center' }, children: _jsx("input", { type: "checkbox", checked: tx.include, onChange: (e) => onChange(tx.id, { include: e.target.checked }), style: { cursor: 'pointer' } }) }), _jsx("td", { style: { padding: '0.45rem 0.5rem', fontSize: '0.8rem', color: '#9ca3af', whiteSpace: 'nowrap' }, children: tx.date }), _jsxs("td", { style: { padding: '0.45rem 0.5rem', fontSize: '0.82rem', color: '#e5e7eb', overflowWrap: 'anywhere' }, children: [tx.description, tx.installment && (_jsxs("span", { style: { marginLeft: 6, fontSize: '0.72rem', color: '#6366f1' }, children: ["parcela ", tx.installment] }))] }), _jsx("td", { style: { padding: '0.45rem 0.5rem', textAlign: 'right', fontSize: '0.85rem', color: '#f87171', fontWeight: 600, whiteSpace: 'nowrap' }, children: formatBRL(tx.amountMinor) }), _jsx("td", { style: { padding: '0.45rem 0.5rem' }, children: _jsx("input", { value: tx.competencyMonth, onChange: (e) => onChange(tx.id, { competencyMonth: e.target.value }), placeholder: "YYYY-MM", style: {
                         background: '#0f1117', border: '1px solid #2a2f45', borderRadius: 6,
-                        padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', width: 80,
+                        padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', width: '100%', minWidth: 0,
                     } }) }), _jsx("td", { style: { padding: '0.45rem 0.5rem' }, children: _jsxs("select", { value: tx.categoryId ?? '', onChange: (e) => onChange(tx.id, { categoryId: e.target.value || null }), style: {
                         background: '#0f1117', border: `1px solid ${tx.categoryId ? '#2a2f45' : '#f87171'}`,
-                        borderRadius: 6, padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', maxWidth: 220,
+                        borderRadius: 6, padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', width: '100%',
+                        minWidth: 0, maxWidth: 'none',
                         fontFamily: 'monospace',
-                    }, children: [_jsx("option", { value: "", children: "\u2014 sem categoria \u2014" }), categoryOptions.map((opt) => (_jsx("option", { value: opt.id, disabled: opt.disabled, children: opt.label }, opt.id)))] }) })] }));
+                    }, children: [_jsx("option", { value: "", children: "\u2014 sem categoria \u2014" }), categoryOptions.map((opt) => (_jsx("option", { value: opt.id, disabled: opt.disabled, children: opt.label }, opt.id)))] }) }), _jsx("td", { style: { padding: '0.45rem 0.5rem' }, children: showInvoiceSelector ? (_jsx(InvoicePaymentSelector, { value: tx.settlesInvoiceId ?? null, options: invoiceOptions, onChange: (invoiceId) => onChange(tx.id, { settlesInvoiceId: invoiceId }), style: { width: '100%', minWidth: 0 } })) : (_jsx("span", { style: { color: '#475569', fontSize: '0.82rem' }, children: "\u2014" })) })] }));
+}
+function DebugStageCard({ label, content }) {
+    return (_jsxs("details", { style: {
+            background: '#0f1117',
+            border: '1px solid #2a2f45',
+            borderRadius: 10,
+            padding: '0.7rem 0.85rem',
+        }, children: [_jsx("summary", { style: { cursor: 'pointer', color: '#e5e7eb', fontWeight: 700, fontSize: '0.86rem' }, children: label }), _jsx("pre", { style: {
+                    marginTop: '0.75rem',
+                    marginBottom: 0,
+                    padding: '0.75rem',
+                    background: '#0b0d14',
+                    borderRadius: 8,
+                    color: '#cbd5e1',
+                    fontSize: '0.72rem',
+                    lineHeight: 1.45,
+                    whiteSpace: 'pre-wrap',
+                    overflowX: 'auto',
+                    maxHeight: 320,
+                }, children: content })] }));
+}
+function InvoiceDebugPanel({ debug }) {
+    return (_jsxs(Card, { style: { marginBottom: '1rem', border: '1px solid #4b5563', background: '#10121a' }, children: [_jsxs("div", { style: { display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.75rem' }, children: [_jsxs("div", { children: [_jsx("p", { style: { margin: 0, color: '#fbbf24', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.4 }, children: "Debug tempor\u00E1rio" }), _jsxs("p", { style: { margin: '0.25rem 0 0', color: '#e5e7eb', fontWeight: 700, fontSize: '0.95rem' }, children: [debug.strategy, " \u00B7 ", debug.sourceBank] })] }), _jsx("div", { style: { color: '#94a3b8', fontSize: '0.8rem', alignSelf: 'flex-end' }, children: "Mostrando etapas da leitura" })] }), _jsx("div", { style: { display: 'grid', gap: '0.75rem' }, children: debug.stages.map((stage) => (_jsx(DebugStageCard, { label: stage.label, content: stage.content }, stage.label))) })] }));
+}
+function InvoiceInstallmentsPanel({ installments }) {
+    if (installments.length === 0)
+        return null;
+    return (_jsxs(Card, { style: { marginBottom: '1rem', border: '1px solid #334155', background: '#10121a' }, children: [_jsxs("div", { style: { display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.85rem' }, children: [_jsxs("div", { children: [_jsx("p", { style: { margin: 0, color: '#fbbf24', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.4 }, children: "Parcelamentos detectados" }), _jsx("p", { style: { margin: '0.25rem 0 0', color: '#e5e7eb', fontWeight: 700, fontSize: '0.92rem' }, children: "Itens j\u00E1 parcelados, financiamentos e s\u00E9ries de parcelas da fatura" })] }), _jsx("div", { style: { color: '#9ca3af', fontSize: '0.78rem', alignSelf: 'flex-end' }, children: "S\u00E3o importados junto com a fatura, mas n\u00E3o entram no total seleccionado desta p\u00E1gina" })] }), _jsx("div", { style: { overflowX: 'auto' }, children: _jsxs("table", { style: { width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', tableLayout: 'fixed' }, children: [_jsx("thead", { children: _jsxs("tr", { style: { color: '#6b7280', borderBottom: '1px solid #2a2f45', background: '#0f1117' }, children: [_jsx("th", { style: { padding: '0.5rem', textAlign: 'left' }, children: "Descri\u00E7\u00E3o" }), _jsx("th", { style: { padding: '0.5rem', width: 100, textAlign: 'right' }, children: "Valor" }), _jsx("th", { style: { padding: '0.5rem', width: 104, textAlign: 'left' }, children: "Data" }), _jsx("th", { style: { padding: '0.5rem', width: 100, textAlign: 'left' }, children: "Parcela" })] }) }), _jsx("tbody", { children: installments.map((item, index) => (_jsxs("tr", { style: { borderBottom: '1px solid #1a1e2e' }, children: [_jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#e5e7eb', overflowWrap: 'anywhere' }, children: item.description }), _jsx("td", { style: { padding: '0.55rem 0.5rem', textAlign: 'right', color: '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }, children: formatBRL(Math.round(item.amount * 100)) }), _jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#9ca3af', whiteSpace: 'nowrap' }, children: item.date ?? '—' }), _jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#cbd5e1' }, children: item.current && item.total ? `${item.current}/${item.total}` : '—' })] }, `${item.description}-${item.date ?? 'nodate'}-${index}`))) })] }) })] }));
+}
+function DebugStatusCard({ debugEnabled, hasDebug, isReprocessing }) {
+    if (!debugEnabled)
+        return null;
+    return (_jsx(Card, { style: { marginBottom: '1rem', border: '1px solid #3f3f46', background: '#111827' }, children: _jsxs("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }, children: [_jsxs("div", { children: [_jsx("p", { style: { margin: 0, color: '#fbbf24', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase' }, children: "Debug de leitura" }), _jsx("p", { style: { margin: '0.25rem 0 0', color: '#e5e7eb', fontWeight: 700, fontSize: '0.9rem' }, children: hasDebug ? 'Etapas carregadas' : isReprocessing ? 'Reprocessando fatura para gerar ASCII e JSON...' : 'Aguardando leitura da fatura' })] }), _jsx("div", { style: { color: '#9ca3af', fontSize: '0.78rem' }, children: hasDebug ? 'Role para ver o ASCII abaixo.' : 'Se a fatura já estiver aberta, o upload será repetido.' })] }) }));
 }
 // ---------------------------------------------------------------------------
 // Main page
@@ -64,38 +141,29 @@ export function InvoiceUpload() {
     const [errorMsg, setErrorMsg] = useState('');
     const [importResult, setImportResult] = useState(null);
     const [invoiceSummary, setInvoiceSummary] = useState(null);
+    const [invoiceAnalysis, setInvoiceAnalysis] = useState(null);
     const [invoiceBank, setInvoiceBank] = useState(null);
-    const categoryOptions = useMemo(() => {
-        const expenses = categories.filter((c) => c.type === 'expense');
-        const parents = expenses.filter((c) => !c.parentId);
-        const byParent = new Map();
-        for (const cat of expenses) {
-            if (!cat.parentId)
-                continue;
-            const arr = byParent.get(cat.parentId) || [];
-            arr.push(cat);
-            byParent.set(cat.parentId, arr);
-        }
-        const sortByName = (a, b) => a.name.localeCompare(b.name);
-        const options = [];
-        for (const parent of [...parents].sort(sortByName)) {
-            const children = [...(byParent.get(parent.id) || [])].sort(sortByName);
-            if (children.length > 0) {
-                options.push({ id: parent.id, label: parent.name, disabled: true });
-                for (const child of children) {
-                    options.push({ id: child.id, label: `  └ ${child.name}`, disabled: false });
-                }
-            }
-            else {
-                options.push({ id: parent.id, label: parent.name, disabled: false });
-            }
-        }
-        return options;
-    }, [categories]);
+    const [openInvoices, setOpenInvoices] = useState([]);
+    const [parseDebug, setParseDebug] = useState(null);
+    const [debugEnabled, setDebugEnabled] = useState(getInitialDebugEnabled());
+    const [debugReprocessing, setDebugReprocessing] = useState(false);
+    const categoryOptions = useMemo(() => buildCategoryOptions(categories, 'expense'), [categories]);
     const expenseCategories = useMemo(() => categories.filter((c) => c.type === 'expense'), [categories]);
+    const invoiceOptions = useMemo(() => buildInvoicePaymentOptions(null, openInvoices), [openInvoices]);
     useEffect(() => {
         api.categories.list().then(setCategories).catch(() => { });
     }, []);
+    useEffect(() => {
+        api.accounts.openCardInvoices().then((result) => setOpenInvoices(result.items)).catch(() => { });
+    }, []);
+    useEffect(() => {
+        if (!debugEnabled || !file || step !== 'preview')
+            return;
+        setDebugReprocessing(true);
+        parseSelectedFile(file, pdfPassword.trim() || undefined).finally(() => setDebugReprocessing(false));
+        // Reprocessa só quando o debug é activado com a fatura já carregada.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [debugEnabled]);
     function isPasswordRequiredError(error) {
         return error instanceof Error
             && error.message.toLowerCase().includes('pdf protegido por senha');
@@ -145,14 +213,17 @@ export function InvoiceUpload() {
     async function parseSelectedFile(selectedFile, password) {
         setStep('parsing');
         setErrorMsg('');
+        setParseDebug(null);
         try {
-            const result = await api.invoices.parse(selectedFile, { password });
+            const result = await api.invoices.parse(selectedFile, { password, debug: debugEnabled });
             if (result.summary.dueMonth)
                 setDueMonth(result.summary.dueMonth);
             if (result.summary.invoiceMonth)
                 setInvoiceMonth(result.summary.invoiceMonth);
             setInvoiceSummary(result.summary);
+            setInvoiceAnalysis(result.analysis ?? null);
             setInvoiceBank(result.bank);
+            setParseDebug(result.debug ?? null);
             const suggestedTransactions = await suggestCategoriesWithAI(result.transactions);
             setTransactions(suggestedTransactions);
             setAwaitingPassword(false);
@@ -188,7 +259,15 @@ export function InvoiceUpload() {
         parseSelectedFile(file, password);
     }
     function handleChange(id, patch) {
-        setTransactions((prev) => prev.map((t) => t.id === id ? { ...t, ...patch } : t));
+        setTransactions((prev) => prev.map((t) => {
+            if (t.id !== id)
+                return t;
+            const next = { ...t, ...patch };
+            if (patch.categoryId !== undefined && !isCreditCardInvoiceCategoryId(patch.categoryId, categories)) {
+                next.settlesInvoiceId = null;
+            }
+            return next;
+        }));
     }
     function selectAll(include) {
         setTransactions((prev) => prev.map((t) => ({ ...t, include })));
@@ -205,9 +284,23 @@ export function InvoiceUpload() {
         setErrorMsg('');
         try {
             const result = await api.invoices.import({
-                transactions: included.map(({ date, description, amountMinor, categoryId, competencyMonth, installment }) => ({
-                    date, description, amountMinor, categoryId, competencyMonth, installment,
+                transactions: included.map(({ date, description, amountMinor, categoryId, competencyMonth, installment, settlesInvoiceId }) => ({
+                    date,
+                    description,
+                    amountMinor,
+                    categoryId,
+                    competencyMonth: toCompetencyMonth(competencyMonth, date),
+                    installment,
+                    settlesInvoiceId,
                 })),
+                installments: invoiceAnalysis?.installments.map((item) => ({
+                    date: item.date ?? invoiceSummary?.dueDate ?? `${invoiceMonth}-01`,
+                    description: item.description,
+                    amountMinor: Math.round(item.amount * 100),
+                    competencyMonth: toCompetencyMonth(item.date?.slice(0, 7), item.date ?? invoiceSummary?.dueDate ?? `${invoiceMonth}-01`),
+                    installment: item.current && item.total ? `${item.current}/${item.total}` : undefined,
+                    categoryId: null,
+                })) ?? [],
                 invoiceMonth,
                 dueMonth,
                 bank: invoiceBank ?? undefined,
@@ -219,7 +312,12 @@ export function InvoiceUpload() {
                 totalMinor: invoiceSummary?.totalMinor ?? undefined,
                 previousBalanceMinor: invoiceSummary?.previousBalanceMinor ?? undefined,
                 paymentsMinor: invoiceSummary?.paymentsMinor ?? undefined,
+                monthlyExpensesMinor: invoiceSummary?.monthlyExpensesMinor ?? undefined,
+                creditsAndRefundsMinor: invoiceSummary?.creditsAndRefundsMinor ?? undefined,
+                chargesMinor: invoiceSummary?.chargesMinor ?? undefined,
+                financedBalanceMinor: invoiceSummary?.financedBalanceMinor ?? undefined,
                 openBalanceMinor: invoiceSummary?.openBalanceMinor ?? undefined,
+                analysis: invoiceAnalysis ?? undefined,
             });
             setImportResult({ imported: result.imported, skipped: result.skipped });
             setStep('done');
@@ -240,9 +338,21 @@ export function InvoiceUpload() {
         setErrorMsg('');
         setImportResult(null);
         setInvoiceSummary(null);
+        setInvoiceAnalysis(null);
         setInvoiceBank(null);
+        setParseDebug(null);
     }
-    return (_jsxs("div", { style: { maxWidth: 1000 }, children: [_jsxs("div", { style: { marginBottom: '1.5rem' }, children: [_jsx("h1", { style: { fontSize: '1.4rem', fontWeight: 800, color: '#e5e7eb', margin: 0 }, children: "\uD83D\uDCE4 Upload de Fatura" }), _jsx("p", { style: { color: '#6b7280', marginTop: '0.3rem', fontSize: '0.85rem' }, children: "Importe faturas de cart\u00E3o em PDF ou CSV. Revise e categorize antes de confirmar." })] }), step === 'select' && (_jsx("div", { style: { maxWidth: 560 }, children: _jsxs(Card, { children: [_jsx(SectionTitle, { children: "Seleccionar arquivo" }), _jsx(DropZone, { onFile: handleFile }), awaitingPassword && file && (_jsxs("div", { style: {
+    return (_jsxs("div", { style: { maxWidth: 1000 }, children: [_jsx("div", { style: { marginBottom: '1.5rem' }, children: _jsxs("div", { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }, children: [_jsxs("div", { children: [_jsx("h1", { style: { fontSize: '1.4rem', fontWeight: 800, color: '#e5e7eb', margin: 0 }, children: "\uD83D\uDCE4 Upload de Fatura" }), _jsx("p", { style: { color: '#6b7280', marginTop: '0.3rem', fontSize: '0.85rem' }, children: "Importe faturas de cart\u00E3o em PDF ou CSV. Revise e categorize antes de confirmar." })] }), _jsx("button", { type: "button", onClick: () => setDebugEnabled((v) => !v), style: {
+                                alignSelf: 'flex-start',
+                                background: debugEnabled ? '#1f2937' : '#111827',
+                                border: `1px solid ${debugEnabled ? '#f59e0b' : '#374151'}`,
+                                borderRadius: 999,
+                                color: debugEnabled ? '#fbbf24' : '#9ca3af',
+                                cursor: 'pointer',
+                                padding: '0.5rem 0.85rem',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                            }, children: debugEnabled ? 'Debug ligado' : 'Debug desligado' })] }) }), step === 'select' && (_jsx("div", { style: { maxWidth: 560 }, children: _jsxs(Card, { children: [_jsx(SectionTitle, { children: "Seleccionar arquivo" }), _jsx(DropZone, { onFile: handleFile }), awaitingPassword && file && (_jsxs("div", { style: {
                                 marginTop: '1rem',
                                 padding: '0.85rem',
                                 background: '#1f1627',
@@ -280,7 +390,7 @@ export function InvoiceUpload() {
                                     borderTop: '1px solid #1e2130',
                                     display: 'flex', gap: '1.5rem', flexWrap: 'wrap', fontSize: '0.82rem',
                                     alignItems: 'center',
-                                }, children: [_jsxs("div", { children: [_jsx("span", { style: { color: '#6b7280' }, children: "Saldo anterior: " }), _jsx("span", { style: { color: '#f87171', fontWeight: 600 }, children: formatBRL(invoiceSummary.previousBalanceMinor) })] }), _jsxs("div", { children: [_jsx("span", { style: { color: '#6b7280' }, children: "Pagamentos: " }), _jsxs("span", { style: { color: '#4ade80', fontWeight: 600 }, children: ["\u2212", formatBRL(invoiceSummary.paymentsMinor)] })] }), _jsxs("div", { children: [_jsx("span", { style: { color: '#6b7280' }, children: "Novas compras: " }), _jsxs("span", { style: { color: '#e5e7eb', fontWeight: 600 }, children: ["+", formatBRL(invoiceSummary.nationalPurchasesMinor + invoiceSummary.internationalPurchasesMinor)] })] }), invoiceSummary.chargesMinor > 0 && (_jsxs("div", { children: [_jsx("span", { style: { color: '#6b7280' }, children: "Encargos: " }), _jsxs("span", { style: { color: '#fbbf24', fontWeight: 600 }, children: ["+", formatBRL(invoiceSummary.chargesMinor)] })] })), _jsxs("div", { style: { marginLeft: 'auto', background: '#1a1f35', borderRadius: 8, padding: '0.4rem 0.8rem' }, children: [_jsxs("span", { style: { color: '#93c5fd', fontSize: '0.78rem' }, children: ["\uD83D\uDCB3 Total a pagar em ", dueMonth || invoiceSummary.dueMonth, ": "] }), _jsx("span", { style: { color: '#f87171', fontWeight: 800, fontSize: '0.9rem' }, children: formatBRL(invoiceSummary.totalMinor) })] })] }))] }), uncategorized.length > 0 && (_jsxs(Alert, { variant: "warning", style: { marginBottom: '1rem' }, children: [_jsxs("strong", { children: [uncategorized.length, " transac\u00E7\u00E3o(\u00F5es)"] }), " sem categoria. Categorize antes de importar para melhor an\u00E1lise."] })), errorMsg && _jsx(Alert, { variant: "error", style: { marginBottom: '1rem' }, children: errorMsg }), _jsxs(Card, { style: { padding: 0, overflow: 'hidden' }, children: [_jsxs("div", { style: { padding: '0.75rem 1rem', borderBottom: '1px solid #1e2130', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }, children: [_jsxs(SectionTitle, { style: { margin: 0 }, children: [transactions.length, " transac\u00E7\u00F5es extra\u00EDdas \u00B7 ", included.length, " seleccionadas"] }), _jsxs("div", { style: { display: 'flex', gap: '0.5rem' }, children: [_jsx("button", { onClick: () => selectAll(true), style: { background: 'none', border: '1px solid #2a2f45', borderRadius: 6, color: '#9ca3af', cursor: 'pointer', padding: '3px 10px', fontSize: '0.78rem' }, children: "Seleccionar tudo" }), _jsx("button", { onClick: () => selectAll(false), style: { background: 'none', border: '1px solid #2a2f45', borderRadius: 6, color: '#9ca3af', cursor: 'pointer', padding: '3px 10px', fontSize: '0.78rem' }, children: "Desmarcar tudo" })] })] }), _jsx("div", { style: { overflowX: 'auto' }, children: _jsxs("table", { style: { width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }, children: [_jsx("thead", { children: _jsxs("tr", { style: { color: '#6b7280', borderBottom: '1px solid #2a2f45', background: '#0f1117' }, children: [_jsx("th", { style: { padding: '0.5rem', width: 36 } }), _jsx("th", { style: { padding: '0.5rem', textAlign: 'left' }, children: "Data" }), _jsx("th", { style: { padding: '0.5rem', textAlign: 'left' }, children: "Descri\u00E7\u00E3o" }), _jsx("th", { style: { padding: '0.5rem', textAlign: 'right' }, children: "Valor" }), _jsx("th", { style: { padding: '0.5rem', textAlign: 'left' }, children: "Compet\u00EAncia" }), _jsx("th", { style: { padding: '0.5rem', textAlign: 'left' }, children: "Categoria" })] }) }), _jsx("tbody", { children: transactions.map((tx) => (_jsx(TransactionPreviewRow, { tx: tx, categoryOptions: categoryOptions, onChange: handleChange }, tx.id))) })] }) })] }), _jsxs("div", { style: { display: 'flex', gap: '0.75rem', marginTop: '1rem', justifyContent: 'flex-end' }, children: [_jsx(Button, { onClick: reset, variant: "secondary", children: "Cancelar" }), _jsxs(Button, { onClick: handleImport, disabled: included.length === 0 || !dueMonth, children: ["Importar ", included.length, " transac\u00E7\u00F5es \u2192"] })] })] })), step === 'importing' && (_jsxs(Card, { style: { textAlign: 'center', padding: '3rem' }, children: [_jsx(Spinner, { size: 40 }), _jsxs("p", { style: { color: '#9ca3af', marginTop: '1rem', fontSize: '0.9rem' }, children: ["Importando ", included.length, " transac\u00E7\u00F5es..."] })] })), step === 'done' && importResult && (_jsxs(Card, { style: { textAlign: 'center', padding: '2.5rem' }, children: [_jsx("div", { style: { fontSize: '3rem', marginBottom: '1rem' }, children: "\u2705" }), _jsx("h2", { style: { color: '#4ade80', fontWeight: 800, marginBottom: '0.5rem', fontSize: '1.2rem' }, children: "Fatura importada com sucesso!" }), _jsxs("div", { style: { display: 'flex', gap: '2rem', justifyContent: 'center', marginTop: '1rem', marginBottom: '1.5rem' }, children: [_jsxs("div", { children: [_jsx("p", { style: { fontSize: '0.75rem', color: '#6b7280' }, children: "Importadas" }), _jsx("p", { style: { fontSize: '1.5rem', fontWeight: 800, color: '#4ade80' }, children: importResult.imported })] }), _jsxs("div", { children: [_jsx("p", { style: { fontSize: '0.75rem', color: '#6b7280' }, children: "Ignoradas" }), _jsx("p", { style: { fontSize: '1.5rem', fontWeight: 800, color: '#6b7280' }, children: importResult.skipped })] }), _jsxs("div", { children: [_jsx("p", { style: { fontSize: '0.75rem', color: '#6b7280' }, children: "Total fatura" }), _jsx("p", { style: { fontSize: '1.5rem', fontWeight: 800, color: '#f87171' }, children: formatBRL(invoiceSummary?.totalMinor ?? 0) })] })] }), _jsxs("div", { style: {
+                                }, children: [_jsxs("div", { children: [_jsx("span", { style: { color: '#6b7280' }, children: "Total da fatura anterior: " }), _jsx("span", { style: { color: '#f87171', fontWeight: 600 }, children: formatBRL(invoiceSummary.previousBalanceMinor) })] }), typeof invoiceSummary.financedBalanceMinor === 'number' && invoiceSummary.financedBalanceMinor > 0 && (_jsxs("div", { children: [_jsx("span", { style: { color: '#6b7280' }, children: "Saldo financiado: " }), _jsx("span", { style: { color: '#f87171', fontWeight: 600 }, children: formatBRL(invoiceSummary.financedBalanceMinor) })] })), _jsxs("div", { children: [_jsx("span", { style: { color: '#6b7280' }, children: "Pagamentos: " }), _jsxs("span", { style: { color: '#4ade80', fontWeight: 600 }, children: ["\u2212", formatBRL(invoiceSummary.paymentsMinor)] })] }), _jsxs("div", { children: [_jsx("span", { style: { color: '#6b7280' }, children: "Novas compras: " }), _jsxs("span", { style: { color: '#e5e7eb', fontWeight: 600 }, children: ["+", formatBRL(invoiceSummary.monthlyExpensesMinor ?? (invoiceSummary.nationalPurchasesMinor + invoiceSummary.internationalPurchasesMinor))] })] }), invoiceSummary.creditsAndRefundsMinor > 0 && (_jsxs("div", { children: [_jsx("span", { style: { color: '#6b7280' }, children: "Cr\u00E9ditos e estornos: " }), _jsxs("span", { style: { color: '#4ade80', fontWeight: 600 }, children: ["+", formatBRL(invoiceSummary.creditsAndRefundsMinor)] })] })), invoiceSummary.chargesMinor > 0 && (_jsxs("div", { children: [_jsx("span", { style: { color: '#6b7280' }, children: "Encargos: " }), _jsxs("span", { style: { color: '#fbbf24', fontWeight: 600 }, children: ["+", formatBRL(invoiceSummary.chargesMinor)] })] })), _jsxs("div", { style: { marginLeft: 'auto', background: '#1a1f35', borderRadius: 8, padding: '0.4rem 0.8rem' }, children: [_jsxs("span", { style: { color: '#93c5fd', fontSize: '0.78rem' }, children: ["\uD83D\uDCB3 Total a pagar em ", dueMonth || invoiceSummary.dueMonth, ": "] }), _jsx("span", { style: { color: '#f87171', fontWeight: 800, fontSize: '0.9rem' }, children: formatBRL(invoiceSummary.totalMinor) })] })] }))] }), _jsx(DebugStatusCard, { debugEnabled: debugEnabled, hasDebug: Boolean(parseDebug), isReprocessing: debugReprocessing }), parseDebug && debugEnabled && (_jsx(InvoiceDebugPanel, { debug: parseDebug })), invoiceAnalysis?.installments && invoiceAnalysis.installments.length > 0 && (_jsx(InvoiceInstallmentsPanel, { installments: invoiceAnalysis.installments })), uncategorized.length > 0 && (_jsxs(Alert, { variant: "warning", style: { marginBottom: '1rem' }, children: [_jsxs("strong", { children: [uncategorized.length, " transac\u00E7\u00E3o(\u00F5es)"] }), " sem categoria. Categorize antes de importar para melhor an\u00E1lise."] })), errorMsg && _jsx(Alert, { variant: "error", style: { marginBottom: '1rem' }, children: errorMsg }), _jsxs(Card, { style: { padding: 0, overflow: 'hidden' }, children: [_jsxs("div", { style: { padding: '0.75rem 1rem', borderBottom: '1px solid #1e2130', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }, children: [_jsxs(SectionTitle, { style: { margin: 0 }, children: [transactions.length, " transac\u00E7\u00F5es extra\u00EDdas \u00B7 ", included.length, " seleccionadas"] }), _jsxs("div", { style: { display: 'flex', gap: '0.5rem' }, children: [_jsx("button", { onClick: () => selectAll(true), style: { background: 'none', border: '1px solid #2a2f45', borderRadius: 6, color: '#9ca3af', cursor: 'pointer', padding: '3px 10px', fontSize: '0.78rem' }, children: "Seleccionar tudo" }), _jsx("button", { onClick: () => selectAll(false), style: { background: 'none', border: '1px solid #2a2f45', borderRadius: 6, color: '#9ca3af', cursor: 'pointer', padding: '3px 10px', fontSize: '0.78rem' }, children: "Desmarcar tudo" })] })] }), _jsx("div", { children: _jsxs("table", { style: { width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', tableLayout: 'fixed' }, children: [_jsx("thead", { children: _jsxs("tr", { style: { color: '#6b7280', borderBottom: '1px solid #2a2f45', background: '#0f1117' }, children: [_jsx("th", { style: { padding: '0.5rem', width: 36 } }), _jsx("th", { style: { padding: '0.5rem', width: 104, textAlign: 'left' }, children: "Data" }), _jsx("th", { style: { padding: '0.5rem', textAlign: 'left' }, children: "Descri\u00E7\u00E3o" }), _jsx("th", { style: { padding: '0.5rem', width: 100, textAlign: 'right' }, children: "Valor" }), _jsx("th", { style: { padding: '0.5rem', width: 100, textAlign: 'left' }, children: "Compet\u00EAncia" }), _jsx("th", { style: { padding: '0.5rem', width: 240, textAlign: 'left' }, children: "Categoria" }), _jsx("th", { style: { padding: '0.5rem', width: 250, textAlign: 'left' }, children: "Fatura paga" })] }) }), _jsx("tbody", { children: transactions.map((tx) => (_jsx(TransactionPreviewRow, { tx: tx, categoryOptions: categoryOptions, invoiceOptions: invoiceOptions, showInvoiceSelector: isCreditCardInvoiceCategoryId(tx.categoryId ?? null, categories), onChange: handleChange }, tx.id))) })] }) })] }), _jsxs("div", { style: { display: 'flex', gap: '0.75rem', marginTop: '1rem', justifyContent: 'flex-end' }, children: [_jsx(Button, { onClick: reset, variant: "secondary", children: "Cancelar" }), _jsxs(Button, { onClick: handleImport, disabled: included.length === 0 || !dueMonth, children: ["Importar ", included.length, " transac\u00E7\u00F5es \u2192"] })] })] })), step === 'importing' && (_jsxs(Card, { style: { textAlign: 'center', padding: '3rem' }, children: [_jsx(Spinner, { size: 40 }), _jsxs("p", { style: { color: '#9ca3af', marginTop: '1rem', fontSize: '0.9rem' }, children: ["Importando ", included.length, " transac\u00E7\u00F5es..."] })] })), step === 'done' && importResult && (_jsxs(Card, { style: { textAlign: 'center', padding: '2.5rem' }, children: [_jsx("div", { style: { fontSize: '3rem', marginBottom: '1rem' }, children: "\u2705" }), _jsx("h2", { style: { color: '#4ade80', fontWeight: 800, marginBottom: '0.5rem', fontSize: '1.2rem' }, children: "Fatura importada com sucesso!" }), _jsxs("div", { style: { display: 'flex', gap: '2rem', justifyContent: 'center', marginTop: '1rem', marginBottom: '1.5rem' }, children: [_jsxs("div", { children: [_jsx("p", { style: { fontSize: '0.75rem', color: '#6b7280' }, children: "Importadas" }), _jsx("p", { style: { fontSize: '1.5rem', fontWeight: 800, color: '#4ade80' }, children: importResult.imported })] }), _jsxs("div", { children: [_jsx("p", { style: { fontSize: '0.75rem', color: '#6b7280' }, children: "Ignoradas" }), _jsx("p", { style: { fontSize: '1.5rem', fontWeight: 800, color: '#6b7280' }, children: importResult.skipped })] }), _jsxs("div", { children: [_jsx("p", { style: { fontSize: '0.75rem', color: '#6b7280' }, children: "Total fatura" }), _jsx("p", { style: { fontSize: '1.5rem', fontWeight: 800, color: '#f87171' }, children: formatBRL(invoiceSummary?.totalMinor ?? 0) })] })] }), _jsxs("div", { style: {
                             padding: '0.75rem 1rem',
                             background: '#1a2a3a',
                             borderLeft: '3px solid #6366f1',

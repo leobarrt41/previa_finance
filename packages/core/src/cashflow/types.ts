@@ -35,6 +35,8 @@ export interface CardInvoice {
   amountMinor: Minor
   // how much already paid from this invoice (minor units)
   paidMinor?: Minor
+  // distinguish real statement debt from projected installment rows
+  sourceType?: 'statement' | 'installment' | 'synthetic'
 }
 
 // Future obligations/commitments (recurring or one-off)
@@ -98,6 +100,7 @@ export interface MonthlyCashFlow {
   totalIncomeMinor: Minor
   totalExpenseMinor: Minor
   totalLiabilityPaymentMinor: Minor
+  cardInvoicePaymentMinor: Minor
   totalCommittedMinor: Minor
   projectedClosingBalanceMinor: Minor
   debtOpenMinor: Minor

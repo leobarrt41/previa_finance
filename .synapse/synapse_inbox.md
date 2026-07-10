@@ -875,3 +875,14 @@ mysql -u root previa_finance < packages/db/migrations/0009_receipt_documents.sql
 - Lógica azul/laranja intacta
 - Sem .env commitado
 - git pull feito antes de iniciar o trabalho (base 3351f6c)
+
+## 2026-06-13 22:30
+
+ID: 20260613-2230-checkpoint-local-1  
+SOURCE: previa_finance/copilot  
+CATEGORIA: Decisão  
+TÍTULO: Checkpoint local 1 salvo no Git  
+DESCRIÇÃO: Foi criado e registrado localmente o commit `29123ff` como checkpoint do estado funcional atual do workspace. Esse ponto guarda as correções do frontend, do `start.sh`, da configuração do pnpm e do bootstrap dos pacotes compartilhados antes da API subir.  
+TAGS: checkpoint,git,local,dev  
+PRIORIDADE: Média  
+STATUS: Concluído

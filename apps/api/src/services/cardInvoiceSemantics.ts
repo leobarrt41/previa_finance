@@ -1,5 +1,5 @@
 import { eq, sql } from 'drizzle-orm'
-import { cardInvoicePayments, cardInvoices } from '@previa/db'
+import { cardInvoiceComponents, cardInvoicePayments, cardInvoiceSettlements, cardInvoices } from '@previa/db'
 
 type CardInvoiceSemanticSnapshot = {
   reportedPreviousBalanceMinor: bigint
@@ -111,6 +111,28 @@ export async function syncCardInvoiceSemanticFields(
     return null
   }
 
+  const [paymentSummary] = await db
+    .select({
+      reportedPaidMinor: sql<string>`
+        COALESCE(
+          ABS(
+            SUM(
+              CASE
+                WHEN ${cardInvoiceComponents.componentScope} = 'summary'
+                 AND ${cardInvoiceComponents.componentType} = 'payment_received'
+                THEN ${cardInvoiceComponents.amountMinor}
+                ELSE 0
+              END
+            )
+          ),
+          0
+        )
+      `,
+    })
+    .from(cardInvoiceComponents)
+    .where(eq(cardInvoiceComponents.cardInvoiceId, cardInvoiceId))
+    .limit(1)
+
   console.log('[cardInvoiceSemantics] invoice loaded', {
     cardInvoiceId,
     invoice: {
@@ -129,10 +151,23 @@ export async function syncCardInvoiceSemanticFields(
 
   const [paymentAgg] = await db
     .select({
-      allocatedMinor: sql<bigint>`COALESCE(SUM(${cardInvoicePayments.allocatedAmountMinor}), 0)`,
+      allocatedMinor: sql<bigint>`
+        COALESCE((
+          SELECT SUM(${cardInvoicePayments.allocatedAmountMinor})
+          FROM ${cardInvoicePayments}
+          WHERE ${cardInvoicePayments.cardInvoiceId} = ${cardInvoiceId}
+        ), 0)
+        +
+        COALESCE((
+          SELECT SUM(${cardInvoiceSettlements.allocatedAmountMinor})
+          FROM ${cardInvoiceSettlements}
+          WHERE ${cardInvoiceSettlements.targetCardInvoiceId} = ${cardInvoiceId}
+        ), 0)
+      `,
     })
-    .from(cardInvoicePayments)
-    .where(eq(cardInvoicePayments.cardInvoiceId, cardInvoiceId))
+    .from(cardInvoices)
+    .where(eq(cardInvoices.id, cardInvoiceId))
+    .limit(1)
 
   console.log('[cardInvoiceSemantics] payment aggregation loaded', {
     cardInvoiceId,
@@ -141,7 +176,18 @@ export async function syncCardInvoiceSemanticFields(
 
   const totalAmountMinor = BigInt(invoice.totalAmountMinor ?? 0n)
   const previousBalanceMinor = BigInt(invoice.previousBalanceMinor ?? 0n)
-  const paidAmountMinor = BigInt(invoice.paidAmountMinor ?? 0n)
+  const summaryPaidAmountMinor = toBigIntValue(paymentSummary?.reportedPaidMinor)
+  const normalizedSummaryPaidAmountMinor =
+    summaryPaidAmountMinor > 0n &&
+    previousBalanceMinor > 0n &&
+    summaryPaidAmountMinor > previousBalanceMinor * 10n &&
+    summaryPaidAmountMinor % 100n === 0n
+      ? summaryPaidAmountMinor / 100n
+      : summaryPaidAmountMinor
+  const paidAmountMinor =
+    normalizedSummaryPaidAmountMinor > 0n
+      ? normalizedSummaryPaidAmountMinor
+      : maxBigInt(toBigIntValue(invoice.reportedPaidAmountMinor) || toBigIntValue(invoice.paidAmountMinor), 0n)
   const openAmountMinor = BigInt(invoice.openAmountMinor ?? 0n)
   const paymentsAllocatedMinor = BigInt(paymentAgg?.allocatedMinor ?? 0n)
 
@@ -149,13 +195,15 @@ export async function syncCardInvoiceSemanticFields(
   const reportedPaidAmountMinor = paidAmountMinor
   const carriedOpenAmountMinor = maxBigInt(previousBalanceMinor - paidAmountMinor, 0n)
 
-  const paidDerivedOpen = maxBigInt(totalAmountMinor - paidAmountMinor, 0n)
+  const baseOpenAmountMinor = maxBigInt(openAmountMinor, 0n)
+  // Pagamento do cabeçalho ("fatura anterior") não reduz o aberto da fatura atual.
+  // Só alocações reais à fatura corrente devem baixar o saldo em aberto.
   const effectiveOpenAmountMinor =
     paymentsAllocatedMinor > 0n
       ? maxBigInt(totalAmountMinor - paymentsAllocatedMinor, 0n)
-      : paidAmountMinor > 0n && openAmountMinor === paidDerivedOpen
-        ? totalAmountMinor
-        : maxBigInt(openAmountMinor, 0n)
+      : baseOpenAmountMinor > 0n
+        ? baseOpenAmountMinor
+        : totalAmountMinor
 
   console.log('[cardInvoiceSemantics] before update', {
     cardInvoiceId,

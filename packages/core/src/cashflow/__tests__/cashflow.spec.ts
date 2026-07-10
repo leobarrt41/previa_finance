@@ -70,6 +70,30 @@ describe('CashFlowEngine — basic rules', () => {
     expect(out.monthly.find((m) => m.competencyMonth === '2026-05')!.debtOpenMinor).toBe(15000)
     // on due month, committed should include outstanding amount
     expect(out.monthly.find((m) => m.competencyMonth === '2026-06')!.totalCommittedMinor).toBe(15000)
+    // on due month, the projected cash balance must also reflect the invoice payment
+    expect(out.monthly.find((m) => m.competencyMonth === '2026-06')!.cardInvoicePaymentMinor).toBe(15000)
+    expect(out.monthly.find((m) => m.competencyMonth === '2026-06')!.projectedClosingBalanceMinor).toBe(-15000)
+  })
+
+  it('projected installments are not counted as open invoice debt', () => {
+    const input: CashFlowInput = {
+      openingBalanceMinor: 0,
+      cardInvoices: [
+        {
+          id: 'inst1',
+          competencyMonth: '2026-04',
+          dueMonth: '2026-06',
+          amountMinor: 4200,
+          sourceType: 'installment',
+        },
+      ],
+      projectionMonths: ['2026-05', '2026-06'],
+    }
+
+    const out = CashFlowEngine.project(input)
+    expect(out.monthly.find((m) => m.competencyMonth === '2026-05')!.debtOpenMinor).toBe(0)
+    expect(out.monthly.find((m) => m.competencyMonth === '2026-06')!.debtOpenMinor).toBe(0)
+    expect(out.monthly.find((m) => m.competencyMonth === '2026-06')!.cardInvoicePaymentMinor).toBe(4200)
   })
 
   it('mixed scenario: income + expense + invoice payment', () => {

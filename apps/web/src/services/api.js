@@ -27,6 +27,17 @@ function getAuthToken() {
     }
     return null;
 }
+async function readResponseBody(res) {
+    const text = await res.text().catch(() => '');
+    if (!text)
+        return {};
+    try {
+        return JSON.parse(text);
+    }
+    catch {
+        return { message: text };
+    }
+}
 async function request(path, options = {}) {
     const token = getAuthToken();
     const headers = {
@@ -38,7 +49,7 @@ async function request(path, options = {}) {
     }
     const res = await fetch(path, { ...options, headers });
     if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = await readResponseBody(res);
         throw new ApiError(res.status, getApiErrorMessage(body, res.statusText), body);
     }
     if (res.status === 204) {
@@ -57,7 +68,7 @@ async function requestRaw(path, options = {}) {
     }
     const res = await fetch(path, { ...options, headers });
     if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = await readResponseBody(res);
         throw new ApiError(res.status, getApiErrorMessage(body, res.statusText), body);
     }
     if (res.status === 204) {
@@ -159,13 +170,19 @@ export const api = {
     },
     accounts: {
         list: () => request('/api/accounts'),
+        openCardInvoices: () => request('/api/accounts/open-card-invoices'),
         invoiceDetails: (accountId, month) => request(`/api/accounts/${accountId}/month/${month}/invoice`),
         statementDetails: (accountId, month) => request(`/api/accounts/${accountId}/month/${month}/statement`),
         updateCardTransactionCategory: (cardTransactionId, categoryId) => request(`/api/accounts/card-transactions/${cardTransactionId}/category`, {
             method: 'PATCH',
             body: JSON.stringify({ categoryId }),
         }),
+        updateCardTransactionSettlement: (cardTransactionId, targetCardInvoiceId) => request(`/api/accounts/card-transactions/${cardTransactionId}/settlement`, {
+            method: 'PATCH',
+            body: JSON.stringify({ targetCardInvoiceId }),
+        }),
         updateBankTransactionCategory: (transactionId, categoryId) => request(`/api/accounts/bank-transactions/${transactionId}/category`, { method: 'PATCH', body: JSON.stringify({ categoryId }) }),
+        updateBankTransactionCardInvoice: (transactionId, cardInvoiceId) => request(`/api/accounts/bank-transactions/${transactionId}/card-invoice`, { method: 'PATCH', body: JSON.stringify({ cardInvoiceId }) }),
         deleteByMonth: (accountId, month) => request(`/api/accounts/${accountId}/month/${month}`, { method: 'DELETE' }),
     },
     assess: {
@@ -224,6 +241,8 @@ export const api = {
                 form.append('bank', options.bank);
             if (options.password)
                 form.append('password', options.password);
+            if (options.debug)
+                form.append('debug', '1');
             return requestRaw('/api/invoices/parse', { method: 'POST', body: form });
         },
         classify: (body) => request('/api/invoices/classify', {

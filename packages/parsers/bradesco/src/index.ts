@@ -87,6 +87,10 @@ function parseAmountToCents(value: string): number | null {
   return Math.round(num * 100)
 }
 
+function getPythonBin(): string {
+  return process.env.PREVIA_PYTHON || process.env.PYTHON_BIN || 'python3'
+}
+
 function parseDateDM(value: string, fallbackYear: number, dueDate?: Date | null): Date | null {
   const m = /^(\d{2})\/(\d{2})$/.exec(value)
   if (!m) return null
@@ -122,6 +126,18 @@ function sanitizeDescription(raw: string): string {
 function isGarbageDescription(raw: string): boolean {
   const normalized = normalizeLine(raw).replace(/R\$/g, '').replace(/[^A-Z0-9]/g, '')
   return normalized.length === 0
+}
+
+function shouldSkipTransaction(description: string): boolean {
+  const normalized = normalizeLine(description)
+  return (
+    !normalized
+    || /^SALDO ANTERIOR\b/.test(normalized)
+    || /^PAGAMENTO\b/.test(normalized)
+    || /^PGTO\b/.test(normalized)
+    || /^PAGTO\b/.test(normalized)
+    || /^CREDITOS?\/PAGAMENTOS?\b/.test(normalized)
+  )
 }
 
 /**
@@ -284,7 +300,14 @@ async function extractPages(buffer: Buffer, password?: string): Promise<string[]
 
   try {
     const script = `
-import sys, pdfplumber
+import sys
+try:
+    import pdfplumber
+except ModuleNotFoundError as exc:
+    if getattr(exc, 'name', '') == 'pdfplumber':
+        print('PDF_DEPENDENCY_MISSING: pdfplumber', file=sys.stderr)
+        raise SystemExit(3)
+    raise
 path = sys.argv[1]
 password = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None
 pages = []
@@ -293,14 +316,15 @@ try:
         for page in pdf.pages:
             pages.append(page.extract_text(x_tolerance=3, y_tolerance=3) or '')
 except Exception as exc:
-    if 'PDFPasswordIncorrect' in str(exc) or 'password' in str(exc).lower():
+    message = str(exc)
+    if 'PDFPasswordIncorrect' in message or 'password required' in message.lower():
         print('PDF_PASSWORD_REQUIRED', file=sys.stderr)
         raise SystemExit(2)
     raise
 print('\\n===PAGE===\\n'.join(pages))
 `
     const args = password ? ['-c', script, tmpFile, password] : ['-c', script, tmpFile]
-    const output = execFileSync('python3', args, {
+    const output = execFileSync(getPythonBin(), args, {
       encoding: 'utf8',
       maxBuffer: 10 * 1024 * 1024,
     })
@@ -503,6 +527,7 @@ function parsePageLines(pageText: string, fallbackYear: number, dueDate: Date | 
     // Description is everything before the amount
     let description = sanitizeDescription(rest.slice(0, amountMatch.index).trim())
     if (!description || isGarbageDescription(description) || shouldSkipDescription(description)) continue
+    if (shouldSkipTransaction(description)) continue
 
     // Detect credit: Bradesco uses "217,20-" (trailing dash after amount)
     // Check the character immediately after the amount match

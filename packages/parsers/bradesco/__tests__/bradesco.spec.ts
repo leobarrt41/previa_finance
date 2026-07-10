@@ -40,6 +40,7 @@ describe('parseBradescoInvoice', () => {
         }),
       ])
     )
+    expect(invoice.transactions.some((t) => /PAGAMENTO/i.test(t.description))).toBe(false)
     expect(bradescoInvoiceToForecast(invoice)).toHaveLength(1)
   })
 
@@ -59,17 +60,13 @@ describe('parseBradescoInvoice', () => {
           installment: '9/24',
         }),
         expect.objectContaining({
-          description: 'PAGAMENTO RECEBIDO - OBRIGADO',
-          amountMinor: -21720,
-        }),
-        expect.objectContaining({
           description: 'COMPRA PARCELADA CASAS BAHIA',
           amountMinor: 13152,
           installment: '1/24',
         }),
       ])
     )
-    expect(invoice.transactions.some((t) => t.description.includes('PAGAMENTO RECEBIDO'))).toBe(true)
+    expect(invoice.transactions.some((t) => t.description.includes('PAGAMENTO RECEBIDO'))).toBe(false)
     expect(bradescoInvoiceToForecast(invoice)).toHaveLength(1)
   })
 })

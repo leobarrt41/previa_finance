@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express'
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm'
 import { z } from 'zod'
-import { accounts, cardInvoices, cardTransactions, categories, receiptDocuments, transactions } from '@previa/db'
+import { accounts, cardInvoiceComponents, cardInvoicePayments, cardInvoiceSettlements, cardInvoices, cardTransactions, categories, receiptDocuments, transactions } from '@previa/db'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { buildCardInvoiceSemanticView } from '../services/cardInvoiceSemantics.js'
@@ -10,6 +10,7 @@ import {
   loadCategoryHierarchyById,
   reconcileInvoicePayment,
 } from '../services/cardInvoiceReconciliation.js'
+import { syncCardInvoiceSemanticFields } from '../services/cardInvoiceSemantics.js'
 import { createError } from '../middlewares/errorHandler.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
 
@@ -39,12 +40,20 @@ const updateCardTransactionCategoryBodySchema = z.object({
   categoryId: z.string().nullable(),
 })
 
+const updateCardTransactionSettlementBodySchema = z.object({
+  targetCardInvoiceId: z.union([z.coerce.number().int().positive(), z.null()]),
+})
+
 const updateBankTransactionCategoryParamsSchema = z.object({
   transactionId: z.coerce.number().int().positive(),
 })
 
 const updateBankTransactionCategoryBodySchema = z.object({
   categoryId: z.string().nullable(),
+})
+
+const updateBankTransactionCardInvoiceBodySchema = z.object({
+  cardInvoiceId: z.union([z.coerce.number().int().positive(), z.null()]),
 })
 
 router.get('/', async (req: Request, res: Response) => {
@@ -244,6 +253,52 @@ router.delete('/:accountId/month/:month', async (req: Request, res: Response) =>
   })
 })
 
+router.get('/open-card-invoices', async (req: Request, res: Response) => {
+  const db = getDatabase()
+  const clerkUserId = req.authUser!.clerkUserId
+  const owner = await resolveOwnerId(clerkUserId)
+
+  const openInvoices = await db
+    .select({
+      id: cardInvoices.id,
+      accountId: cardInvoices.accountId,
+      invoiceMonth: cardInvoices.invoiceMonth,
+      dueDate: cardInvoices.dueDate,
+      totalAmountMinor: cardInvoices.totalAmountMinor,
+      paidAmountMinor: cardInvoices.paymentsAllocatedMinor,
+      openAmountMinor: cardInvoices.effectiveOpenAmountMinor,
+      status: sql<string>`CASE WHEN ${cardInvoices.effectiveOpenAmountMinor} > 0 THEN 'OPEN' ELSE 'PAID' END`,
+      institutionName: accounts.institutionName,
+      cardBrand: accounts.cardBrand,
+      cardLast4: accounts.cardLast4,
+      displayName: accounts.displayName,
+    })
+    .from(cardInvoices)
+    .innerJoin(accounts, eq(accounts.id, cardInvoices.accountId))
+    .where(and(
+      eq(cardInvoices.userId, owner.id),
+      gt(cardInvoices.effectiveOpenAmountMinor, 0n),
+    ))
+    .orderBy(cardInvoices.dueDate)
+
+  res.json({
+    items: openInvoices.map((invoice) => ({
+      id: invoice.id,
+      accountId: invoice.accountId,
+      invoiceMonth: invoice.invoiceMonth,
+      dueDate: invoice.dueDate,
+      totalAmountMinor: Number(invoice.totalAmountMinor ?? 0n),
+      paidAmountMinor: Number(invoice.paidAmountMinor ?? 0n),
+      openAmountMinor: Number(invoice.openAmountMinor ?? 0n),
+      status: invoice.status,
+      institutionName: invoice.institutionName,
+      cardBrand: invoice.cardBrand,
+      cardLast4: invoice.cardLast4,
+      displayName: invoice.displayName,
+    })),
+  })
+})
+
 router.get('/:accountId/month/:month/invoice', async (req: Request, res: Response) => {
   const db = getDatabase()
   const clerkUserId = req.authUser!.clerkUserId
@@ -316,6 +371,9 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
     })
   }
 
+  const invoiceSemanticSnapshot = await syncCardInvoiceSemanticFields(db, invoice.id)
+  const invoiceForSemantic = invoiceSemanticSnapshot ? { ...invoice, ...invoiceSemanticSnapshot } : invoice
+
   const transactionRows = await db
     .select({
       id: cardTransactions.id,
@@ -333,8 +391,60 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
     .where(eq(cardTransactions.cardInvoiceId, invoice.id))
     .orderBy(desc(cardTransactions.occurredAt), desc(cardTransactions.id))
 
+  const componentRows = await db
+    .select({
+      id: cardInvoiceComponents.id,
+      componentScope: cardInvoiceComponents.componentScope,
+      componentType: cardInvoiceComponents.componentType,
+      amountMinor: cardInvoiceComponents.amountMinor,
+      description: cardInvoiceComponents.description,
+      source: cardInvoiceComponents.source,
+      sourceDate: cardInvoiceComponents.sourceDate,
+      cardTransactionId: cardInvoiceComponents.cardTransactionId,
+      transactionId: cardInvoiceComponents.transactionId,
+      installmentNumber: cardInvoiceComponents.installmentNumber,
+      installmentTotal: cardInvoiceComponents.installmentTotal,
+    })
+    .from(cardInvoiceComponents)
+    .where(eq(cardInvoiceComponents.cardInvoiceId, invoice.id))
+    .orderBy(desc(cardInvoiceComponents.id))
+
+  const transactionIds = transactionRows.map((row) => row.id)
+  const settlementRows = transactionIds.length > 0
+    ? await db
+        .select({
+          sourceCardTransactionId: cardInvoiceSettlements.sourceCardTransactionId,
+          allocatedAmountMinor: cardInvoiceSettlements.allocatedAmountMinor,
+          targetCardInvoiceId: cardInvoiceSettlements.targetCardInvoiceId,
+          id: cardInvoices.id,
+          accountId: cardInvoices.accountId,
+          invoiceMonth: cardInvoices.invoiceMonth,
+          dueDate: cardInvoices.dueDate,
+          totalAmountMinor: cardInvoices.totalAmountMinor,
+          paidAmountMinor: cardInvoices.paymentsAllocatedMinor,
+          openAmountMinor: cardInvoices.effectiveOpenAmountMinor,
+          status: sql<string>`CASE WHEN ${cardInvoices.effectiveOpenAmountMinor} > 0 THEN 'OPEN' ELSE 'PAID' END`,
+          institutionName: accounts.institutionName,
+          cardBrand: accounts.cardBrand,
+          cardLast4: accounts.cardLast4,
+          displayName: accounts.displayName,
+        })
+        .from(cardInvoiceSettlements)
+        .innerJoin(cardInvoices, eq(cardInvoices.id, cardInvoiceSettlements.targetCardInvoiceId))
+        .innerJoin(accounts, eq(accounts.id, cardInvoices.accountId))
+        .where(inArray(cardInvoiceSettlements.sourceCardTransactionId, transactionIds))
+        .orderBy(asc(cardInvoiceSettlements.id))
+    : []
+
+  const settledInvoiceByTransactionId = new Map<number, typeof settlementRows[number]>()
+  for (const row of settlementRows) {
+    if (!settledInvoiceByTransactionId.has(row.sourceCardTransactionId)) {
+      settledInvoiceByTransactionId.set(row.sourceCardTransactionId, row)
+    }
+  }
+
   const comprasDoMes = transactionRows.reduce((sum, tx) => sum + Number(tx.amountMinor ?? 0), 0)
-  const semantic = buildCardInvoiceSemanticView(invoice, BigInt(comprasDoMes))
+  const semantic = buildCardInvoiceSemanticView(invoiceForSemantic, BigInt(comprasDoMes))
 
   res.json({
     accountId,
@@ -353,7 +463,7 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
       dueDate: invoice.dueDate,
       totalAmountMinor: Number(semantic.totalInvoiceMinor),
       minimumPaymentMinor: invoice.minimumPaymentMinor === null ? null : Number(invoice.minimumPaymentMinor),
-      paidAmountMinor: Number(semantic.paymentsAllocatedMinor),
+      paidAmountMinor: Number(semantic.reportedPreviousInvoicePaidMinor),
       openAmountMinor: Number(semantic.effectiveOpenMinor),
       previousBalanceMinor: Number(semantic.reportedPreviousInvoiceTotalMinor),
       emAbertoMinor: Number(semantic.effectiveOpenMinor),
@@ -371,6 +481,19 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
         currentCyclePurchasesMinor: Number(semantic.currentCyclePurchasesMinor),
       },
     },
+    components: componentRows.map((row) => ({
+      id: row.id,
+      componentScope: row.componentScope,
+      componentType: row.componentType,
+      amountMinor: Number(row.amountMinor ?? 0),
+      description: row.description,
+      source: row.source,
+      sourceDate: row.sourceDate,
+      cardTransactionId: row.cardTransactionId,
+      transactionId: row.transactionId,
+      installmentNumber: row.installmentNumber,
+      installmentTotal: row.installmentTotal,
+    })),
     transactions: transactionRows.map((row) => ({
       id: row.id,
       occurredAt: row.occurredAt,
@@ -381,6 +504,25 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
       installmentTotal: row.installmentTotal,
       categoryId: row.categoryId,
       categoryName: row.categoryName,
+      settlementAllocatedMinor: settledInvoiceByTransactionId.get(row.id)?.allocatedAmountMinor
+        ? Number(settledInvoiceByTransactionId.get(row.id)!.allocatedAmountMinor)
+        : null,
+      settledInvoice: settledInvoiceByTransactionId.get(row.id)
+        ? {
+            id: settledInvoiceByTransactionId.get(row.id)!.id,
+            accountId: settledInvoiceByTransactionId.get(row.id)!.accountId,
+            invoiceMonth: settledInvoiceByTransactionId.get(row.id)!.invoiceMonth,
+            dueDate: settledInvoiceByTransactionId.get(row.id)!.dueDate,
+            totalAmountMinor: Number(settledInvoiceByTransactionId.get(row.id)!.totalAmountMinor ?? 0n),
+            paidAmountMinor: Number(settledInvoiceByTransactionId.get(row.id)!.paidAmountMinor ?? 0n),
+            openAmountMinor: Number(settledInvoiceByTransactionId.get(row.id)!.openAmountMinor ?? 0n),
+            status: settledInvoiceByTransactionId.get(row.id)!.status,
+            institutionName: settledInvoiceByTransactionId.get(row.id)!.institutionName,
+            cardBrand: settledInvoiceByTransactionId.get(row.id)!.cardBrand,
+            cardLast4: settledInvoiceByTransactionId.get(row.id)!.cardLast4,
+            displayName: settledInvoiceByTransactionId.get(row.id)!.displayName,
+          }
+        : null,
     })),
   })
 })
@@ -432,6 +574,59 @@ router.get('/:accountId/month/:month/statement', async (req: Request, res: Respo
     )
     .orderBy(desc(transactions.occurredAt), desc(transactions.id))
 
+  const statementTransactionIds = statementRows.map((row) => row.id)
+  const statementSettlementRows = statementTransactionIds.length > 0
+    ? await db
+        .select({
+          sourceCardTransactionId: cardInvoiceSettlements.sourceCardTransactionId,
+          allocatedAmountMinor: cardInvoiceSettlements.allocatedAmountMinor,
+          targetCardInvoiceId: cardInvoiceSettlements.targetCardInvoiceId,
+          invoiceMonth: cardInvoices.invoiceMonth,
+          dueDate: cardInvoices.dueDate,
+          totalAmountMinor: cardInvoices.totalAmountMinor,
+          paidAmountMinor: cardInvoices.paymentsAllocatedMinor,
+          openAmountMinor: cardInvoices.effectiveOpenAmountMinor,
+          status: sql<string>`CASE WHEN ${cardInvoices.effectiveOpenAmountMinor} > 0 THEN 'OPEN' ELSE 'PAID' END`,
+          institutionName: accounts.institutionName,
+          cardBrand: accounts.cardBrand,
+          cardLast4: accounts.cardLast4,
+          displayName: accounts.displayName,
+        })
+        .from(cardInvoiceSettlements)
+        .innerJoin(cardInvoices, eq(cardInvoices.id, cardInvoiceSettlements.targetCardInvoiceId))
+        .innerJoin(accounts, eq(accounts.id, cardInvoices.accountId))
+        .where(and(
+          eq(cardInvoiceSettlements.userId, owner.id),
+          inArray(cardInvoiceSettlements.sourceCardTransactionId, statementTransactionIds),
+        ))
+        .orderBy(asc(cardInvoiceSettlements.id))
+    : []
+
+  const statementSettlementByTransactionId = new Map<number, typeof statementSettlementRows[number]>()
+  for (const row of statementSettlementRows) {
+    if (!statementSettlementByTransactionId.has(row.sourceCardTransactionId)) {
+      statementSettlementByTransactionId.set(row.sourceCardTransactionId, row)
+    }
+  }
+
+  const paymentRows = statementTransactionIds.length > 0
+    ? await db
+        .select({
+          transactionId: cardInvoicePayments.transactionId,
+          cardInvoiceId: cardInvoicePayments.cardInvoiceId,
+        })
+        .from(cardInvoicePayments)
+        .where(inArray(cardInvoicePayments.transactionId, statementTransactionIds))
+        .orderBy(asc(cardInvoicePayments.id))
+    : []
+
+  const cardInvoiceByTransactionId = new Map<number, number | null>()
+  for (const row of paymentRows) {
+    if (!cardInvoiceByTransactionId.has(row.transactionId)) {
+      cardInvoiceByTransactionId.set(row.transactionId, row.cardInvoiceId)
+    }
+  }
+
   res.json({
     accountId,
     month,
@@ -453,6 +648,25 @@ router.get('/:accountId/month/:month/statement', async (req: Request, res: Respo
       movementSubtype: row.movementSubtype,
       categoryId: row.categoryId,
       categoryName: row.categoryName,
+      cardInvoiceId: cardInvoiceByTransactionId.get(row.id) ?? null,
+      settlementAllocatedMinor: statementSettlementByTransactionId.get(row.id)?.allocatedAmountMinor
+        ? Number(statementSettlementByTransactionId.get(row.id)!.allocatedAmountMinor)
+        : null,
+      settledInvoice: statementSettlementByTransactionId.get(row.id)
+        ? {
+            id: statementSettlementByTransactionId.get(row.id)!.targetCardInvoiceId,
+            invoiceMonth: statementSettlementByTransactionId.get(row.id)!.invoiceMonth,
+            dueDate: statementSettlementByTransactionId.get(row.id)!.dueDate,
+            totalAmountMinor: Number(statementSettlementByTransactionId.get(row.id)!.totalAmountMinor ?? 0n),
+            paidAmountMinor: Number(statementSettlementByTransactionId.get(row.id)!.paidAmountMinor ?? 0n),
+            openAmountMinor: Number(statementSettlementByTransactionId.get(row.id)!.openAmountMinor ?? 0n),
+            status: statementSettlementByTransactionId.get(row.id)!.status,
+            institutionName: statementSettlementByTransactionId.get(row.id)!.institutionName,
+            cardBrand: statementSettlementByTransactionId.get(row.id)!.cardBrand,
+            cardLast4: statementSettlementByTransactionId.get(row.id)!.cardLast4,
+            displayName: statementSettlementByTransactionId.get(row.id)!.displayName,
+          }
+        : null,
     })),
   })
 })
@@ -540,6 +754,145 @@ router.patch('/bank-transactions/:transactionId/category', async (req: Request, 
   }
 })
 
+router.patch('/bank-transactions/:transactionId/card-invoice', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const db = getDatabase()
+    const clerkUserId = req.authUser!.clerkUserId
+    const owner = await resolveOwnerId(clerkUserId)
+
+    const { transactionId } = updateBankTransactionCategoryParamsSchema.parse(req.params)
+    const { cardInvoiceId } = updateBankTransactionCardInvoiceBodySchema.parse(req.body)
+
+    const [existingTx] = await db
+      .select({
+        id: transactions.id,
+        amountMinor: transactions.amountMinor,
+        occurredAt: transactions.occurredAt,
+        description: transactions.description,
+        accountId: transactions.accountId,
+      })
+      .from(transactions)
+      .where(and(eq(transactions.id, transactionId), eq(transactions.userId, owner.id)))
+      .limit(1)
+
+    if (!existingTx) {
+      throw createError('Transacao bancaria nao encontrada.', 404)
+    }
+
+    const existingPayments = await db
+      .select({
+        id: cardInvoicePayments.id,
+        cardInvoiceId: cardInvoicePayments.cardInvoiceId,
+        allocatedAmountMinor: cardInvoicePayments.allocatedAmountMinor,
+      })
+      .from(cardInvoicePayments)
+      .where(and(eq(cardInvoicePayments.transactionId, transactionId), eq(cardInvoicePayments.userId, owner.id)))
+
+    if (cardInvoiceId) {
+      const [conflictingPayment] = await db
+        .select({
+          id: cardInvoicePayments.id,
+          transactionId: cardInvoicePayments.transactionId,
+        })
+        .from(cardInvoicePayments)
+        .where(
+          and(
+            eq(cardInvoicePayments.cardInvoiceId, cardInvoiceId),
+            eq(cardInvoicePayments.userId, owner.id),
+            sql`${cardInvoicePayments.transactionId} <> ${transactionId}`,
+          ),
+        )
+        .limit(1)
+
+      if (conflictingPayment) {
+        throw createError('Esta fatura já está vinculada a outra transação bancária.', 409)
+      }
+    }
+
+    await db.transaction(async (tx) => {
+      const invoiceIdsToSync = new Set<number>()
+
+      for (const payment of existingPayments) {
+        invoiceIdsToSync.add(payment.cardInvoiceId)
+
+        const [currentInvoice] = await tx
+          .select({
+            id: cardInvoices.id,
+            paidAmountMinor: cardInvoices.paidAmountMinor,
+            openAmountMinor: cardInvoices.openAmountMinor,
+          })
+          .from(cardInvoices)
+          .where(and(eq(cardInvoices.id, payment.cardInvoiceId), eq(cardInvoices.userId, owner.id)))
+          .limit(1)
+
+        if (currentInvoice) {
+          const revertAmount = BigInt(payment.allocatedAmountMinor)
+          const nextPaid = BigInt(currentInvoice.paidAmountMinor) - revertAmount
+          const nextOpen = BigInt(currentInvoice.openAmountMinor) + revertAmount
+          await tx
+            .update(cardInvoices)
+            .set({
+              paidAmountMinor: nextPaid,
+              openAmountMinor: nextOpen,
+              status: nextOpen === 0n ? 'PAID' : 'OPEN',
+              updatedAt: new Date(),
+            })
+            .where(eq(cardInvoices.id, payment.cardInvoiceId))
+        }
+      }
+
+      if (existingPayments.length > 0) {
+        await tx
+          .delete(cardInvoicePayments)
+          .where(and(eq(cardInvoicePayments.transactionId, transactionId), eq(cardInvoicePayments.userId, owner.id)))
+      }
+
+      for (const invoiceId of invoiceIdsToSync) {
+        await syncCardInvoiceSemanticFields(tx, invoiceId)
+      }
+
+      if (cardInvoiceId) {
+        const [sourceAcc] = await tx
+          .select({ institutionName: accounts.institutionName })
+          .from(accounts)
+          .where(eq(accounts.id, existingTx.accountId))
+          .limit(1)
+
+        await reconcileInvoicePayment(
+          tx,
+          owner.id,
+          {
+            id: existingTx.id,
+            amountMinor: existingTx.amountMinor,
+            occurredAt: existingTx.occurredAt,
+            description: existingTx.description,
+            cardInvoiceId,
+            forceInvoiceMatch: true,
+          },
+          sourceAcc?.institutionName ?? null,
+        )
+      }
+    })
+
+    const [updatedPayments] = cardInvoiceId
+      ? await db
+          .select({
+            cardInvoiceId: cardInvoicePayments.cardInvoiceId,
+          })
+          .from(cardInvoicePayments)
+          .where(and(eq(cardInvoicePayments.transactionId, transactionId), eq(cardInvoicePayments.userId, owner.id)))
+          .limit(1)
+      : [{ cardInvoiceId: null }]
+
+    res.json({
+      id: transactionId,
+      cardInvoiceId: updatedPayments?.cardInvoiceId ?? null,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
 router.patch('/card-transactions/:cardTransactionId/category', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const db = getDatabase()
@@ -589,6 +942,93 @@ router.patch('/card-transactions/:cardTransactionId/category', async (req: Reque
       id: updatedTx?.id ?? cardTransactionId,
       categoryId: updatedTx?.categoryId ?? null,
       categoryName: updatedTx?.categoryName ?? null,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.patch('/card-transactions/:cardTransactionId/settlement', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const db = getDatabase()
+    const clerkUserId = req.authUser!.clerkUserId
+    const owner = await resolveOwnerId(clerkUserId)
+
+    const { cardTransactionId } = updateCardTransactionCategoryParamsSchema.parse(req.params)
+    const { targetCardInvoiceId } = updateCardTransactionSettlementBodySchema.parse(req.body)
+
+    const [sourceTx] = await db
+      .select({
+        id: cardTransactions.id,
+        amountMinor: cardTransactions.amountMinor,
+        occurredAt: cardTransactions.occurredAt,
+        cardInvoiceId: cardTransactions.cardInvoiceId,
+      })
+      .from(cardTransactions)
+      .where(and(eq(cardTransactions.id, cardTransactionId), eq(cardTransactions.userId, owner.id)))
+      .limit(1)
+
+    if (!sourceTx) {
+      throw createError('Lançamento de fatura não encontrado.', 404)
+    }
+
+    if (targetCardInvoiceId !== null && targetCardInvoiceId === sourceTx.cardInvoiceId) {
+      throw createError('A fatura alvo não pode ser a mesma do lançamento de origem.', 400)
+    }
+
+    const existingSettlements = await db
+      .select({
+        targetCardInvoiceId: cardInvoiceSettlements.targetCardInvoiceId,
+      })
+      .from(cardInvoiceSettlements)
+      .where(and(eq(cardInvoiceSettlements.sourceCardTransactionId, cardTransactionId), eq(cardInvoiceSettlements.userId, owner.id)))
+
+    const affectedInvoiceIds = new Set<number>(existingSettlements.map((row) => row.targetCardInvoiceId))
+
+    await db.transaction(async (tx) => {
+      if (existingSettlements.length > 0) {
+        await tx
+          .delete(cardInvoiceSettlements)
+          .where(and(eq(cardInvoiceSettlements.sourceCardTransactionId, cardTransactionId), eq(cardInvoiceSettlements.userId, owner.id)))
+      }
+
+      if (targetCardInvoiceId !== null) {
+        const [targetInvoice] = await tx
+          .select({
+            id: cardInvoices.id,
+          })
+          .from(cardInvoices)
+          .where(and(eq(cardInvoices.id, targetCardInvoiceId), eq(cardInvoices.userId, owner.id)))
+          .limit(1)
+
+        if (!targetInvoice) {
+          throw createError('Fatura alvo não encontrada.', 404)
+        }
+
+        const allocatedAmountMinor = BigInt(sourceTx.amountMinor < 0n ? -sourceTx.amountMinor : sourceTx.amountMinor)
+        await tx.insert(cardInvoiceSettlements).values({
+          userId: owner.id,
+          sourceCardTransactionId: sourceTx.id,
+          targetCardInvoiceId,
+          allocatedAmountMinor,
+          currencyCode: 'BRL',
+          settlementDate: sourceTx.occurredAt,
+          source: 'manual',
+          matchedBy: 'user_selection',
+          confidenceScore: '1.0000',
+        })
+
+        affectedInvoiceIds.add(targetCardInvoiceId)
+      }
+
+      for (const invoiceId of affectedInvoiceIds) {
+        await syncCardInvoiceSemanticFields(tx, invoiceId)
+      }
+    })
+
+    res.json({
+      id: cardTransactionId,
+      settledInvoiceId: targetCardInvoiceId,
     })
   } catch (error) {
     next(error)

@@ -72,6 +72,31 @@ function parseBRL(raw: string): number {
   return neg ? -value : value
 }
 
+function shouldSkipTransaction(category: string, description: string): boolean {
+  const normalizedDescription = description
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  const normalizedCategory = category
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return (
+    !normalizedDescription
+    || /^saldo anterior\b/.test(normalizedDescription)
+    || /^pagamento\b/.test(normalizedDescription)
+    || /^pgto\b/.test(normalizedDescription)
+    || /^pagto\b/.test(normalizedDescription)
+    || normalizedCategory === 'pagamentos/creditos'
+  )
+}
+
 /**
  * Converte "13/04/2026" → "2026-04-13"
  * Converte "13/04" com inferredYear → "2026-04-13"
@@ -96,7 +121,11 @@ const MONTH_MAP: Record<string, string> = {
 
 // ─── Text extraction (pdfplumber via Python subprocess) ───────────────────────
 
-async function extractText(buffer: Buffer): Promise<string> {
+function getPythonBin(): string {
+  return process.env.PREVIA_PYTHON || process.env.PYTHON_BIN || 'python3'
+}
+
+async function extractText(buffer: Buffer, password?: string): Promise<string> {
   const { execFileSync } = await import('child_process')
   const { tmpdir } = await import('os')
   const { join } = await import('path')
@@ -108,12 +137,22 @@ async function extractText(buffer: Buffer): Promise<string> {
 
   try {
     const script = `
-import sys, pdfplumber
-with pdfplumber.open(sys.argv[1]) as pdf:
+import sys
+try:
+    import pdfplumber
+except ModuleNotFoundError as exc:
+    if getattr(exc, 'name', '') == 'pdfplumber':
+        print('PDF_DEPENDENCY_MISSING: pdfplumber', file=sys.stderr)
+        raise SystemExit(3)
+    raise
+path = sys.argv[1]
+password = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None
+with pdfplumber.open(path, password=password) as pdf:
     text = '\\n'.join(p.extract_text(x_tolerance=3, y_tolerance=3) or '' for p in pdf.pages)
     print(text)
 `
-    const result = execFileSync('python3', ['-c', script, tmpFile], {
+    const args = password ? ['-c', script, tmpFile, password] : ['-c', script, tmpFile]
+    const result = execFileSync(getPythonBin(), args, {
       encoding: 'utf8',
       maxBuffer: 10 * 1024 * 1024,
     })
@@ -237,13 +276,6 @@ function parseTransactions(text: string, invoiceYear: number): BBTransaction[] {
 
     const saldoMatch = line.match(saldoPattern)
     if (saldoMatch) {
-      transactions.push({
-        date: '',
-        description: 'SALDO FATURA ANTERIOR',
-        category: 'Saldo anterior',
-        amountMinor: parseBRL(saldoMatch[1]),
-        country: 'BR',
-      })
       continue
     }
 
@@ -265,6 +297,10 @@ function parseTransactions(text: string, invoiceYear: number): BBTransaction[] {
 
       const installMatch = desc.match(/PARC\s+(\d{2}\/\d{2})/)
       const installment = installMatch ? installMatch[1] : undefined
+
+      if (shouldSkipTransaction(currentCategory, desc)) {
+        continue
+      }
 
       transactions.push({
         date: parseDate(datePart, txYear),
@@ -288,8 +324,8 @@ function parseTransactions(text: string, invoiceYear: number): BBTransaction[] {
  * @param buffer - Raw PDF file buffer
  * @returns Parsed invoice with summary and transactions
  */
-export async function parseBBInvoice(buffer: Buffer): Promise<BBInvoice> {
-  const rawText = await extractText(buffer)
+export async function parseBBInvoice(buffer: Buffer, password?: string): Promise<BBInvoice> {
+  const rawText = await extractText(buffer, password)
   const summary = parseSummary(rawText)
   const invoiceYear = summary.dueDate
     ? parseInt(summary.dueDate.slice(0, 4), 10)

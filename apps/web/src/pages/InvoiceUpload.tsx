@@ -12,7 +12,17 @@
  * simula o preview com dados de exemplo para permitir testar o fluxo.
  */
 import { useState, useRef, useMemo, useEffect } from 'react'
-import { api, formatBRL, currentMonth, type Category, type InvoiceTransaction, type InvoiceParseResult } from '../services/api'
+import {
+  api,
+  formatBRL,
+  currentMonth,
+  type Category,
+  type OpenCardInvoiceSummary,
+  type InvoiceTransaction,
+  type InvoiceParseDebug,
+  type InvoiceParseResult,
+} from '../services/api'
+import { buildCategoryOptions, type CategoryOption } from '../utils/categoryOptions'
 import {
   Card,
   Badge,
@@ -23,6 +33,7 @@ import {
   SectionTitle,
   EmptyState,
 } from '../components/ui'
+import { InvoicePaymentSelector, buildInvoicePaymentOptions } from '../components/InvoicePaymentSelector'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,9 +41,52 @@ import {
 // Types
 // ---------------------------------------------------------------------------
 type ParsedTransaction = InvoiceTransaction
-type CategoryOption = { id: string; label: string; disabled: boolean }
+type ParsedInstallment = NonNullable<InvoiceParseResult['analysis']>['installments'][number]
 
 type UploadStep = 'select' | 'parsing' | 'preview' | 'importing' | 'done' | 'error'
+
+function getInitialDebugEnabled(): boolean {
+  if (typeof window === 'undefined') return false
+  const params = new URLSearchParams(window.location.search)
+  return params.get('debug') === '1' || params.get('debug') === 'true'
+}
+
+function normalizeCategoryText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+}
+
+function toCompetencyMonth(value: string | undefined, fallbackDate?: string): string {
+  if (value && /^\d{4}-\d{2}$/.test(value)) return value
+  if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value.slice(0, 7)
+  if (fallbackDate && /^\d{4}-\d{2}-\d{2}$/.test(fallbackDate)) return fallbackDate.slice(0, 7)
+  return value?.slice(0, 7) || ''
+}
+
+function isCreditCardInvoiceCategoryId(
+  categoryId: string | null,
+  categories: Category[],
+): boolean {
+  if (!categoryId) return false
+
+  const byId = new Map(categories.map((category) => [category.id, category]))
+  let current = byId.get(categoryId) ?? null
+  let sawPayment = false
+  let sawInvoice = false
+  let sawCard = false
+
+  while (current) {
+    const text = normalizeCategoryText(`${current.name} ${current.slug ?? ''}`)
+    if (/(pagament|pagos?)/.test(text)) sawPayment = true
+    if (/fatura/.test(text)) sawInvoice = true
+    if (/cartao|credito/.test(text)) sawCard = true
+    current = current.parentId ? byId.get(current.parentId) ?? null : null
+  }
+
+  return sawPayment && sawInvoice && sawCard
+}
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -91,10 +145,14 @@ function DropZone({ onFile }: { onFile: (f: File) => void }) {
 function TransactionPreviewRow({
   tx,
   categoryOptions,
+  invoiceOptions,
+  showInvoiceSelector,
   onChange,
 }: {
   tx: ParsedTransaction
   categoryOptions: CategoryOption[]
+  invoiceOptions: { id: number; label: string }[]
+  showInvoiceSelector: boolean
   onChange: (id: string, patch: Partial<ParsedTransaction>) => void
 }) {
   return (
@@ -107,10 +165,10 @@ function TransactionPreviewRow({
           style={{ cursor: 'pointer' }}
         />
       </td>
-      <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', color: '#9ca3af' }}>
+      <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', color: '#9ca3af', whiteSpace: 'nowrap' }}>
         {tx.date}
       </td>
-      <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.82rem', color: '#e5e7eb' }}>
+      <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.82rem', color: '#e5e7eb', overflowWrap: 'anywhere' }}>
         {tx.description}
         {tx.installment && (
           <span style={{ marginLeft: 6, fontSize: '0.72rem', color: '#6366f1' }}>
@@ -118,7 +176,7 @@ function TransactionPreviewRow({
           </span>
         )}
       </td>
-      <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontSize: '0.85rem', color: '#f87171', fontWeight: 600 }}>
+      <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontSize: '0.85rem', color: '#f87171', fontWeight: 600, whiteSpace: 'nowrap' }}>
         {formatBRL(tx.amountMinor)}
       </td>
       <td style={{ padding: '0.45rem 0.5rem' }}>
@@ -128,7 +186,7 @@ function TransactionPreviewRow({
           placeholder="YYYY-MM"
           style={{
             background: '#0f1117', border: '1px solid #2a2f45', borderRadius: 6,
-            padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', width: 80,
+            padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', width: '100%', minWidth: 0,
           }}
         />
       </td>
@@ -138,7 +196,8 @@ function TransactionPreviewRow({
           onChange={(e) => onChange(tx.id, { categoryId: e.target.value || null })}
           style={{
             background: '#0f1117', border: `1px solid ${tx.categoryId ? '#2a2f45' : '#f87171'}`,
-            borderRadius: 6, padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', maxWidth: 220,
+            borderRadius: 6, padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', width: '100%',
+            minWidth: 0, maxWidth: 'none',
             fontFamily: 'monospace',
           }}
         >
@@ -148,7 +207,152 @@ function TransactionPreviewRow({
           ))}
         </select>
       </td>
+      <td style={{ padding: '0.45rem 0.5rem' }}>
+        {showInvoiceSelector ? (
+          <InvoicePaymentSelector
+            value={tx.settlesInvoiceId ?? null}
+            options={invoiceOptions}
+            onChange={(invoiceId) => onChange(tx.id, { settlesInvoiceId: invoiceId })}
+            style={{ width: '100%', minWidth: 0 }}
+          />
+        ) : (
+          <span style={{ color: '#475569', fontSize: '0.82rem' }}>—</span>
+        )}
+      </td>
     </tr>
+  )
+}
+
+function DebugStageCard({ label, content }: { label: string; content: string }) {
+  return (
+    <details
+      style={{
+        background: '#0f1117',
+        border: '1px solid #2a2f45',
+        borderRadius: 10,
+        padding: '0.7rem 0.85rem',
+      }}
+    >
+      <summary style={{ cursor: 'pointer', color: '#e5e7eb', fontWeight: 700, fontSize: '0.86rem' }}>
+        {label}
+      </summary>
+      <pre
+        style={{
+          marginTop: '0.75rem',
+          marginBottom: 0,
+          padding: '0.75rem',
+          background: '#0b0d14',
+          borderRadius: 8,
+          color: '#cbd5e1',
+          fontSize: '0.72rem',
+          lineHeight: 1.45,
+          whiteSpace: 'pre-wrap',
+          overflowX: 'auto',
+          maxHeight: 320,
+        }}
+      >
+        {content}
+      </pre>
+    </details>
+  )
+}
+
+function InvoiceDebugPanel({ debug }: { debug: InvoiceParseDebug }) {
+  return (
+    <Card style={{ marginBottom: '1rem', border: '1px solid #4b5563', background: '#10121a' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+        <div>
+          <p style={{ margin: 0, color: '#fbbf24', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+            Debug temporário
+          </p>
+          <p style={{ margin: '0.25rem 0 0', color: '#e5e7eb', fontWeight: 700, fontSize: '0.95rem' }}>
+            {debug.strategy} · {debug.sourceBank}
+          </p>
+        </div>
+        <div style={{ color: '#94a3b8', fontSize: '0.8rem', alignSelf: 'flex-end' }}>
+          Mostrando etapas da leitura
+        </div>
+      </div>
+      <div style={{ display: 'grid', gap: '0.75rem' }}>
+        {debug.stages.map((stage) => (
+          <DebugStageCard key={stage.label} label={stage.label} content={stage.content} />
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function InvoiceInstallmentsPanel({ installments }: { installments: ParsedInstallment[] }) {
+  if (installments.length === 0) return null
+
+  return (
+    <Card style={{ marginBottom: '1rem', border: '1px solid #334155', background: '#10121a' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.85rem' }}>
+        <div>
+          <p style={{ margin: 0, color: '#fbbf24', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+            Parcelamentos detectados
+          </p>
+          <p style={{ margin: '0.25rem 0 0', color: '#e5e7eb', fontWeight: 700, fontSize: '0.92rem' }}>
+            Itens já parcelados, financiamentos e séries de parcelas da fatura
+          </p>
+        </div>
+        <div style={{ color: '#9ca3af', fontSize: '0.78rem', alignSelf: 'flex-end' }}>
+          São importados junto com a fatura, mas não entram no total seleccionado desta página
+        </div>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', tableLayout: 'fixed' }}>
+          <thead>
+            <tr style={{ color: '#6b7280', borderBottom: '1px solid #2a2f45', background: '#0f1117' }}>
+              <th style={{ padding: '0.5rem', textAlign: 'left' }}>Descrição</th>
+              <th style={{ padding: '0.5rem', width: 100, textAlign: 'right' }}>Valor</th>
+              <th style={{ padding: '0.5rem', width: 104, textAlign: 'left' }}>Data</th>
+              <th style={{ padding: '0.5rem', width: 100, textAlign: 'left' }}>Parcela</th>
+            </tr>
+          </thead>
+          <tbody>
+            {installments.map((item, index) => (
+              <tr key={`${item.description}-${item.date ?? 'nodate'}-${index}`} style={{ borderBottom: '1px solid #1a1e2e' }}>
+                <td style={{ padding: '0.55rem 0.5rem', color: '#e5e7eb', overflowWrap: 'anywhere' }}>
+                  {item.description}
+                </td>
+                <td style={{ padding: '0.55rem 0.5rem', textAlign: 'right', color: '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                  {formatBRL(Math.round(item.amount * 100))}
+                </td>
+                <td style={{ padding: '0.55rem 0.5rem', color: '#9ca3af', whiteSpace: 'nowrap' }}>
+                  {item.date ?? '—'}
+                </td>
+                <td style={{ padding: '0.55rem 0.5rem', color: '#cbd5e1' }}>
+                  {item.current && item.total ? `${item.current}/${item.total}` : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  )
+}
+
+function DebugStatusCard({ debugEnabled, hasDebug, isReprocessing }: { debugEnabled: boolean; hasDebug: boolean; isReprocessing: boolean }) {
+  if (!debugEnabled) return null
+
+  return (
+    <Card style={{ marginBottom: '1rem', border: '1px solid #3f3f46', background: '#111827' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+        <div>
+          <p style={{ margin: 0, color: '#fbbf24', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase' }}>
+            Debug de leitura
+          </p>
+          <p style={{ margin: '0.25rem 0 0', color: '#e5e7eb', fontWeight: 700, fontSize: '0.9rem' }}>
+            {hasDebug ? 'Etapas carregadas' : isReprocessing ? 'Reprocessando fatura para gerar ASCII e JSON...' : 'Aguardando leitura da fatura'}
+          </p>
+        </div>
+        <div style={{ color: '#9ca3af', fontSize: '0.78rem' }}>
+          {hasDebug ? 'Role para ver o ASCII abaixo.' : 'Se a fatura já estiver aberta, o upload será repetido.'}
+        </div>
+      </div>
+    </Card>
   )
 }
 
@@ -167,36 +371,15 @@ export function InvoiceUpload() {
   const [errorMsg, setErrorMsg] = useState('')
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number } | null>(null)
   const [invoiceSummary, setInvoiceSummary] = useState<InvoiceParseResult['summary'] | null>(null)
+  const [invoiceAnalysis, setInvoiceAnalysis] = useState<InvoiceParseResult['analysis'] | null>(null)
   const [invoiceBank, setInvoiceBank] = useState<string | null>(null)
+  const [openInvoices, setOpenInvoices] = useState<OpenCardInvoiceSummary[]>([])
+  const [parseDebug, setParseDebug] = useState<InvoiceParseDebug | null>(null)
+  const [debugEnabled, setDebugEnabled] = useState<boolean>(getInitialDebugEnabled())
+  const [debugReprocessing, setDebugReprocessing] = useState(false)
 
   const categoryOptions = useMemo(() => {
-    const expenses = categories.filter((c) => c.type === 'expense')
-    const parents = expenses.filter((c) => !c.parentId)
-    const byParent = new Map<string, Category[]>()
-
-    for (const cat of expenses) {
-      if (!cat.parentId) continue
-      const arr = byParent.get(cat.parentId) || []
-      arr.push(cat)
-      byParent.set(cat.parentId, arr)
-    }
-
-    const sortByName = (a: Category, b: Category) => a.name.localeCompare(b.name)
-
-    const options: CategoryOption[] = []
-    for (const parent of [...parents].sort(sortByName)) {
-      const children = [...(byParent.get(parent.id) || [])].sort(sortByName)
-      if (children.length > 0) {
-        options.push({ id: parent.id, label: parent.name, disabled: true })
-        for (const child of children) {
-          options.push({ id: child.id, label: `  └ ${child.name}`, disabled: false })
-        }
-      } else {
-        options.push({ id: parent.id, label: parent.name, disabled: false })
-      }
-    }
-
-    return options
+    return buildCategoryOptions(categories, 'expense')
   }, [categories])
 
   const expenseCategories = useMemo(
@@ -204,9 +387,26 @@ export function InvoiceUpload() {
     [categories]
   )
 
+  const invoiceOptions = useMemo(
+    () => buildInvoicePaymentOptions(null, openInvoices),
+    [openInvoices],
+  )
+
   useEffect(() => {
     api.categories.list().then(setCategories).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    api.accounts.openCardInvoices().then((result) => setOpenInvoices(result.items)).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!debugEnabled || !file || step !== 'preview') return
+    setDebugReprocessing(true)
+    parseSelectedFile(file, pdfPassword.trim() || undefined).finally(() => setDebugReprocessing(false))
+    // Reprocessa só quando o debug é activado com a fatura já carregada.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debugEnabled])
 
   function isPasswordRequiredError(error: unknown): boolean {
     return error instanceof Error
@@ -258,13 +458,16 @@ export function InvoiceUpload() {
   async function parseSelectedFile(selectedFile: File, password?: string) {
     setStep('parsing')
     setErrorMsg('')
+    setParseDebug(null)
 
     try {
-      const result = await api.invoices.parse(selectedFile, { password })
+      const result = await api.invoices.parse(selectedFile, { password, debug: debugEnabled })
       if (result.summary.dueMonth) setDueMonth(result.summary.dueMonth)
       if (result.summary.invoiceMonth) setInvoiceMonth(result.summary.invoiceMonth)
       setInvoiceSummary(result.summary)
+      setInvoiceAnalysis(result.analysis ?? null)
       setInvoiceBank(result.bank)
+      setParseDebug(result.debug ?? null)
 
       const suggestedTransactions = await suggestCategoriesWithAI(result.transactions)
       setTransactions(suggestedTransactions)
@@ -306,7 +509,14 @@ export function InvoiceUpload() {
   }
 
   function handleChange(id: string, patch: Partial<ParsedTransaction>) {
-    setTransactions((prev) => prev.map((t) => t.id === id ? { ...t, ...patch } : t))
+    setTransactions((prev) => prev.map((t) => {
+      if (t.id !== id) return t
+      const next = { ...t, ...patch }
+      if (patch.categoryId !== undefined && !isCreditCardInvoiceCategoryId(patch.categoryId, categories)) {
+        next.settlesInvoiceId = null
+      }
+      return next
+    }))
   }
 
   function selectAll(include: boolean) {
@@ -323,9 +533,23 @@ export function InvoiceUpload() {
     setErrorMsg('')
     try {
       const result = await api.invoices.import({
-        transactions: included.map(({ date, description, amountMinor, categoryId, competencyMonth, installment }) => ({
-          date, description, amountMinor, categoryId, competencyMonth, installment,
+        transactions: included.map(({ date, description, amountMinor, categoryId, competencyMonth, installment, settlesInvoiceId }) => ({
+          date,
+          description,
+          amountMinor,
+          categoryId,
+          competencyMonth: toCompetencyMonth(competencyMonth, date),
+          installment,
+          settlesInvoiceId,
         })),
+        installments: invoiceAnalysis?.installments.map((item) => ({
+          date: item.date ?? invoiceSummary?.dueDate ?? `${invoiceMonth}-01`,
+          description: item.description,
+          amountMinor: Math.round(item.amount * 100),
+          competencyMonth: toCompetencyMonth(item.date?.slice(0, 7), item.date ?? invoiceSummary?.dueDate ?? `${invoiceMonth}-01`),
+          installment: item.current && item.total ? `${item.current}/${item.total}` : undefined,
+          categoryId: null,
+        })) ?? [],
         invoiceMonth,
         dueMonth,
         bank: invoiceBank ?? undefined,
@@ -337,7 +561,21 @@ export function InvoiceUpload() {
         totalMinor: invoiceSummary?.totalMinor ?? undefined,
         previousBalanceMinor: invoiceSummary?.previousBalanceMinor ?? undefined,
         paymentsMinor: invoiceSummary?.paymentsMinor ?? undefined,
+        monthlyExpensesMinor: invoiceSummary?.monthlyExpensesMinor ?? undefined,
+        creditsAndRefundsMinor: invoiceSummary?.creditsAndRefundsMinor ?? undefined,
+        chargesMinor: invoiceSummary?.chargesMinor ?? undefined,
+        financedBalanceMinor: invoiceSummary?.financedBalanceMinor ?? undefined,
         openBalanceMinor: invoiceSummary?.openBalanceMinor ?? undefined,
+        analysis: invoiceAnalysis
+          ? {
+              ...invoiceAnalysis,
+              installments: invoiceAnalysis.installments?.map((item) => ({
+                ...item,
+                current: item.current && item.current > 0 ? item.current : undefined,
+                total: item.total && item.total > 0 ? item.total : undefined,
+              })),
+            }
+          : undefined,
       })
       setImportResult({ imported: result.imported, skipped: result.skipped })
       setStep('done')
@@ -358,19 +596,42 @@ export function InvoiceUpload() {
     setErrorMsg('')
     setImportResult(null)
     setInvoiceSummary(null)
+    setInvoiceAnalysis(null)
     setInvoiceBank(null)
+    setParseDebug(null)
   }
 
   return (
     <div style={{ maxWidth: 1000 }}>
       {/* Header */}
       <div style={{ marginBottom: '1.5rem' }}>
-        <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#e5e7eb', margin: 0 }}>
-          📤 Upload de Fatura
-        </h1>
-        <p style={{ color: '#6b7280', marginTop: '0.3rem', fontSize: '0.85rem' }}>
-          Importe faturas de cartão em PDF ou CSV. Revise e categorize antes de confirmar.
-        </p>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+          <div>
+            <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#e5e7eb', margin: 0 }}>
+              📤 Upload de Fatura
+            </h1>
+            <p style={{ color: '#6b7280', marginTop: '0.3rem', fontSize: '0.85rem' }}>
+              Importe faturas de cartão em PDF ou CSV. Revise e categorize antes de confirmar.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDebugEnabled((v) => !v)}
+            style={{
+              alignSelf: 'flex-start',
+              background: debugEnabled ? '#1f2937' : '#111827',
+              border: `1px solid ${debugEnabled ? '#f59e0b' : '#374151'}`,
+              borderRadius: 999,
+              color: debugEnabled ? '#fbbf24' : '#9ca3af',
+              cursor: 'pointer',
+              padding: '0.5rem 0.85rem',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+            }}
+          >
+            {debugEnabled ? 'Debug ligado' : 'Debug desligado'}
+          </button>
+        </div>
       </div>
 
       {/* Step: select */}
@@ -505,17 +766,31 @@ export function InvoiceUpload() {
                 alignItems: 'center',
               }}>
                 <div>
-                  <span style={{ color: '#6b7280' }}>Saldo anterior: </span>
+                  <span style={{ color: '#6b7280' }}>Total da fatura anterior: </span>
                   <span style={{ color: '#f87171', fontWeight: 600 }}>{formatBRL(invoiceSummary.previousBalanceMinor)}</span>
                 </div>
+                {typeof invoiceSummary.financedBalanceMinor === 'number' && invoiceSummary.financedBalanceMinor > 0 && (
+                  <div>
+                    <span style={{ color: '#6b7280' }}>Saldo financiado: </span>
+                    <span style={{ color: '#f87171', fontWeight: 600 }}>{formatBRL(invoiceSummary.financedBalanceMinor)}</span>
+                  </div>
+                )}
                 <div>
                   <span style={{ color: '#6b7280' }}>Pagamentos: </span>
                   <span style={{ color: '#4ade80', fontWeight: 600 }}>−{formatBRL(invoiceSummary.paymentsMinor)}</span>
                 </div>
                 <div>
                   <span style={{ color: '#6b7280' }}>Novas compras: </span>
-                  <span style={{ color: '#e5e7eb', fontWeight: 600 }}>+{formatBRL(invoiceSummary.nationalPurchasesMinor + invoiceSummary.internationalPurchasesMinor)}</span>
+                  <span style={{ color: '#e5e7eb', fontWeight: 600 }}>
+                    +{formatBRL(invoiceSummary.monthlyExpensesMinor ?? (invoiceSummary.nationalPurchasesMinor + invoiceSummary.internationalPurchasesMinor))}
+                  </span>
                 </div>
+                {invoiceSummary.creditsAndRefundsMinor > 0 && (
+                  <div>
+                    <span style={{ color: '#6b7280' }}>Créditos e estornos: </span>
+                    <span style={{ color: '#4ade80', fontWeight: 600 }}>+{formatBRL(invoiceSummary.creditsAndRefundsMinor)}</span>
+                  </div>
+                )}
                 {invoiceSummary.chargesMinor > 0 && (
                   <div>
                     <span style={{ color: '#6b7280' }}>Encargos: </span>
@@ -532,6 +807,20 @@ export function InvoiceUpload() {
               </div>
             )}
           </Card>
+
+          <DebugStatusCard
+            debugEnabled={debugEnabled}
+            hasDebug={Boolean(parseDebug)}
+            isReprocessing={debugReprocessing}
+          />
+
+          {parseDebug && debugEnabled && (
+            <InvoiceDebugPanel debug={parseDebug} />
+          )}
+
+          {invoiceAnalysis?.installments && invoiceAnalysis.installments.length > 0 && (
+            <InvoiceInstallmentsPanel installments={invoiceAnalysis.installments} />
+          )}
 
           {/* Warnings */}
           {uncategorized.length > 0 && (
@@ -563,24 +852,27 @@ export function InvoiceUpload() {
                 </button>
               </div>
             </div>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+            <div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', tableLayout: 'fixed' }}>
                 <thead>
                   <tr style={{ color: '#6b7280', borderBottom: '1px solid #2a2f45', background: '#0f1117' }}>
                     <th style={{ padding: '0.5rem', width: 36 }}></th>
-                    <th style={{ padding: '0.5rem', textAlign: 'left' }}>Data</th>
+                    <th style={{ padding: '0.5rem', width: 104, textAlign: 'left' }}>Data</th>
                     <th style={{ padding: '0.5rem', textAlign: 'left' }}>Descrição</th>
-                    <th style={{ padding: '0.5rem', textAlign: 'right' }}>Valor</th>
-                    <th style={{ padding: '0.5rem', textAlign: 'left' }}>Competência</th>
-                    <th style={{ padding: '0.5rem', textAlign: 'left' }}>Categoria</th>
+                    <th style={{ padding: '0.5rem', width: 100, textAlign: 'right' }}>Valor</th>
+                    <th style={{ padding: '0.5rem', width: 100, textAlign: 'left' }}>Competência</th>
+                    <th style={{ padding: '0.5rem', width: 240, textAlign: 'left' }}>Categoria</th>
+                    <th style={{ padding: '0.5rem', width: 250, textAlign: 'left' }}>Fatura paga</th>
                   </tr>
                 </thead>
                   <tbody>
                     {transactions.map((tx) => (
-                      <TransactionPreviewRow
+                    <TransactionPreviewRow
                         key={tx.id}
                         tx={tx}
                         categoryOptions={categoryOptions}
+                        invoiceOptions={invoiceOptions}
+                        showInvoiceSelector={isCreditCardInvoiceCategoryId(tx.categoryId ?? null, categories)}
                         onChange={handleChange}
                       />
                     ))}

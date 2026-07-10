@@ -29,6 +29,17 @@ function getAuthToken(): string | null {
   return null
 }
 
+async function readResponseBody(res: Response): Promise<unknown> {
+  const text = await res.text().catch(() => '')
+  if (!text) return {}
+
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { message: text }
+  }
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -44,7 +55,7 @@ async function request<T>(
 
   const res = await fetch(path, { ...options, headers })
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
+    const body = await readResponseBody(res)
     throw new ApiError(res.status, getApiErrorMessage(body, res.statusText), body)
   }
   if (res.status === 204) {
@@ -68,7 +79,7 @@ async function requestRaw<T>(
 
   const res = await fetch(path, { ...options, headers })
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
+    const body = await readResponseBody(res)
     throw new ApiError(res.status, getApiErrorMessage(body, res.statusText), body)
   }
   if (res.status === 204) {
@@ -175,6 +186,8 @@ export interface MonthlyCashFlow {
   totalIncomeMinor: string
   totalExpenseMinor: string
   totalLiabilityPaymentMinor: string
+  cardInvoicePaymentMinor?: string
+  installmentPaymentsMinor?: string
   statementOutflowMinor?: string
   totalCommittedMinor: string
   projectedClosingBalanceMinor: string
@@ -319,6 +332,21 @@ export interface AccountMonthSummary {
   count: number
 }
 
+export interface OpenCardInvoiceSummary {
+  id: number
+  accountId: number
+  invoiceMonth: string
+  dueDate: string
+  totalAmountMinor: number
+  paidAmountMinor: number
+  openAmountMinor: number
+  status: string
+  institutionName: string | null
+  cardBrand: string | null
+  cardLast4: string | null
+  displayName: string
+}
+
 export interface AccountSummary {
   id: number
   type: string
@@ -345,6 +373,10 @@ export interface AccountInvoiceLine {
   installmentTotal: number | null
   categoryId: string | null
   categoryName: string | null
+  settlementAllocatedMinor?: number | null
+  settledInvoice: OpenCardInvoiceSummary | null
+  movementType?: string
+  cardInvoiceId?: number | null
 }
 
 export interface AccountInvoiceLineCategoryUpdate {
@@ -380,6 +412,19 @@ export interface AccountInvoiceDetails {
     cardBrand: string | null
     cardLast4: string | null
   } | null
+  components?: Array<{
+    id: number
+    componentScope: string
+    componentType: string
+    amountMinor: number
+    description: string | null
+    source: string
+    sourceDate: string | null
+    cardTransactionId: number | null
+    transactionId: number | null
+    installmentNumber: number | null
+    installmentTotal: number | null
+  }>
   transactions: AccountInvoiceLine[]
 }
 
@@ -393,6 +438,9 @@ export interface AccountBankTransactionLine {
   movementSubtype: string | null
   categoryId: string | null
   categoryName: string | null
+  cardInvoiceId: number | null
+  settlementAllocatedMinor?: number | null
+  settledInvoice: OpenCardInvoiceSummary | null
 }
 
 export interface AccountStatementDetails {
@@ -419,6 +467,7 @@ export interface StatementPreviewTransaction {
   movementSubtype?: string | null
   providerTransactionId?: string | null
   categoryId?: string | null
+  cardInvoiceId?: number | null
   include: boolean
 }
 
@@ -452,6 +501,7 @@ export interface StatementImportBody {
     movementSubtype?: string | null
     providerTransactionId?: string | null
     categoryId?: string | null
+    cardInvoiceId?: number | null
     include?: boolean
   }>
 }
@@ -500,6 +550,18 @@ export interface InvoiceTransaction {
   include: boolean
   category: string
   country?: string
+  settlesInvoiceId?: number | null
+}
+
+export interface InvoiceParseDebugStage {
+  label: string
+  content: string
+}
+
+export interface InvoiceParseDebug {
+  strategy: 'ascii'
+  sourceBank: string
+  stages: InvoiceParseDebugStage[]
 }
 
 export interface InvoiceParseResult {
@@ -513,13 +575,50 @@ export interface InvoiceParseResult {
     closingDate: string
     totalMinor: number
     previousBalanceMinor: number
+    financedBalanceMinor?: number
     paymentsMinor: number
+    monthlyExpensesMinor: number
+    creditsAndRefundsMinor: number
     nationalPurchasesMinor: number
     internationalPurchasesMinor: number
     chargesMinor: number
     openBalanceMinor: number
   }
   transactions: InvoiceTransaction[]
+  analysis?: {
+    document_type: 'fatura_cartao'
+    institution: string
+    billing_period: string
+    due_date: string
+    total_amount: number
+    transactions: Array<{
+      date: string
+      description: string
+      amount: number
+      installment?: string
+      category?: string
+      country?: string
+    }>
+    installments: Array<{
+      description: string
+      amount: number
+      current?: number
+      total?: number
+      date?: string
+    }>
+    fees: Array<{
+      description: string
+      amount: number
+      kind?: string
+    }>
+    payments: Array<{
+      date?: string
+      description: string
+      amount: number
+      source?: string
+    }>
+    warnings: string[]
+  }
   forecasts: Array<{
     id: string
     competencyMonth: string
@@ -527,10 +626,20 @@ export interface InvoiceParseResult {
     recurrence: 'one-time'
     description: string
   }>
+  debug?: InvoiceParseDebug
 }
 
 export interface InvoiceImportBody {
   transactions: Array<{
+    date: string
+    description: string
+    amountMinor: number
+    categoryId?: string | null
+    competencyMonth: string
+    installment?: string
+    settlesInvoiceId?: number | null
+  }>
+  installments?: Array<{
     date: string
     description: string
     amountMinor: number
@@ -549,12 +658,18 @@ export interface InvoiceImportBody {
   totalMinor?: number
   previousBalanceMinor?: number
   paymentsMinor?: number
+  monthlyExpensesMinor?: number
+  creditsAndRefundsMinor?: number
+  financedBalanceMinor?: number
+  chargesMinor?: number
   openBalanceMinor?: number
+  analysis?: InvoiceParseResult['analysis']
 }
 
 export interface InvoiceParseOptions {
   bank?: string
   password?: string
+  debug?: boolean
 }
 
 export interface InvoiceClassifyBody {
@@ -933,6 +1048,8 @@ export const api = {
 
   accounts: {
     list: () => request<{ items: AccountSummary[] }>('/api/accounts'),
+    openCardInvoices: () =>
+      request<{ items: OpenCardInvoiceSummary[] }>('/api/accounts/open-card-invoices'),
     invoiceDetails: (accountId: number, month: string) =>
       request<AccountInvoiceDetails>(`/api/accounts/${accountId}/month/${month}/invoice`),
     statementDetails: (accountId: number, month: string) =>
@@ -942,10 +1059,23 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify({ categoryId }),
       }),
+    updateCardTransactionSettlement: (cardTransactionId: number, targetCardInvoiceId: number | null) =>
+      request<{ id: number; settledInvoiceId: number | null }>(
+        `/api/accounts/card-transactions/${cardTransactionId}/settlement`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ targetCardInvoiceId }),
+        },
+      ),
     updateBankTransactionCategory: (transactionId: number, categoryId: string | null) =>
       request<{ id: number; categoryId: string | null; categoryName: string | null }>(
         `/api/accounts/bank-transactions/${transactionId}/category`,
         { method: 'PATCH', body: JSON.stringify({ categoryId }) },
+      ),
+    updateBankTransactionCardInvoice: (transactionId: number, cardInvoiceId: number | null) =>
+      request<{ id: number; cardInvoiceId: number | null }>(
+        `/api/accounts/bank-transactions/${transactionId}/card-invoice`,
+        { method: 'PATCH', body: JSON.stringify({ cardInvoiceId }) },
       ),
     deleteByMonth: (accountId: number, month: string) =>
       request<{
@@ -1031,6 +1161,7 @@ export const api = {
       form.append('file', file)
       if (options.bank) form.append('bank', options.bank)
       if (options.password) form.append('password', options.password)
+      if (options.debug) form.append('debug', '1')
       return requestRaw<InvoiceParseResult>('/api/invoices/parse', { method: 'POST', body: form })
     },
 

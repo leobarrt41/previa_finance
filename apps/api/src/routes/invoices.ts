@@ -2,9 +2,10 @@
  * routes/invoices.ts — Invoice PDF upload & import endpoints
  *
  * POST /api/invoices/parse
- *   Accepts a multipart PDF upload, runs the appropriate bank parser,
- *   and returns the extracted transactions for frontend preview.
- *   No data is saved — the user reviews and confirms before import.
+ *   Accepts a multipart PDF upload, converts it into structural ASCII,
+ *   runs sanitization + AI extraction, and returns the extracted data
+ *   for frontend preview. No data is saved — the user reviews and
+ *   confirms before import.
  *
  * POST /api/invoices/import
  *   Accepts the confirmed transactions list and saves them to the DB.
@@ -17,23 +18,28 @@
 
 import { Router, type NextFunction, type Request, type Response } from 'express'
 import multer from 'multer'
+import { spawn } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { z } from 'zod'
-import { parseBBInvoice, invoiceToForecast } from '@previa/parser-bb'
-import { parseItauInvoice, itauInvoiceToForecast } from '@previa/parser-itau'
-import { parseBradescoInvoice, bradescoInvoiceToForecast } from '@previa/parser-bradesco'
-import { accounts, categories, cardInvoices, cardTransactions, receiptDocuments } from '@previa/db'
+import { accounts, categories, cardInvoiceComponents, cardInvoices, cardInvoiceSettlements, cardTransactions, receiptDocuments } from '@previa/db'
 import { buildFingerprintFromRaw, normalizeDescription } from '@previa/core'
 import { eq, and, desc, sql, inArray } from 'drizzle-orm'
 import { getDatabase } from '../config/database.js'
 import { config } from '../config/env.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { syncCardInvoiceSemanticFields } from '../services/cardInvoiceSemantics.js'
-import { resolveOrCreateCreditCardAccount } from '../services/cardAccountResolver.js'
+import { buildCreditCardDisplayName, resolveOrCreateCreditCardAccount } from '../services/cardAccountResolver.js'
+import { buildInvoiceComponentRows } from '../services/cardInvoiceComponents.js'
+import { sanitizeSensitiveText, sanitizeTextForInvoiceDebug } from '../services/textSanitizer.js'
+import { runInvoiceAsciiIngestionPipeline } from '../services/invoiceIntake/pipeline.js'
 import { createError } from '../middlewares/errorHandler.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
 
 const router: Router = Router()
 router.use(requireClerkAuth)
+const INVOICE_AI_TIMEOUT_MS = 60000
 
 // Store file in memory (max 20 MB)
 const upload = multer({
@@ -48,16 +54,860 @@ const upload = multer({
   },
 })
 
-// Supported banks — extend as parsers are added
-type BankId = 'bb' | 'itau' | 'bradesco' | 'auto'
-const BANK_PARAM = z.enum(['bb', 'itau', 'bradesco', 'auto']).default('auto')
+type PdfWord = {
+  text: string
+  x0: number
+  x1: number
+  top: number
+  bottom: number
+}
+
+type PdfPageCapture = {
+  pageNumber: number
+  width: number
+  height: number
+  words: PdfWord[]
+}
+
+type InvoiceManifest = {
+  bank?: string | null
+  summary: {
+    cardLast4: string
+    product: string
+    invoiceMonth: string
+    dueDate: string
+    dueMonth: string
+    closingDate: string
+    totalMinor: number
+    previousBalanceMinor: number
+    paymentsMinor: number
+    nationalPurchasesMinor: number
+    internationalPurchasesMinor: number
+    chargesMinor: number
+    openBalanceMinor: number
+  }
+  transactions: Array<{
+    id?: string
+    date: string
+    description: string
+    amountMinor: number
+    installment?: string
+    category?: string
+    country?: string
+  }>
+}
+
+type InvoiceDebugStage = {
+  label: string
+  content: string
+}
+
+type InvoiceParseDebug = {
+  strategy: 'ascii'
+  sourceBank: string
+  stages: InvoiceDebugStage[]
+}
+
+function getPythonBin(): string {
+  return process.env.PREVIA_PYTHON || process.env.PYTHON_BIN || 'python3'
+}
 
 function isPdfPasswordError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   return error.message.includes('PDFPasswordIncorrect')
-    || error.message.includes('PdfminerException')
     || error.message.includes('PDF_PASSWORD_REQUIRED')
-    || error.message.includes('password')
+    || /incorrect password/i.test(error.message)
+    || /password\s+required/i.test(error.message)
+}
+
+function isPdfDependencyError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return error.message.includes('PDF_DEPENDENCY_MISSING')
+    || error.message.includes("No module named 'pdfplumber'")
+    || error.message.includes('ModuleNotFoundError')
+}
+
+function getPdfParseErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim()
+  }
+  return 'Erro desconhecido ao ler a fatura.'
+}
+
+function normalizeText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function toDebugString(value: unknown, maxLength = 12000): string {
+  let text = ''
+  if (typeof value === 'string') {
+    text = value
+  } else {
+    try {
+      text = JSON.stringify(value, null, 2) ?? ''
+    } catch {
+      text = String(value)
+    }
+  }
+
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, maxLength)}\n… [truncado ${text.length - maxLength} chars]`
+}
+
+function normalizeInt(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
+  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) {
+    return Math.trunc(Number(value))
+  }
+  return 0
+}
+
+function normalizeMonth(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim()
+  return /^\d{4}-\d{2}$/.test(trimmed) ? trimmed : ''
+}
+
+function normalizeDate(value: unknown, invoiceMonth?: string): string {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed
+
+  const slashMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
+  if (slashMatch) {
+    return `${slashMatch[3]}-${slashMatch[2]}-${slashMatch[1]}`
+  }
+
+  const monthMatch = trimmed.match(/^(\d{2})\/(\d{2})$/)
+  if (monthMatch && invoiceMonth) {
+    return `${invoiceMonth}-${monthMatch[1]}`
+  }
+
+  const parsed = new Date(trimmed)
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10)
+  }
+
+  return ''
+}
+
+function normalizeCardLast4(value: unknown): string {
+  const digits = normalizeText(value).replace(/\D/g, '')
+  return digits.length >= 4 ? digits.slice(-4) : ''
+}
+
+function normalizeBankId(value: unknown): string {
+  const bank = normalizeText(value).toLowerCase()
+  if (!bank) return ''
+  const mapped: Record<string, string> = {
+    banco_do_brasil: 'bb',
+    banco_do_brasil_pdf: 'bb',
+    bb: 'bb',
+    itau: 'itau',
+    itaú: 'itau',
+    bradesco: 'bradesco',
+    picpay: 'picpay',
+    nubank: 'nubank',
+  }
+  return mapped[bank] ?? bank
+}
+
+function normalizeInvoiceLineText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function shouldExcludeInvoiceTransaction(description: string): boolean {
+  const text = normalizeInvoiceLineText(description)
+  if (!text) return true
+
+  return [
+    /^saldo anterior\b/,
+    /^previous balance\b/,
+    /^pagamento\b/,
+    /^pagto\b/,
+    /^pgto\b/,
+    /^creditos?\/pagamentos?\b/,
+    /^compras?\/debitos?\b/,
+    /^total da fatura\b/,
+    /^fatura anterior\b/,
+    /^pagamento minimo\b/,
+    /^parcelamento da fatura\b/,
+    /^encargos\b/,
+    /^juros\b/,
+    /^multa\b/,
+    /^anuidade\b/,
+    /^limite\b/,
+    /^quitacao\b/,
+    /^liquidac/,
+    /^payment\b/,
+  ].some((pattern) => pattern.test(text))
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function median(values: number[]): number {
+  const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b)
+  if (sorted.length === 0) return 0
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 1
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
+function estimateAverageCharWidth(words: PdfWord[]): number {
+  const samples = words
+    .map((word) => {
+      const length = Math.max(1, word.text.replace(/\s+/g, '').length)
+      return (word.x1 - word.x0) / length
+    })
+    .filter((value) => Number.isFinite(value) && value > 0)
+
+  return clamp(median(samples) || 6, 3.5, 14)
+}
+
+function groupWordsIntoRows(words: PdfWord[], rowTolerance: number): PdfWord[][] {
+  const rows: PdfWord[][] = []
+  const ordered = [...words].sort((a, b) => a.top - b.top || a.x0 - b.x0)
+
+  for (const word of ordered) {
+    const lastRow = rows[rows.length - 1]
+    if (!lastRow) {
+      rows.push([word])
+      continue
+    }
+
+    const rowTop = lastRow[0].top
+    if (Math.abs(word.top - rowTop) <= rowTolerance) {
+      lastRow.push(word)
+      continue
+    }
+
+    rows.push([word])
+  }
+
+  return rows
+}
+
+function renderAsciiRow(words: PdfWord[], charWidth: number): string {
+  if (words.length === 0) return ''
+
+  const ordered = [...words].sort((a, b) => a.x0 - b.x0)
+  const segments: string[] = []
+  let cursor = 0
+
+  for (const word of ordered) {
+    const target = Math.max(0, Math.round(word.x0 / charWidth))
+    const spaces = segments.length === 0
+      ? target
+      : Math.max(1, target - cursor)
+
+    if (spaces > 0) {
+      segments.push(' '.repeat(spaces))
+    }
+    segments.push(word.text)
+    cursor = target + word.text.length
+  }
+
+  return segments.join('').replace(/\s+$/, '')
+}
+
+function runPythonScript(script: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(getPythonBin(), ['-c', script, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8')
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8')
+    })
+    child.on('error', (error) => {
+      reject(error)
+    })
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr })
+        return
+      }
+      reject(new Error(stderr.trim() || stdout.trim() || `Python script failed with exit code ${code ?? 'unknown'}`))
+    })
+  })
+}
+
+async function extractPdfPagesWithCoordinates(buffer: Buffer, password?: string): Promise<PdfPageCapture[]> {
+  const workDir = mkdtempSync(join(tmpdir(), 'previa-invoices-'))
+  const pdfPath = join(workDir, 'invoice.pdf')
+  writeFileSync(pdfPath, buffer)
+
+  const script = String.raw`
+import json
+import sys
+from pathlib import Path
+
+try:
+    import pdfplumber
+    from pdfminer.pdfdocument import PDFPasswordIncorrect
+except ModuleNotFoundError as exc:
+    print(f"PDF_DEPENDENCY_MISSING: {exc}", file=sys.stderr)
+    sys.exit(4)
+
+pdf_path = Path(sys.argv[1])
+password = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None
+
+try:
+    pages = []
+    with pdfplumber.open(pdf_path, password=password) as pdf:
+        for index, page in enumerate(pdf.pages, start=1):
+            try:
+                words = page.extract_words(
+                    keep_blank_chars=False,
+                    use_text_flow=False,
+                    horizontal_ltr=True,
+                    vertical_ttb=True,
+                    x_tolerance=2,
+                    y_tolerance=2,
+                )
+            except Exception:
+                words = []
+
+            normalized = []
+            for word in words:
+                text = (word.get("text") or "").strip()
+                if not text:
+                    continue
+                normalized.append({
+                    "text": text,
+                    "x0": float(word.get("x0") or 0),
+                    "x1": float(word.get("x1") or 0),
+                    "top": float(word.get("top") or 0),
+                    "bottom": float(word.get("bottom") or 0),
+                })
+
+            pages.append({
+                "pageNumber": index,
+                "width": float(page.width or 0),
+                "height": float(page.height or 0),
+                "words": normalized,
+            })
+
+    print(json.dumps({"pages": pages}, ensure_ascii=False))
+except PDFPasswordIncorrect as exc:
+    print(f"PDF_PASSWORD_REQUIRED: {exc}", file=sys.stderr)
+    sys.exit(3)
+except Exception as exc:
+    message = str(exc)
+    if "password" in message.lower():
+        print(f"PDF_PASSWORD_REQUIRED: {message}", file=sys.stderr)
+        sys.exit(3)
+    print(message, file=sys.stderr)
+    sys.exit(1)
+`
+
+  try {
+    const { stdout } = await runPythonScript(script, [pdfPath, password ?? ''])
+    const parsed = JSON.parse(stdout) as { pages?: PdfPageCapture[] }
+    return Array.isArray(parsed.pages) ? parsed.pages : []
+  } finally {
+    try {
+      rmSync(workDir, { recursive: true, force: true })
+    } catch {
+      // best effort cleanup
+    }
+  }
+}
+
+function buildAsciiMap(pages: PdfPageCapture[]): string {
+  const lines: string[] = []
+
+  for (const page of pages) {
+    const charWidth = estimateAverageCharWidth(page.words)
+    const rowTolerance = clamp(Math.round(charWidth * 0.9), 4, 10)
+    const rows = groupWordsIntoRows(page.words, rowTolerance)
+    let previousTop: number | null = null
+
+    lines.push(`===== PAGE ${page.pageNumber} | width=${Math.round(page.width)} | height=${Math.round(page.height)} =====`)
+    for (const row of rows) {
+      const top = row[0]?.top ?? 0
+      if (previousTop !== null) {
+        const verticalGap = top - previousTop
+        const blankLines = clamp(Math.round(verticalGap / (rowTolerance * 1.6)) - 1, 0, 3)
+        for (const _ of Array.from({ length: blankLines })) {
+          lines.push('')
+        }
+      }
+      lines.push(renderAsciiRow(row, charWidth))
+      previousTop = top
+    }
+  }
+
+  return lines.join('\n').trim()
+}
+
+function sanitizeInvoiceAscii(asciiText: string): { sanitizedText: string; debugText: string } {
+  const sanitized = sanitizeSensitiveText(asciiText)
+  return {
+    sanitizedText: sanitized.sanitizedText,
+    debugText: sanitizeTextForInvoiceDebug(asciiText),
+  }
+}
+
+async function callInvoiceLLM(
+  asciiText: string,
+  meta: { filename: string; passwordProtected: boolean },
+): Promise<unknown> {
+  if (!config.ai.apiKey) {
+    throw new Error('AI não configurada para gerar invoice_manifest.json')
+  }
+
+  const baseUrl = config.ai.baseUrl.replace(/\/$/, '')
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.ai.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.ai.model,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Voce recebe um ASCII posicional de fatura PDF. Responda SOMENTE JSON no formato {"bank":"...","summary":{"cardLast4":"...","product":"...","invoiceMonth":"YYYY-MM","dueDate":"YYYY-MM-DD","dueMonth":"YYYY-MM","closingDate":"YYYY-MM-DD","totalMinor":0,"previousBalanceMinor":0,"paymentsMinor":0,"nationalPurchasesMinor":0,"internationalPurchasesMinor":0,"chargesMinor":0,"openBalanceMinor":0},"transactions":[{"id":"...","date":"YYYY-MM-DD","description":"...","amountMinor":0,"installment":"...","category":"...","country":"..."}]}. Use amountMinor em centavos e preserve a ordem das compras. A lista transactions deve conter apenas compras, encargos e ajustes da fatura; nunca inclua linhas de pagamento, saldo anterior, total da fatura ou amortizacao/quitacao. A instituição deve ser identificada pelo cabecalho, logo, titulo ou bloco principal da fatura; nunca pela primeira transacao, merchant, adquirente ou descricao de compra. Se o banco/issuer estiver visivel no cabecalho, preencha bank com bb, itau, bradesco, picpay ou outro identificador curto. Se um campo não existir, envie string vazia ou 0.',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            filename: meta.filename,
+            passwordProtected: meta.passwordProtected,
+            ascii: asciiText,
+          }),
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(INVOICE_AI_TIMEOUT_MS),
+  })
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`Falha ao extrair invoice_manifest.json (${response.status}): ${text}`)
+  }
+
+  const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
+  const content = json.choices?.[0]?.message?.content ?? '{}'
+
+  try {
+    return JSON.parse(content)
+  } catch {
+    throw new Error('LLM não retornou JSON válido para invoice_manifest.json.')
+  }
+}
+
+function validateInvoiceManifest(raw: unknown): InvoiceManifest {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('invoice_manifest.json inválido.')
+  }
+
+  const manifest = raw as Partial<InvoiceManifest> & { summary?: Record<string, unknown>; transactions?: unknown[] }
+  const summary = manifest.summary
+  if (!summary || typeof summary !== 'object') {
+    throw new Error('invoice_manifest.json sem summary.')
+  }
+
+  const normalizedSummary = {
+    cardLast4: normalizeCardLast4(summary.cardLast4),
+    product: normalizeText(summary.product),
+    invoiceMonth: normalizeMonth(summary.invoiceMonth),
+    dueDate: normalizeDate(summary.dueDate),
+    dueMonth: normalizeMonth(summary.dueMonth),
+    closingDate: normalizeDate(summary.closingDate),
+    totalMinor: normalizeInt(summary.totalMinor),
+    previousBalanceMinor: normalizeInt(summary.previousBalanceMinor),
+    paymentsMinor: normalizeInt(summary.paymentsMinor),
+    nationalPurchasesMinor: normalizeInt(summary.nationalPurchasesMinor),
+    internationalPurchasesMinor: normalizeInt(summary.internationalPurchasesMinor),
+    chargesMinor: normalizeInt(summary.chargesMinor),
+    openBalanceMinor: normalizeInt(summary.openBalanceMinor),
+  }
+
+  if (!normalizedSummary.invoiceMonth && normalizedSummary.dueDate) {
+    normalizedSummary.invoiceMonth = normalizedSummary.dueDate.slice(0, 7)
+  }
+  if (!normalizedSummary.dueMonth && normalizedSummary.dueDate) {
+    normalizedSummary.dueMonth = normalizedSummary.dueDate.slice(0, 7)
+  }
+  if (!normalizedSummary.dueMonth && normalizedSummary.invoiceMonth) {
+    const [year, month] = normalizedSummary.invoiceMonth.split('-').map(Number)
+    const nextMonth = new Date(Date.UTC(year, month, 1))
+    normalizedSummary.dueMonth = `${nextMonth.getUTCFullYear()}-${String(nextMonth.getUTCMonth() + 1).padStart(2, '0')}`
+  }
+  if (!normalizedSummary.invoiceMonth && normalizedSummary.dueMonth) {
+    const [year, month] = normalizedSummary.dueMonth.split('-').map(Number)
+    const prevMonth = new Date(Date.UTC(year, month - 2, 1))
+    normalizedSummary.invoiceMonth = `${prevMonth.getUTCFullYear()}-${String(prevMonth.getUTCMonth() + 1).padStart(2, '0')}`
+  }
+
+  if (!normalizedSummary.invoiceMonth || !normalizedSummary.dueMonth) {
+    throw new Error('invoice_manifest.json sem invoiceMonth/dueMonth válidos.')
+  }
+
+  const fallbackTotal =
+    normalizedSummary.previousBalanceMinor
+    - normalizedSummary.paymentsMinor
+    + normalizedSummary.nationalPurchasesMinor
+    + normalizedSummary.internationalPurchasesMinor
+    + normalizedSummary.chargesMinor
+
+  if (normalizedSummary.totalMinor <= 0 && fallbackTotal > 0) {
+    normalizedSummary.totalMinor = fallbackTotal
+  }
+  if (normalizedSummary.openBalanceMinor <= 0 && normalizedSummary.totalMinor > 0) {
+    normalizedSummary.openBalanceMinor = normalizedSummary.totalMinor
+  }
+
+  const transactions = Array.isArray(manifest.transactions)
+    ? manifest.transactions
+        .map((item, index) => {
+          if (!item || typeof item !== 'object') return null
+          const tx = item as Record<string, unknown>
+          const description = normalizeText(tx.description)
+          const date = normalizeDate(tx.date, normalizedSummary.invoiceMonth)
+          const amountMinor = normalizeInt(tx.amountMinor)
+          if (!description || !date || amountMinor === 0) return null
+          if (shouldExcludeInvoiceTransaction(description)) return null
+
+          return {
+            id: normalizeText(tx.id) || `llm-${index}`,
+            date,
+            description,
+            amountMinor: Math.abs(amountMinor),
+            installment: normalizeText(tx.installment) || undefined,
+            category: normalizeText(tx.category),
+            country: normalizeText(tx.country) || undefined,
+          }
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    : []
+
+  if (transactions.length === 0) {
+    throw new Error('invoice_manifest.json sem transactions válidas.')
+  }
+
+  return {
+    bank: normalizeBankId(manifest.bank) || null,
+    summary: {
+      cardLast4: normalizedSummary.cardLast4,
+      product: normalizedSummary.product,
+      invoiceMonth: normalizedSummary.invoiceMonth,
+      dueDate: normalizedSummary.dueDate,
+      dueMonth: normalizedSummary.dueMonth,
+      closingDate: normalizedSummary.closingDate,
+      totalMinor: normalizedSummary.totalMinor,
+      previousBalanceMinor: normalizedSummary.previousBalanceMinor,
+      paymentsMinor: normalizedSummary.paymentsMinor,
+      nationalPurchasesMinor: normalizedSummary.nationalPurchasesMinor,
+      internationalPurchasesMinor: normalizedSummary.internationalPurchasesMinor,
+      chargesMinor: normalizedSummary.chargesMinor,
+      openBalanceMinor: normalizedSummary.openBalanceMinor,
+    },
+    transactions,
+  }
+}
+
+function manifestToInvoiceParseResult(
+  manifest: InvoiceManifest,
+  fallbackBank: string,
+): {
+  bank: string
+  summary: {
+    cardLast4: string
+    product: string
+    invoiceMonth: string
+    dueDate: string
+    dueMonth: string
+    closingDate: string
+    totalMinor: number
+    previousBalanceMinor: number
+    paymentsMinor: number
+    nationalPurchasesMinor: number
+    internationalPurchasesMinor: number
+    chargesMinor: number
+    openBalanceMinor: number
+  }
+  transactions: Array<{
+    id: string
+    date: string
+    description: string
+    amountMinor: number
+    installment?: string
+    categoryId: string | null
+    competencyMonth: string
+    include: boolean
+    category: string
+    country?: string
+  }>
+  forecasts: Array<{
+    id: string
+    competencyMonth: string
+    amountMinor: number
+    recurrence: 'one-time'
+    description: string
+  }>
+} {
+  const bank = manifest.bank || (fallbackBank === 'auto' ? 'unknown' : fallbackBank)
+  const summary = manifest.summary
+  const transactions = manifest.transactions.map((tx, index) => ({
+    id: tx.id || `llm-${index}`,
+    date: tx.date,
+    description: tx.description,
+    amountMinor: Math.abs(tx.amountMinor),
+    installment: tx.installment,
+    categoryId: null,
+    competencyMonth: tx.date.slice(0, 7) || summary.invoiceMonth,
+    include: Math.abs(tx.amountMinor) > 0,
+    category: tx.category || '',
+    country: tx.country,
+  }))
+
+  const forecasts: Array<{
+    id: string
+    competencyMonth: string
+    amountMinor: number
+    recurrence: 'one-time'
+    description: string
+  }> = summary.openBalanceMinor > 0
+    ? [{
+        id: `ascii-invoice-${summary.invoiceMonth}-${summary.cardLast4 || 'na'}`,
+        competencyMonth: summary.dueMonth || summary.invoiceMonth,
+        amountMinor: -summary.openBalanceMinor,
+        recurrence: 'one-time',
+        description: `Fatura ${summary.product || bank}`,
+      }]
+    : []
+
+  return { bank, summary, transactions, forecasts }
+}
+
+type InvoicePreviewTransaction = ReturnType<typeof manifestToInvoiceParseResult>['transactions'][number]
+type InvoicePreviewPayload = ReturnType<typeof manifestToInvoiceParseResult>
+
+const PREVIEW_DESCRIPTION_NOISE = new Set([
+  'PARCELA',
+  'PARCELAS',
+  'PARC',
+  'COMPRA',
+  'COMPRAS',
+  'CREDITO',
+  'DEBITO',
+  'PAGAMENTO',
+  'PAGAMENTOS',
+  'PGTO',
+  'PAGTO',
+])
+
+const PREVIEW_SUFFIX_TOKENS = [
+  'SAOPAULO',
+  'SAOPAULOSP',
+  'SAOPAULOBR',
+  'SAOPAULOBRA',
+  'SAOJOSE',
+  'SAOJOS',
+  'SAOJOSEDO',
+  'SAOJOSEDOS',
+  'CACAPAVA',
+  'NORTHSYDNEY',
+  'SYDNEY',
+  'BRASIL',
+  'BRA',
+  'BR',
+  'SP',
+  'RJ',
+  'MG',
+  'PR',
+  'SC',
+  'RS',
+  'BA',
+  'CE',
+  'GO',
+  'DF',
+  'ES',
+  'MT',
+  'MS',
+  'PA',
+  'PE',
+  'RN',
+  'PB',
+  'AL',
+  'SE',
+  'AM',
+  'AP',
+  'AC',
+  'RO',
+  'RR',
+  'TO',
+]
+
+function stripPreviewSuffixes(token: string): string {
+  let current = token
+  let changed = true
+
+  while (changed && current.length > 0) {
+    changed = false
+    for (const suffix of PREVIEW_SUFFIX_TOKENS) {
+      if (current === suffix) {
+        return ''
+      }
+      if (current.endsWith(suffix) && current.length > suffix.length) {
+        current = current.slice(0, -suffix.length)
+        changed = true
+        break
+      }
+    }
+  }
+
+  return current
+}
+
+function tokenizePreviewDescription(description: string): string[] {
+  const base = normalizeDescription(description)
+  if (!base) return []
+
+  return base
+    .split(' ')
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .filter((token) => !PREVIEW_DESCRIPTION_NOISE.has(token))
+    .filter((token) => !/^\d{1,2}\/\d{1,2}$/.test(token))
+    .map(stripPreviewSuffixes)
+    .filter(Boolean)
+}
+
+function canonicalPreviewDescription(description: string): string {
+  const tokens = tokenizePreviewDescription(description)
+  return tokens.join('')
+}
+
+function parsePreviewDate(date: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+  const parsed = new Date(`${date}T12:00:00Z`)
+  return Number.isNaN(parsed.getTime()) ? null : parsed.getTime()
+}
+
+function isSamePreviewTransaction(
+  a: InvoicePreviewTransaction,
+  b: InvoicePreviewTransaction,
+): boolean {
+  if (a.amountMinor !== b.amountMinor) return false
+  if ((a.installment ?? '').replace(/\s+/g, '') !== (b.installment ?? '').replace(/\s+/g, '')) return false
+
+  const dateA = parsePreviewDate(a.date)
+  const dateB = parsePreviewDate(b.date)
+  if (dateA !== null && dateB !== null && Math.abs(dateA - dateB) > 2 * 24 * 60 * 60 * 1000) return false
+
+  const normalizedA = canonicalPreviewDescription(a.description)
+  const normalizedB = canonicalPreviewDescription(b.description)
+  if (!normalizedA || !normalizedB) return false
+  if (normalizedA === normalizedB) return true
+  if (normalizedA.startsWith(normalizedB) || normalizedB.startsWith(normalizedA)) return true
+
+  const tokensA = tokenizePreviewDescription(a.description)
+  const tokensB = tokenizePreviewDescription(b.description)
+  if (tokensA.length === 0 || tokensB.length === 0) return false
+
+  const longer = tokensA.length >= tokensB.length ? tokensA : tokensB
+  const shorter = tokensA.length >= tokensB.length ? tokensB : tokensA
+  let matches = 0
+  for (const token of shorter) {
+    if (longer.includes(token)) matches += 1
+  }
+
+  return matches >= Math.max(1, Math.min(shorter.length, 2))
+}
+
+function previewTransactionScore(tx: InvoicePreviewTransaction): number {
+  const tokens = tokenizePreviewDescription(tx.description)
+  const canonical = canonicalPreviewDescription(tx.description)
+  return canonical.length
+    + tokens.length * 5
+    + (tx.installment ? 12 : 0)
+    + (tx.category ? 4 : 0)
+    + (tx.country ? 2 : 0)
+    + (tx.date ? 2 : 0)
+}
+
+function mergePreviewTransactions(
+  primary: InvoicePreviewTransaction[],
+  secondary: InvoicePreviewTransaction[],
+): InvoicePreviewTransaction[] {
+  const merged: InvoicePreviewTransaction[] = []
+  for (const tx of [...primary, ...secondary]) {
+    const existingIndex = merged.findIndex((item) => isSamePreviewTransaction(item, tx))
+    if (existingIndex < 0) {
+      merged.push(tx)
+      continue
+    }
+
+    if (previewTransactionScore(tx) > previewTransactionScore(merged[existingIndex])) {
+      merged[existingIndex] = tx
+    }
+  }
+
+  return merged
+}
+
+function sumIncludedTransactions(transactions: InvoicePreviewTransaction[]): number {
+  return transactions.reduce((sum, tx) => sum + (tx.include ? Math.abs(tx.amountMinor) : 0), 0)
+}
+
+function countIncludedTransactions(transactions: InvoicePreviewTransaction[]): number {
+  return transactions.reduce((count, tx) => count + (tx.include ? 1 : 0), 0)
+}
+
+function getPreviewStats(transactions: InvoicePreviewTransaction[]): {
+  includedCount: number
+  includedTotalMinor: number
+} {
+  return {
+    includedCount: countIncludedTransactions(transactions),
+    includedTotalMinor: sumIncludedTransactions(transactions),
+  }
+}
+
+function isTruthyRequestValue(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value !== 'string') return false
+  const normalized = value.trim().toLowerCase()
+  return normalized === '1'
+    || normalized === 'true'
+    || normalized === 'yes'
+    || normalized === 'on'
+}
+
+async function parseInvoiceViaAsciiPipeline(
+  buffer: Buffer,
+  password: string | undefined,
+  meta: { filename: string },
+): Promise<{ payload: InvoicePreviewPayload; debug: InvoiceParseDebug }> {
+  const result = await runInvoiceAsciiIngestionPipeline(buffer, {
+    filename: meta.filename,
+    password,
+  })
+  return {
+    payload: result.payload as InvoicePreviewPayload,
+    debug: result.debug as InvoiceParseDebug,
+  }
 }
 
 const classifyBodySchema = z.object({
@@ -224,181 +1074,28 @@ router.post(
       }
       const file = req.file
 
-      const bankParam = BANK_PARAM.safeParse(req.body.bank ?? req.query.bank)
-      const bank: BankId = bankParam.success ? bankParam.data : 'auto'
       const password = typeof req.body.password === 'string' && req.body.password.trim()
         ? req.body.password.trim()
         : undefined
 
-      const filename = file.originalname.toLowerCase()
-      const hintedBank: BankId =
-        bank !== 'auto'
-          ? bank
-          : filename.includes('itau') || filename.includes('itaú')
-            ? 'itau'
-            : filename.includes('bradesco') || filename.includes('bradescard') || filename.includes('casas bahia')
-              ? 'bradesco'
-            : filename.includes('bb') || filename.includes('brasil')
-              ? 'bb'
-              : 'auto'
-
-      const parseAsBB = async () => {
-        const invoice = await parseBBInvoice(file.buffer)
-        const forecasts = invoiceToForecast(invoice)
-
-        const txs = invoice.transactions
-          .filter((t) => t.date)
-          .map((t, i) => ({
-            id: `bb-${i}`,
-            date: t.date,
-            description: t.description,
-            amountMinor: Math.abs(t.amountMinor),
-            installment: t.installment,
-            categoryId: null,
-            competencyMonth: invoice.summary.invoiceMonth,
-            include: t.amountMinor > 0,
-            category: t.category,
-            country: t.country,
-          }))
-
-        return {
-          bank: 'bb' as const,
-          summary: {
-            ...invoice.summary,
-          },
-          transactions: txs,
-          forecasts,
-        }
-      }
-
-      const parseAsItau = async () => {
-        const invoice = await parseItauInvoice(file.buffer, password)
-        const forecasts = itauInvoiceToForecast(invoice)
-
-        const txs = invoice.transactions
-          .filter((t) => t.date)
-          .map((t, i) => ({
-            id: `itau-${i}`,
-            date: t.date,
-            description: t.description,
-            amountMinor: Math.abs(t.amountMinor),
-            installment: t.installment,
-            categoryId: null,
-            competencyMonth: invoice.summary.invoiceMonth,
-            include: t.amountMinor > 0,
-            category: t.category,
-            country: t.country,
-            originalAmountMinor: t.originalAmountMinor,
-            originalCurrencyCode: t.originalCurrencyCode,
-            exchangeRate: t.exchangeRate,
-          }))
-
-        return {
-          bank: 'itau' as const,
-          summary: {
-            ...invoice.summary,
-          },
-          transactions: txs,
-          forecasts,
-        }
-      }
-
-      const parseAsBradesco = async () => {
-        const invoice = await parseBradescoInvoice(file.buffer, password)
-        const forecasts = bradescoInvoiceToForecast(invoice)
-
-        const txs = invoice.transactions
-          .filter((t) => t.date)
-          .map((t, i) => ({
-            id: `bradesco-${i}`,
-            date: t.date,
-            description: t.description,
-            amountMinor: Math.abs(t.amountMinor),
-            installment: t.installment,
-            categoryId: null,
-            competencyMonth: invoice.summary.invoiceMonth,
-            include: t.amountMinor > 0,
-            category: t.category,
-            country: t.country,
-          }))
-
-        return {
-          bank: 'bradesco' as const,
-          summary: {
-            ...invoice.summary,
-          },
-          transactions: txs,
-          forecasts,
-        }
-      }
-
-      if (hintedBank === 'bb') {
-        try {
-          const payload = await parseAsBB()
-          return res.json(payload)
-        } catch (error) {
-          if (isPdfPasswordError(error)) {
-            throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
-          }
-          throw error
-        }
-      }
-
-      if (hintedBank === 'itau') {
-        try {
-          const payload = await parseAsItau()
-          return res.json(payload)
-        } catch (error) {
-          if (isPdfPasswordError(error)) {
-            throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
-          }
-          throw error
-        }
-      }
-
-      if (hintedBank === 'bradesco') {
-        try {
-          const payload = await parseAsBradesco()
-          return res.json(payload)
-        } catch (error) {
-          if (isPdfPasswordError(error)) {
-            throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
-          }
-          throw error
-        }
-      }
-
-      // bank=auto com filename ambíguo: tenta Itaú, depois Bradesco, depois BB.
-      // Isso evita parse incorreto quando o nome do arquivo não contém o banco.
       try {
-        const payload = await parseAsItau()
-        return res.json(payload)
-      } catch (error) {
-        if (isPdfPasswordError(error)) {
-          // Evita chamar o parser BB quando o problema já é senha.
+        const asciiResult = await parseInvoiceViaAsciiPipeline(file.buffer, password, { filename: file.originalname })
+        return res.json({
+          ...asciiResult.payload,
+          debug: {
+            ...asciiResult.debug,
+            strategy: 'ascii',
+          },
+        })
+      } catch (pipelineError) {
+        if (isPdfPasswordError(pipelineError)) {
           throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
         }
-      }
-
-      try {
-        const payload = await parseAsBradesco()
-        return res.json(payload)
-      } catch (error) {
-        if (isPdfPasswordError(error)) {
-          throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
+        if (isPdfDependencyError(pipelineError)) {
+          throw createError('Dependência ausente para ler PDFs: pdfplumber. Instale o módulo Python e reinicie a API.', 500)
         }
+        throw createError(`Falha ao ler a fatura: ${getPdfParseErrorMessage(pipelineError)}`, 400)
       }
-
-      try {
-        const payload = await parseAsBB()
-        return res.json(payload)
-      } catch (error) {
-        if (isPdfPasswordError(error)) {
-          throw createError('PDF protegido por senha. Informe a senha da fatura para gerar o preview.', 400)
-        }
-      }
-
-      throw createError('Não foi possível identificar automaticamente o banco da fatura. Selecione o banco manualmente.', 400)
     } catch (error) {
       next(error)
     }
@@ -445,8 +1142,19 @@ const importBodySchema = z.object({
       categoryAssignedBy: z.enum(['provider', 'history', 'ai', 'user', 'legacy']).nullable().optional(),
       competencyMonth: z.string().regex(/^\d{4}-\d{2}$/),
       installment: z.string().optional(),
+      settlesInvoiceId: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
     })
   ),
+  installments: z.array(
+    z.object({
+      date: z.string(),
+      description: z.string(),
+      amountMinor: z.number().int(),
+      categoryId: z.string().nullable().optional(),
+      competencyMonth: z.string().regex(/^\d{4}-\d{2}$/),
+      installment: z.string().optional(),
+    })
+  ).optional(),
   invoiceMonth: z.string().regex(/^\d{4}-\d{2}$/),
   dueMonth: z.string().regex(/^\d{4}-\d{2}$/).optional(),
   bank: z.string().optional(),
@@ -458,7 +1166,43 @@ const importBodySchema = z.object({
   totalMinor: z.number().int().nonnegative().optional(),
   previousBalanceMinor: z.number().int().optional(),
   paymentsMinor: z.number().int().optional(),
+  monthlyExpensesMinor: z.number().int().optional(),
+  creditsAndRefundsMinor: z.number().int().optional(),
+  chargesMinor: z.number().int().optional(),
+  financedBalanceMinor: z.number().int().optional(),
   openBalanceMinor: z.number().int().optional(),
+  analysis: z.object({
+    installments: z.array(
+      z.object({
+        date: z.string().optional(),
+        description: z.string(),
+        amount: z.number(),
+        current: z.preprocess(
+          (value) => (typeof value === 'number' && value > 0 ? value : undefined),
+          z.number().int().positive().optional(),
+        ).optional(),
+        total: z.preprocess(
+          (value) => (typeof value === 'number' && value > 0 ? value : undefined),
+          z.number().int().positive().optional(),
+        ).optional(),
+      }),
+    ).optional(),
+    fees: z.array(
+      z.object({
+        description: z.string(),
+        amount: z.number(),
+        kind: z.string().optional(),
+      }),
+    ).optional(),
+    payments: z.array(
+      z.object({
+        date: z.string().optional(),
+        description: z.string(),
+        amount: z.number(),
+        source: z.string().optional(),
+      }),
+    ).optional(),
+  }).optional(),
 })
 
 const INSTITUTION_MAP: Record<string, string> = {
@@ -568,11 +1312,7 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
   if (sharedAccountId) {
     accountId = sharedAccountId
   } else {
-    // Build a human-readable display name: "Itaú Platinum ••••9970"
-    const last4Display = cardLast4 ? ` ••••${cardLast4}` : ''
-    const productDisplay = body.product ? ` ${body.product}` : ''
-    const institutionDisplay = institutionName ?? (body.bank ? body.bank.toUpperCase() : 'Cartão de crédito')
-    const displayName = `${institutionDisplay}${productDisplay}${last4Display}`.trim()
+    const displayName = buildCreditCardDisplayName(institutionName ?? body.bank, cardBrand, cardLast4)
 
     await db.insert(accounts).values({
       userId: owner.id,
@@ -614,6 +1354,7 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
   // -------------------------------------------------------------------------
   const txsWithoutCategory = body.transactions.filter(t => !t.categoryId)
   const historyMap = new Map<string, { categoryId: string; assignedBy: string }>()
+  const installmentHistoryMap = new Map<string, { categoryId: string; assignedBy: string }>()
   if (txsWithoutCategory.length > 0) {
     const normalizedDescs = [...new Set(
       txsWithoutCategory.map(t => normalizeDescription(t.description))
@@ -624,6 +1365,7 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           normalizedDescription: cardTransactions.normalizedDescription,
           categoryId: cardTransactions.categoryId,
           categoryAssignedBy: cardTransactions.categoryAssignedBy,
+          installmentGroupId: cardTransactions.installmentGroupId,
         })
         .from(cardTransactions)
         .where(
@@ -639,6 +1381,12 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
         if (!key || historyMap.has(key)) continue
         if (row.categoryId) {
           historyMap.set(key, {
+            categoryId: row.categoryId,
+            assignedBy: row.categoryAssignedBy ?? 'history',
+          })
+        }
+        if (row.installmentGroupId && !installmentHistoryMap.has(row.installmentGroupId) && row.categoryId) {
+          installmentHistoryMap.set(row.installmentGroupId, {
             categoryId: row.categoryId,
             assignedBy: row.categoryAssignedBy ?? 'history',
           })
@@ -764,13 +1512,7 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           reported_paid_amount_minor = ${reportedPaidAmountMinor.toString()},
           carried_open_amount_minor = ${carriedOpenAmountMinor.toString()},
           status = ${openAmountMinor > 0n ? 'OPEN' : 'PAID'},
-          parser_strategy = ${body.bank?.toLowerCase() === 'bradesco'
-            ? 'bradesco_v1'
-            : body.bank?.toLowerCase() === 'itau'
-              ? 'itau_v1'
-              : body.bank?.toLowerCase() === 'bb'
-                ? 'bb_v1'
-                : null},
+          parser_strategy = ${'ascii_ai_v1'},
           updated_at = CURRENT_TIMESTAMP
         where id = ${existingInvoice.id}
       `)
@@ -803,13 +1545,7 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           status: openAmountMinor > 0n ? 'OPEN' : 'PAID',
           source: 'pdf_invoice',
           dataState: 'consolidated',
-          parserStrategy: body.bank?.toLowerCase() === 'bradesco'
-            ? 'bradesco_v1'
-            : body.bank?.toLowerCase() === 'itau'
-              ? 'itau_v1'
-              : body.bank?.toLowerCase() === 'bb'
-                ? 'bb_v1'
-                : undefined,
+          parserStrategy: 'ascii_ai_v1',
         })
         console.log('[invoices/import] card_invoice insert completed', {
           invoiceMonth: body.invoiceMonth,
@@ -846,6 +1582,40 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
       cardInvoiceId = created.id
     }
 
+    const analysisFeesMinor = (body.analysis?.fees ?? []).reduce(
+      (sum, fee) => sum + Math.round(Math.abs(Number(fee.amount) || 0) * 100),
+      0,
+    )
+    const componentRows = buildInvoiceComponentRows({
+      userId: owner.id,
+      cardInvoiceId,
+      summary: {
+        previousBalanceMinor: body.previousBalanceMinor ?? null,
+        paymentsMinor: body.paymentsMinor ?? null,
+        creditsAndRefundsMinor: body.creditsAndRefundsMinor ?? null,
+        monthlyExpensesMinor: body.monthlyExpensesMinor ?? Number(totalImported),
+        chargesMinor: body.chargesMinor ?? (analysisFeesMinor > 0 ? analysisFeesMinor : null),
+        financedBalanceMinor: body.financedBalanceMinor ?? null,
+        totalMinor: body.totalMinor ?? Number(totalAmountMinor),
+      },
+      analysis: {
+        installments: body.analysis?.installments ?? body.installments?.map((item) => ({
+          date: item.date,
+          description: item.description,
+          amount: item.amountMinor / 100,
+          current: item.installment ? Number(item.installment.split('/')[0]) || undefined : undefined,
+          total: item.installment ? Number(item.installment.split('/')[1]) || undefined : undefined,
+        })),
+        fees: body.analysis?.fees ?? [],
+      },
+      source: 'pdf_invoice',
+    })
+
+    await db.delete(cardInvoiceComponents).where(eq(cardInvoiceComponents.cardInvoiceId, cardInvoiceId))
+    if (componentRows.length > 0) {
+      await db.insert(cardInvoiceComponents).values(componentRows)
+    }
+
     console.log('[invoices/import] before syncCardInvoiceSemanticFields', {
       cardInvoiceId,
       invoiceMonth: body.invoiceMonth,
@@ -863,6 +1633,53 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
     // -------------------------------------------------------------------------
     let imported = 0
     let skipped = 0
+    const settlementTargetsToSync = new Set<number>()
+    const seenImportKeys = new Set<string>()
+
+    const buildCanonicalImportKey = (input: {
+      date: string
+      competencyMonth?: string | null
+      normalizedDescription: string
+      amountMinor: bigint
+      installment?: string | null
+      installmentGroupId?: string | null
+    }) => [
+      input.date,
+      input.competencyMonth ?? '',
+      input.normalizedDescription,
+      input.amountMinor.toString(),
+      input.installment ?? '',
+      input.installmentGroupId ?? '',
+    ].join('|')
+
+    // Parcels are more specific than the umbrella transaction list.
+    // Seed the dedupe set with installments so the same installment does not
+    // get inserted twice if the AI pipeline also surfaced it in transactions.
+    for (const tx of body.installments ?? []) {
+      const amountMinor = BigInt(tx.amountMinor)
+      const { fingerprint, normalizedDescription } = buildFingerprintFromRaw({
+        competencyMonth: tx.competencyMonth,
+        amountMinor,
+        rawDescription: tx.description,
+      })
+
+      let installmentTotal: number | null = null
+      let installmentGroupId: string | null = null
+      if (tx.installment) {
+        const parts = tx.installment.split('/')
+        installmentTotal = parseInt(parts[1], 10) || null
+        installmentGroupId = `${fingerprint}-${installmentTotal}`
+      }
+
+      seenImportKeys.add(buildCanonicalImportKey({
+        date: tx.date,
+        competencyMonth: tx.competencyMonth,
+        normalizedDescription,
+        amountMinor,
+        installment: tx.installment ?? '',
+        installmentGroupId,
+      }))
+    }
 
     for (const tx of body.transactions) {
       const occurredAt = new Date(assertValidDate(parseInputDate(tx.date, 'transaction.date'), 'transaction.date').getTime())
@@ -883,9 +1700,151 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
         installmentTotal = parseInt(parts[1], 10) || null
         installmentGroupId = `${fingerprint}-${installmentTotal}`
       }
+      const importKey = buildCanonicalImportKey({
+        date: tx.date,
+        competencyMonth: tx.competencyMonth,
+        normalizedDescription,
+        amountMinor,
+        installment: tx.installment ?? '',
+        installmentGroupId,
+      })
+      if (seenImportKeys.has(importKey)) {
+        skipped++
+        continue
+      }
+      seenImportKeys.add(importKey)
+      const historicalCategory =
+        tx.categoryId
+          ? { categoryId: tx.categoryId, assignedBy: 'user' }
+          : historyMap.get(normalizedDescription)
+            ?? (installmentGroupId ? installmentHistoryMap.get(installmentGroupId) : undefined)
 
       try {
         console.log('[invoices/import] card_transaction payload', {
+          invoiceMonth: body.invoiceMonth,
+          txDate: tx.date,
+          occurredAt: describeDateValue(occurredAt),
+          amountMinor: amountMinor.toString(),
+          description: tx.description,
+          installment: tx.installment ?? null,
+        })
+
+        const result = await db.insert(cardTransactions).values({
+          userId: owner.id,
+          cardInvoiceId,
+          source: 'pdf_invoice',
+          dataState: 'consolidated',
+          movementType: 'card_purchase',
+          movementSubtype: tx.installment ? 'installment' : 'single',
+          amountMinor,
+          currencyCode: 'BRL',
+          occurredAt,
+          competencyMonth: tx.competencyMonth,
+          description: tx.description,
+          normalizedDescription,
+          categoryId: historicalCategory?.categoryId
+            ?? aiCategoryMap.get(normalizedDescription)?.subcategoryId
+            ?? aiCategoryMap.get(normalizedDescription)?.categoryId
+            ?? null,
+          providerCategory: tx.providerCategory ?? null,
+          providerCategoryRaw: tx.providerCategoryRaw ?? null,
+          categoryAssignedBy: tx.categoryId
+            ? 'user'
+            : historicalCategory
+              ? historicalCategory.assignedBy
+              : aiCategoryMap.get(normalizedDescription)
+                ? 'ai'
+                : null,
+          installmentNumber,
+          installmentTotal,
+          installmentGroupId,
+          fingerprint,
+          isReconciled: false,
+        })
+        const insertedCardTransactionId = Number((result as { insertId?: number }).insertId || 0)
+
+        if (tx.settlesInvoiceId && insertedCardTransactionId > 0) {
+          const [targetInvoice] = await db
+            .select({
+              id: cardInvoices.id,
+            })
+            .from(cardInvoices)
+            .where(
+              and(
+                eq(cardInvoices.id, tx.settlesInvoiceId),
+                eq(cardInvoices.userId, owner.id),
+              ),
+            )
+            .limit(1)
+
+          if (targetInvoice) {
+            await db.insert(cardInvoiceSettlements).values({
+              userId: owner.id,
+              sourceCardTransactionId: insertedCardTransactionId,
+              targetCardInvoiceId: targetInvoice.id,
+              allocatedAmountMinor: amountMinor,
+              currencyCode: 'BRL',
+              settlementDate: occurredAt,
+              source: 'pdf_invoice',
+              matchedBy: 'user_selection',
+              confidenceScore: '1.0000',
+            })
+            settlementTargetsToSync.add(targetInvoice.id)
+          }
+        }
+
+        imported++
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.includes('Duplicate entry') || msg.includes('ER_DUP_ENTRY')) {
+          skipped++
+        } else {
+          console.error('[import] insert error:', msg)
+          skipped++
+        }
+      }
+    }
+
+    const installmentEntries = body.installments ?? []
+    for (const tx of installmentEntries) {
+      const occurredAt = new Date(assertValidDate(parseInputDate(tx.date, 'transaction.date'), 'transaction.date').getTime())
+      const amountMinor = BigInt(tx.amountMinor)
+      const { fingerprint, normalizedDescription } = buildFingerprintFromRaw({
+        competencyMonth: tx.competencyMonth,
+        amountMinor,
+        rawDescription: tx.description,
+      })
+
+      let installmentNumber: number | null = null
+      let installmentTotal: number | null = null
+      let installmentGroupId: string | null = null
+      if (tx.installment) {
+        const parts = tx.installment.split('/')
+        installmentNumber = parseInt(parts[0], 10) || null
+        installmentTotal = parseInt(parts[1], 10) || null
+        installmentGroupId = `${fingerprint}-${installmentTotal}`
+      }
+      const importKey = buildCanonicalImportKey({
+        date: tx.date,
+        competencyMonth: tx.competencyMonth,
+        normalizedDescription,
+        amountMinor,
+        installment: tx.installment ?? '',
+        installmentGroupId,
+      })
+      if (seenImportKeys.has(importKey)) {
+        skipped++
+        continue
+      }
+      seenImportKeys.add(importKey)
+      const historicalCategory =
+        tx.categoryId
+          ? { categoryId: tx.categoryId, assignedBy: 'user' }
+          : historyMap.get(normalizedDescription)
+            ?? (installmentGroupId ? installmentHistoryMap.get(installmentGroupId) : undefined)
+
+      try {
+        console.log('[invoices/import] installment payload', {
           invoiceMonth: body.invoiceMonth,
           txDate: tx.date,
           occurredAt: describeDateValue(occurredAt),
@@ -900,25 +1859,26 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           source: 'pdf_invoice',
           dataState: 'consolidated',
           movementType: 'card_purchase',
-          movementSubtype: tx.installment ? 'installment' : 'single',
+          movementSubtype: 'installment',
           amountMinor,
           currencyCode: 'BRL',
           occurredAt,
           competencyMonth: tx.competencyMonth,
           description: tx.description,
           normalizedDescription,
-          categoryId: tx.categoryId
-            ?? historyMap.get(normalizedDescription)?.categoryId
+          categoryId: historicalCategory?.categoryId
             ?? aiCategoryMap.get(normalizedDescription)?.subcategoryId
             ?? aiCategoryMap.get(normalizedDescription)?.categoryId
             ?? null,
-          providerCategory: tx.providerCategory ?? null,
-          providerCategoryRaw: tx.providerCategoryRaw ?? null,
-          categoryAssignedBy: tx.categoryAssignedBy
-            ?? (tx.categoryId ? 'user'
-              : historyMap.get(normalizedDescription) ? 'history'
-              : aiCategoryMap.get(normalizedDescription) ? 'ai'
-              : null),
+          providerCategory: null,
+          providerCategoryRaw: null,
+          categoryAssignedBy: tx.categoryId
+            ? 'user'
+            : historicalCategory
+              ? historicalCategory.assignedBy
+              : aiCategoryMap.get(normalizedDescription)
+                ? 'ai'
+                : null,
           installmentNumber,
           installmentTotal,
           installmentGroupId,
@@ -931,10 +1891,14 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
         if (msg.includes('Duplicate entry') || msg.includes('ER_DUP_ENTRY')) {
           skipped++
         } else {
-          console.error('[import] insert error:', msg)
+          console.error('[import] installment insert error:', msg)
           skipped++
         }
       }
+    }
+
+    for (const invoiceId of settlementTargetsToSync) {
+      await syncCardInvoiceSemanticFields(db, invoiceId)
     }
 
     // -------------------------------------------------------------------------

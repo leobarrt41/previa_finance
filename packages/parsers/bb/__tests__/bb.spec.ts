@@ -60,12 +60,11 @@ describe('parseBBInvoice — bb fev 2026.pdf', () => {
     expect(s.totalMinor).toBe(387822) // R$ 3.878,22
   })
 
-  it('identifies payment in transactions', async () => {
+  it('keeps payment in the summary only', async () => {
     const invoice = await parseBBInvoice(buffer)
-    const payment = invoice.transactions.find(t =>
-      t.description.includes('PGTO') || t.amountMinor < 0
-    )
-    expect(payment).toBeDefined()
-    expect(payment?.amountMinor).toBeLessThan(0)
+    expect(invoice.transactions.some(t =>
+      /PGTO|PAGAMENTO|SALDO FATURA ANTERIOR/i.test(t.description)
+    )).toBe(false)
+    expect(invoice.summary.paymentsMinor).toBeGreaterThan(0)
   })
 })

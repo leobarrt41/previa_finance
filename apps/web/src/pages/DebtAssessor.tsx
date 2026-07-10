@@ -48,7 +48,6 @@ export function DebtAssessor() {
   const openPressurePct = result?.debtPressurePct ?? 0
   const pressureColor = totalPressurePct >= 40 ? '#f87171' : totalPressurePct >= 25 ? '#fbbf24' : '#4ade80'
   const consideredIncome = result?.consideredIncomeMinor ?? result?.incomeMinor ?? 0
-  const selectedMonthIsCurrentOrFuture = selectedMonth >= currentMonth()
   const effectiveById = new Map((result?.invoicesSummary ?? []).map(inv => [inv.id, inv]))
   const currentMonthInvoices = (result?.cashflowInvoicesSummary ?? [])
     .filter(inv => inv.month === selectedMonth)
@@ -240,8 +239,8 @@ export function DebtAssessor() {
                     <div key={`${inv.id}-${i}`} style={{ display: 'grid', gridTemplateColumns: '2.4fr 1.2fr 1.2fr 1.2fr 1.2fr', gap: 12, padding: '0.65rem 1rem', alignItems: 'center', borderBottom: i === currentMonthInvoices.length - 1 ? 'none' : '1px solid #1e2130' }}>
                       <div>
                         <div style={{ fontSize: '0.9rem', color: '#e5e7eb', fontWeight: 600 }}>{inv.card ?? 'Cartão'}</div>
-                        <div style={{ fontSize: '0.72rem', color: (selectedMonthIsCurrentOrFuture ? (inv.totalMinor ?? 0) : (inv.effective?.openMinor ?? inv.openMinor)) > 0 ? '#fbbf24' : '#4ade80' }}>
-                          {(selectedMonthIsCurrentOrFuture ? (inv.totalMinor ?? 0) : (inv.effective?.openMinor ?? inv.openMinor)) > 0 ? 'Em aberto' : 'Pago'}{inv.dueDate ? ` • Competência ${inv.month}` : ''}
+                        <div style={{ fontSize: '0.72rem', color: (inv.effective?.openMinor ?? inv.openMinor ?? 0) > 0 ? '#fbbf24' : '#4ade80' }}>
+                          {(inv.effective?.openMinor ?? inv.openMinor ?? 0) > 0 ? 'Em aberto' : 'Pago'}{inv.dueDate ? ` • Competência ${inv.month}` : ''}
                         </div>
                       </div>
                       <div style={{ color: '#fbbf24', fontWeight: 700 }}>{formatBRL(inv.previousMinor ?? 0)}</div>

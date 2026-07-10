@@ -107,6 +107,7 @@ function toChartData(
       recebido: Number(m.totalIncomeMinor) / 100,
       pago: statementOutflowMinor / 100,
       previsto: pendingRecurringExpenseMinor / 100,
+      parcelas: Number(m.installmentPaymentsMinor ?? m.cardInvoicePaymentMinor ?? 0) / 100,
       cartaoProjetado: orangeMinor / 100,
     }
   })
@@ -658,7 +659,22 @@ export function CashFlow() {
 
               {/* Chart */}
               <Card>
-                <SectionTitle>Recebido vs Saídas</SectionTitle>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'baseline', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                  <SectionTitle style={{ margin: 0 }}>Recebido vs Saídas</SectionTitle>
+                  <div style={{ fontSize: '0.78rem', color: '#9ca3af' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
+                      <span style={{ width: 10, height: 10, borderRadius: 999, background: '#fbbf24' }} />
+                      Parcelas
+                    </span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 10, height: 10, borderRadius: 999, background: '#7dd3fc' }} />
+                      Saídas do extrato
+                    </span>
+                  </div>
+                </div>
+                <div style={{ fontSize: '0.76rem', color: '#6b7280', marginBottom: '0.75rem' }}>
+                  As barras amarelas mostram as parcelas que vencem em cada mês. A barra laranja mostra apenas o saldo ainda aberto da fatura.
+                </div>
                 <ResponsiveContainer width="100%" height={220}>
                   <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e2130" />
@@ -672,7 +688,8 @@ export function CashFlow() {
                           recebido: 'Recebido',
                           pago: 'Saídas do extrato',
                           previsto: 'Débitos recorrentes',
-                          cartaoProjetado: 'Fatura em aberto',
+                          parcelas: 'Parcelas do cartão',
+                          cartaoProjetado: 'Saldo em aberto do cartão',
                           saldo: 'Saldo final',
                         }
                         return [formatBRL(Number(v ?? 0) * 100), labels[String(name)] ?? String(name)]
@@ -681,6 +698,7 @@ export function CashFlow() {
                     <ReferenceLine y={0} stroke="#f87171" strokeDasharray="4 2" />
                     <Bar dataKey="pago" name="pago" stackId="despesas" fill="#7dd3fc" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="previsto" name="previsto" stackId="despesas" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="parcelas" name="parcelas" stackId="despesas" fill="#fbbf24" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="cartaoProjetado" name="cartaoProjetado" stackId="despesas" fill="#fb923c" radius={[4, 4, 0, 0]} />
                     <Line type="monotone" dataKey="recebido" name="recebido" stroke="#1d4ed8" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
                   </ComposedChart>

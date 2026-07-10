@@ -371,7 +371,18 @@ export function SpendingAssessor() {
       </Card>
 
       <Card style={{ marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <label style={{ display: 'block', fontSize: '0.8rem', color: '#9ca3af', marginBottom: 4 }}>Mes</label>
+            <select
+              value={selectedMonth}
+              onChange={e => setSelectedMonth(e.target.value)}
+              style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.55rem 0.85rem', color: '#e5e7eb', fontSize: '0.9rem', width: '100%' }}
+            >
+              {buildMonthOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+
           <div style={{ flex: 2, minWidth: 200 }}>
             <label style={{ display: 'block', fontSize: '0.8rem', color: '#9ca3af', marginBottom: 4 }}>Categoria</label>
             <select
@@ -392,19 +403,12 @@ export function SpendingAssessor() {
               ))}
             </select>
           </div>
-          <div style={{ flex: 1, minWidth: 160 }}>
-            <label style={{ display: 'block', fontSize: '0.8rem', color: '#9ca3af', marginBottom: 4 }}>Mes</label>
-            <select
-              value={selectedMonth}
-              onChange={e => setSelectedMonth(e.target.value)}
-              style={{ background: '#141624', border: '1px solid #2a2f45', borderRadius: 8, padding: '0.55rem 0.85rem', color: '#e5e7eb', fontSize: '0.9rem', width: '100%' }}
-            >
-              {buildMonthOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button onClick={() => runAnalyze()} disabled={loading || !selectedCategory} variant="primary">
+              {loading ? 'Analisando...' : '🤖 Avaliar'}
+            </Button>
           </div>
-          <Button onClick={() => runAnalyze()} disabled={loading || !selectedCategory} variant="primary">
-            {loading ? 'Analisando...' : '🤖 Avaliar'}
-          </Button>
         </div>
       </Card>
 

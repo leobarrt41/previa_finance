@@ -1,8 +1,10 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, formatBRL, } from '../services/api';
 import { Alert, Badge, Button, Card, Spinner } from '../components/ui';
+import { InvoicePaymentSelector, buildInvoicePaymentOptions, formatInvoicePaymentLabel } from '../components/InvoicePaymentSelector';
+import { buildCategoryOptions } from '../utils/categoryOptions';
 function getAllMonths(acc) {
     const set = new Set();
     for (const m of acc.bankMonths)
@@ -13,6 +15,70 @@ function getAllMonths(acc) {
         set.add(m.month);
     return Array.from(set).sort((a, b) => b.localeCompare(a));
 }
+function normalizeCategoryText(value) {
+    return value
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+}
+function isCreditCardInvoiceCategoryId(categoryId, categories) {
+    if (!categoryId)
+        return false;
+    const byId = new Map(categories.map((category) => [category.id, category]));
+    let current = byId.get(categoryId) ?? null;
+    let sawInvoice = false;
+    let sawCard = false;
+    while (current) {
+        const text = normalizeCategoryText(`${current.name} ${current.slug ?? ''}`);
+        if (/fatura/.test(text))
+            sawInvoice = true;
+        if (/cartao|credito/.test(text))
+            sawCard = true;
+        current = current.parentId ? byId.get(current.parentId) ?? null : null;
+    }
+    return sawInvoice && sawCard;
+}
+function getInvoiceComponentLabel(componentType) {
+    if (componentType === 'installment_principal')
+        return 'Parcelamento';
+    if (componentType === 'iof')
+        return 'IOF';
+    if (componentType === 'finance_charge')
+        return 'Encargo financeiro';
+    if (componentType === 'fee')
+        return 'Tarifa';
+    if (componentType === 'previous_balance')
+        return 'Saldo anterior';
+    if (componentType === 'payment_received')
+        return 'Pagamento recebido';
+    if (componentType === 'credits_and_refunds')
+        return 'Créditos e estornos';
+    if (componentType === 'monthly_expenses')
+        return 'Compras do mês';
+    if (componentType === 'charges_total')
+        return 'Encargos totais';
+    if (componentType === 'financed_balance')
+        return 'Saldo financiado';
+    if (componentType === 'total_invoice')
+        return 'Total da fatura';
+    return componentType;
+}
+function InvoiceComponentsPanel({ installments, fees, progress, }) {
+    if (installments.length === 0 && fees.length === 0)
+        return null;
+    return (_jsxs(Card, { style: { marginBottom: '1rem', border: '1px solid #334155', background: '#10121a' }, children: [_jsxs("div", { style: { display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.85rem' }, children: [_jsxs("div", { children: [_jsx("p", { style: { margin: 0, color: '#fbbf24', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.4 }, children: "Componentes da fatura" }), _jsx("p", { style: { margin: '0.25rem 0 0', color: '#e5e7eb', fontWeight: 700, fontSize: '0.92rem' }, children: "Parcelamentos, encargos e taxas s\u00E3o guardados em separado da lista principal" })] }), _jsx("div", { style: { color: '#9ca3af', fontSize: '0.78rem', alignSelf: 'flex-end' }, children: "Tudo isso continua vinculado \u00E0 mesma fatura" })] }), progress && progress.seriesCount > 0 && (_jsxs("div", { style: {
+                    marginBottom: '1rem',
+                    padding: '0.9rem',
+                    border: '1px solid #243042',
+                    borderRadius: 12,
+                    background: '#0f1117',
+                }, children: [_jsxs("div", { style: { display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.45rem' }, children: [_jsxs("div", { children: [_jsx("div", { style: { color: '#e5e7eb', fontSize: '0.86rem', fontWeight: 800 }, children: "Progresso total dos parcelamentos" }), _jsx("div", { style: { color: '#94a3b8', fontSize: '0.75rem' }, children: "Barra agregada das s\u00E9ries vis\u00EDveis nesta fatura" })] }), _jsxs("div", { style: { color: '#cbd5e1', fontSize: '0.8rem', fontWeight: 700, alignSelf: 'center' }, children: [Math.round(progress.progressPct * 100), "% \u00B7 ", progress.seriesCount, " s\u00E9rie(s) \u00B7 ", progress.withPositionCount, " item(ns) com parcela identificada"] })] }), _jsx("div", { style: { height: 10, borderRadius: 999, background: '#1f2937', overflow: 'hidden' }, children: _jsx("div", { style: {
+                            width: `${Math.max(0, Math.min(100, Math.round(progress.progressPct * 100)))}%`,
+                            height: '100%',
+                            borderRadius: 999,
+                            background: 'linear-gradient(90deg, #6366f1 0%, #22c55e 100%)',
+                            transition: 'width 0.2s ease',
+                        } }) })] })), installments.length > 0 && (_jsxs("div", { style: { marginBottom: fees.length > 0 ? '1rem' : 0 }, children: [_jsx("div", { style: { color: '#e5e7eb', fontSize: '0.86rem', fontWeight: 700, marginBottom: '0.5rem' }, children: "Parcelamentos detectados" }), _jsx("div", { style: { overflowX: 'auto' }, children: _jsxs("table", { style: { width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', tableLayout: 'fixed' }, children: [_jsx("thead", { children: _jsxs("tr", { style: { color: '#6b7280', borderBottom: '1px solid #2a2f45', background: '#0f1117' }, children: [_jsx("th", { style: { padding: '0.5rem', textAlign: 'left' }, children: "Descri\u00E7\u00E3o" }), _jsx("th", { style: { padding: '0.5rem', width: 100, textAlign: 'left' }, children: "Parcela" }), _jsx("th", { style: { padding: '0.5rem', width: 104, textAlign: 'left' }, children: "Data" }), _jsx("th", { style: { padding: '0.5rem', width: 110, textAlign: 'right' }, children: "Valor" })] }) }), _jsx("tbody", { children: installments.map((item, index) => (_jsxs("tr", { style: { borderBottom: '1px solid #1a1e2e' }, children: [_jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#e5e7eb', overflowWrap: 'anywhere' }, children: item.description }), _jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#cbd5e1', whiteSpace: 'nowrap' }, children: item.installmentNumber && item.installmentTotal ? `${item.installmentNumber}/${item.installmentTotal}` : '—' }), _jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#9ca3af', whiteSpace: 'nowrap' }, children: item.sourceDate ? String(item.sourceDate).slice(0, 10) : '—' }), _jsx("td", { style: { padding: '0.55rem 0.5rem', textAlign: 'right', color: '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }, children: formatBRL(item.amountMinor) })] }, `${item.id}-${index}`))) })] }) })] })), fees.length > 0 && (_jsxs("div", { children: [_jsx("div", { style: { color: '#e5e7eb', fontSize: '0.86rem', fontWeight: 700, marginBottom: '0.5rem' }, children: "Encargos, IOF e taxas" }), _jsx("div", { style: { overflowX: 'auto' }, children: _jsxs("table", { style: { width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', tableLayout: 'fixed' }, children: [_jsx("thead", { children: _jsxs("tr", { style: { color: '#6b7280', borderBottom: '1px solid #2a2f45', background: '#0f1117' }, children: [_jsx("th", { style: { padding: '0.5rem', width: 170, textAlign: 'left' }, children: "Tipo" }), _jsx("th", { style: { padding: '0.5rem', textAlign: 'left' }, children: "Descri\u00E7\u00E3o" }), _jsx("th", { style: { padding: '0.5rem', width: 104, textAlign: 'left' }, children: "Data" }), _jsx("th", { style: { padding: '0.5rem', width: 110, textAlign: 'right' }, children: "Valor" })] }) }), _jsx("tbody", { children: fees.map((item, index) => (_jsxs("tr", { style: { borderBottom: '1px solid #1a1e2e' }, children: [_jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#cbd5e1', whiteSpace: 'nowrap' }, children: getInvoiceComponentLabel(item.componentType) }), _jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#e5e7eb', overflowWrap: 'anywhere' }, children: item.description ?? '—' }), _jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#9ca3af', whiteSpace: 'nowrap' }, children: item.sourceDate ? String(item.sourceDate).slice(0, 10) : '—' }), _jsx("td", { style: { padding: '0.55rem 0.5rem', textAlign: 'right', color: '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }, children: formatBRL(item.amountMinor) })] }, `${item.id}-${index}`))) })] }) })] })); }
 export function AccountDetail() {
     const { accountId } = useParams();
     const navigate = useNavigate();
@@ -27,8 +93,10 @@ export function AccountDetail() {
     const [statementDetails, setStatementDetails] = useState(null);
     const [statementLoading, setStatementLoading] = useState(false);
     const [statementError, setStatementError] = useState('');
+    const [openInvoices, setOpenInvoices] = useState([]);
     const [categories, setCategories] = useState([]);
     const [updatingTxId, setUpdatingTxId] = useState(null);
+    const [linkingPaymentId, setLinkingPaymentId] = useState(null);
     async function loadAccount(keepActiveMonth = false) {
         setLoading(true);
         setErrorMsg('');
@@ -59,6 +127,9 @@ export function AccountDetail() {
     }, [accountId]);
     useEffect(() => {
         api.categories.list().then(setCategories).catch(() => { });
+    }, []);
+    useEffect(() => {
+        api.accounts.openCardInvoices().then((result) => setOpenInvoices(result.items)).catch(() => { });
     }, []);
     useEffect(() => {
         if (!account || !activeMonth) {
@@ -160,6 +231,7 @@ export function AccountDetail() {
         setInvoiceError('');
         try {
             const updated = await api.accounts.updateCardTransactionCategory(cardTransactionId, newCategoryId || null);
+            const shouldShowInvoiceSelector = isCreditCardInvoiceCategoryId(updated.categoryId, categories);
             setInvoiceDetails((prev) => {
                 if (!prev)
                     return prev;
@@ -170,6 +242,9 @@ export function AccountDetail() {
                             ...tx,
                             categoryId: updated.categoryId,
                             categoryName: updated.categoryName,
+                            cardInvoiceId: shouldShowInvoiceSelector ? tx.cardInvoiceId : null,
+                            settledInvoice: shouldShowInvoiceSelector ? tx.settledInvoice : null,
+                            settlementAllocatedMinor: shouldShowInvoiceSelector ? tx.settlementAllocatedMinor : null,
                         }
                         : tx),
                 };
@@ -186,13 +261,25 @@ export function AccountDetail() {
         setUpdatingTxId(transactionId);
         try {
             const updated = await api.accounts.updateBankTransactionCategory(transactionId, newCategoryId || null);
+            const shouldShowInvoiceSelector = isCreditCardInvoiceCategoryId(updated.categoryId, categories);
+            const currentTx = statementDetails?.transactions.find((tx) => tx.id === transactionId) ?? null;
+            if (!shouldShowInvoiceSelector && currentTx?.cardInvoiceId) {
+                await api.accounts.updateBankTransactionCardInvoice(transactionId, null);
+            }
             setStatementDetails((prev) => {
                 if (!prev)
                     return prev;
                 return {
                     ...prev,
                     transactions: prev.transactions.map((tx) => tx.id === transactionId
-                        ? { ...tx, categoryId: updated.categoryId, categoryName: updated.categoryName }
+                        ? {
+                            ...tx,
+                            categoryId: updated.categoryId,
+                            categoryName: updated.categoryName,
+                            cardInvoiceId: shouldShowInvoiceSelector ? tx.cardInvoiceId : null,
+                            settledInvoice: shouldShowInvoiceSelector ? tx.settledInvoice : null,
+                            settlementAllocatedMinor: shouldShowInvoiceSelector ? tx.settlementAllocatedMinor : null,
+                        }
                         : tx),
                 };
             });
@@ -222,31 +309,112 @@ export function AccountDetail() {
             return false;
         return true;
     }
-    // Estrutura hierarquicamente as categorias para exibição prática
-    const getCategoryOptions = (type) => {
-        const filteredCategories = categories.filter((c) => c.type === type);
-        const parents = filteredCategories.filter((c) => !c.parentId);
-        const byParent = new Map();
-        filteredCategories.forEach((cat) => {
-            const key = cat.parentId || null;
-            if (!byParent.has(key))
-                byParent.set(key, []);
-            byParent.get(key).push(cat);
-        });
-        const options = [];
-        for (const parent of parents) {
-            options.push({ id: parent.id, label: parent.name, isParent: true });
-            const children = byParent.get(parent.id) || [];
-            for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
-                options.push({ id: child.id, label: `  └ ${child.name}`, isParent: false });
+    const invoiceSelectOptions = useMemo(() => {
+        return buildInvoicePaymentOptions(invoiceDetails?.invoice
+            ? {
+                id: invoiceDetails.invoice.id,
+                label: `${invoiceDetails.account.displayName} · ${invoiceDetails.invoice.invoiceMonth} · vence ${String(invoiceDetails.invoice.dueDate).slice(0, 10)} · ${invoiceDetails.invoice.status} · ${formatBRL(invoiceDetails.invoice.openAmountMinor)} em aberto`,
+            }
+            : null, openInvoices);
+    }, [invoiceDetails, openInvoices]);
+    const settlementOpenInvoices = useMemo(() => {
+        const currentInvoiceId = invoiceDetails?.invoice?.id ?? null;
+        return currentInvoiceId
+            ? openInvoices.filter((invoice) => invoice.id !== currentInvoiceId)
+            : openInvoices;
+    }, [invoiceDetails?.invoice?.id, openInvoices]);
+    function getSettlementInvoiceOptions(currentSettledInvoice) {
+        return buildInvoicePaymentOptions(currentSettledInvoice
+            ? {
+                id: currentSettledInvoice.id,
+                label: formatInvoicePaymentLabel(currentSettledInvoice),
+            }
+            : null, settlementOpenInvoices);
+    }
+    async function handleStatementInvoiceChange(transactionId, cardInvoiceId) {
+        setLinkingPaymentId(transactionId);
+        try {
+            await api.accounts.updateBankTransactionCardInvoice(transactionId, cardInvoiceId);
+            if (account && activeMonth) {
+                const [updatedInvoice, updatedStatement, updatedOpenInvoices] = await Promise.all([
+                    api.accounts.invoiceDetails(account.id, activeMonth),
+                    api.accounts.statementDetails(account.id, activeMonth),
+                    api.accounts.openCardInvoices(),
+                ]);
+                setInvoiceDetails(updatedInvoice);
+                setStatementDetails(updatedStatement);
+                setOpenInvoices(updatedOpenInvoices.items);
             }
         }
-        return options;
-    };
+        catch (error) {
+            setStatementError(error instanceof Error ? error.message : 'Erro ao vincular fatura');
+        }
+        finally {
+            setLinkingPaymentId(null);
+        }
+    }
+    async function handleInvoiceSettlementChange(cardTransactionId, settledInvoiceId) {
+        setLinkingPaymentId(cardTransactionId);
+        try {
+            await api.accounts.updateCardTransactionSettlement(cardTransactionId, settledInvoiceId);
+            if (account && activeMonth) {
+                const [invoiceResult, statementResult, openInvoicesResult] = await Promise.all([
+                    api.accounts.invoiceDetails(account.id, activeMonth),
+                    api.accounts.statementDetails(account.id, activeMonth),
+                    api.accounts.openCardInvoices(),
+                ]);
+                setInvoiceDetails(invoiceResult);
+                setStatementDetails(statementResult);
+                setOpenInvoices(openInvoicesResult.items);
+            }
+        }
+        catch (error) {
+            setInvoiceError(error instanceof Error ? error.message : 'Erro ao atualizar ligação da fatura');
+        }
+        finally {
+            setLinkingPaymentId(null);
+        }
+    }
+    // Estrutura hierarquicamente as categorias para exibição prática
+    const getCategoryOptions = (type) => buildCategoryOptions(categories, type).map((option) => ({
+        id: option.id,
+        label: option.label,
+        isParent: option.disabled,
+    }));
     const months = account ? getAllMonths(account) : [];
     const bankEntry = account?.bankMonths.find((m) => m.month === activeMonth);
     const invoiceEntry = account?.invoiceMonths.find((m) => m.month === activeMonth);
-    return (_jsxs("div", { style: { maxWidth: 800 }, children: [_jsx("div", { style: { marginBottom: '1.25rem' }, children: _jsx("button", { onClick: () => navigate('/accounts'), style: {
+    const invoiceComponents = invoiceDetails?.components ?? [];
+    const invoiceInstallments = invoiceComponents.filter((item) => item.componentScope === 'line_item' && item.componentType === 'installment_principal');
+    const invoiceFees = invoiceComponents.filter((item) => item.componentScope === 'line_item' && item.componentType !== 'installment_principal');
+    const invoiceInstallmentProgress = useMemo(() => {
+        const grouped = new Map();
+        for (const item of invoiceInstallments) {
+            if (!item.installmentNumber || !item.installmentTotal || item.installmentTotal <= 0)
+                continue;
+            const key = `${item.description ?? ''}::${item.installmentTotal}`;
+            const current = grouped.get(key) ?? { current: 0, total: 0 };
+            current.current += Math.min(item.installmentNumber, item.installmentTotal);
+            current.total += item.installmentTotal;
+            grouped.set(key, current);
+        }
+        if (grouped.size === 0)
+            return null;
+        let weightedProgress = 0;
+        let weightedTotal = 0;
+        for (const entry of grouped.values()) {
+            const ratio = entry.total > 0 ? entry.current / entry.total : 0;
+            weightedProgress += ratio * entry.total;
+            weightedTotal += entry.total;
+        }
+        return {
+            progressPct: weightedTotal > 0 ? weightedProgress / weightedTotal : 0,
+            seriesCount: grouped.size,
+            withPositionCount: invoiceInstallments.filter((item) => item.installmentNumber && item.installmentTotal).length,
+        };
+    }, [invoiceInstallments]);
+    const liabilityPayments = statementDetails?.transactions.filter((tx) => tx.movementType === 'liability_payment') ?? [];
+    return (_jsxs("div", { style: { width: '100%', maxWidth: 1200 }, children: [_jsx("div", { style: { marginBottom: '1.25rem' }, children: _jsx("button", { onClick: () => navigate('/accounts'), style: {
                         background: 'none',
                         border: 'none',
                         color: '#6366f1',
@@ -284,25 +452,33 @@ export function AccountDetail() {
                                     alignItems: 'flex-end',
                                     flexWrap: 'wrap',
                                     gap: '1.5rem',
-                                }, children: [_jsxs("div", { style: { display: 'flex', gap: '2.5rem', flexWrap: 'wrap' }, children: [_jsxs("div", { children: [_jsx("div", { style: { color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' }, children: "Transa\u00E7\u00F5es banc\u00E1rias" }), _jsx("div", { style: { color: '#e5e7eb', fontSize: '2rem', fontWeight: 700, lineHeight: 1 }, children: bankEntry?.count ?? 0 })] }), _jsxs("div", { children: [_jsx("div", { style: { color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' }, children: "Lan\u00E7amentos de fatura" }), _jsx("div", { style: { color: '#e5e7eb', fontSize: '2rem', fontWeight: 700, lineHeight: 1 }, children: invoiceEntry?.count ?? 0 })] })] }), _jsx(Button, { variant: "danger", onClick: handleDeleteMonth, disabled: deleting, children: deleting ? 'Excluindo...' : `Excluir ${activeMonth}` })] }), _jsxs("div", { style: { marginTop: '1.6rem', borderTop: '1px solid #2a2f45', paddingTop: '1rem' }, children: [_jsx("h3", { style: { margin: 0, color: '#e5e7eb', fontSize: '1rem', fontWeight: 700 }, children: "Extrato do m\u00EAs" }), statementLoading && (_jsx("div", { style: { marginTop: '0.8rem', color: '#9ca3af', fontSize: '0.85rem' }, children: "Carregando extrato banc\u00E1rio..." })), !statementLoading && statementError && (_jsx(Alert, { variant: "error", style: { marginTop: '0.8rem' }, children: statementError })), !statementLoading && !statementError && (statementDetails?.transactions.length ?? 0) === 0 && (_jsx("p", { style: { margin: '0.8rem 0 0', color: '#9ca3af', fontSize: '0.85rem' }, children: "Este m\u00EAs n\u00E3o possui extrato importado para esta conta." })), !statementLoading && !statementError && (statementDetails?.transactions.length ?? 0) > 0 && (_jsx("div", { style: { marginTop: '1rem', overflowX: 'auto' }, children: _jsxs("table", { style: { width: '100%', borderCollapse: 'collapse', minWidth: 640 }, children: [_jsx("thead", { children: _jsxs("tr", { style: { borderBottom: '1px solid #2a2f45', textAlign: 'left' }, children: [_jsx("th", { style: { padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Data" }), _jsx("th", { style: { padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Descri\u00E7\u00E3o" }), _jsx("th", { style: { padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Categoria" }), _jsx("th", { style: { padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Tipo" }), _jsx("th", { style: { padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600, textAlign: 'right' }, children: "Valor" })] }) }), _jsx("tbody", { children: statementDetails.transactions.map((tx) => (_jsxs("tr", { style: { borderBottom: '1px solid #1f2436' }, children: [_jsx("td", { style: { padding: '0.5rem', color: '#cbd5e1', fontSize: '0.82rem' }, children: String(tx.occurredAt).slice(0, 10) }), _jsx("td", { style: { padding: '0.5rem', color: '#f3f4f6', fontSize: '0.84rem' }, children: tx.description }), _jsx("td", { style: { padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem' }, children: isCategoryEditableForBankTransaction(tx.movementType, tx.movementSubtype) ? (_jsxs("select", { value: tx.categoryId ?? '', disabled: updatingTxId === tx.id, onChange: (e) => handleBankCategoryChange(tx.id, e.target.value), style: {
+                                }, children: [_jsxs("div", { style: { display: 'flex', gap: '2.5rem', flexWrap: 'wrap' }, children: [_jsxs("div", { children: [_jsx("div", { style: { color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' }, children: "Transa\u00E7\u00F5es banc\u00E1rias" }), _jsx("div", { style: { color: '#e5e7eb', fontSize: '2rem', fontWeight: 700, lineHeight: 1 }, children: bankEntry?.count ?? 0 })] }), _jsxs("div", { children: [_jsx("div", { style: { color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' }, children: "Lan\u00E7amentos de fatura" }), _jsx("div", { style: { color: '#e5e7eb', fontSize: '2rem', fontWeight: 700, lineHeight: 1 }, children: invoiceEntry?.count ?? 0 })] })] }), _jsx(Button, { variant: "danger", onClick: handleDeleteMonth, disabled: deleting, children: deleting ? 'Excluindo...' : `Excluir ${activeMonth}` })] }), _jsxs("div", { style: { marginTop: '1.6rem', borderTop: '1px solid #2a2f45', paddingTop: '1rem' }, children: [_jsx("h3", { style: { margin: 0, color: '#e5e7eb', fontSize: '1rem', fontWeight: 700 }, children: "Extrato do m\u00EAs" }), statementLoading && (_jsx("div", { style: { marginTop: '0.8rem', color: '#9ca3af', fontSize: '0.85rem' }, children: "Carregando extrato banc\u00E1rio..." })), !statementLoading && statementError && (_jsx(Alert, { variant: "error", style: { marginTop: '0.8rem' }, children: statementError })), !statementLoading && !statementError && (statementDetails?.transactions.length ?? 0) === 0 && (_jsx("p", { style: { margin: '0.8rem 0 0', color: '#9ca3af', fontSize: '0.85rem' }, children: "Este m\u00EAs n\u00E3o possui extrato importado para esta conta." })), !statementLoading && !statementError && (statementDetails?.transactions.length ?? 0) > 0 && (_jsx("div", { style: { marginTop: '1rem' }, children: _jsxs("table", { style: { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }, children: [_jsx("thead", { children: _jsxs("tr", { style: { borderBottom: '1px solid #2a2f45', textAlign: 'left' }, children: [_jsx("th", { style: { padding: '0.5rem', width: 92, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Data" }), _jsx("th", { style: { padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Descri\u00E7\u00E3o" }), _jsx("th", { style: { padding: '0.5rem', width: 220, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Categoria" }), _jsx("th", { style: { padding: '0.5rem', width: 280, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Fatura" }), _jsx("th", { style: { padding: '0.5rem', width: 112, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Tipo" }), _jsx("th", { style: { padding: '0.5rem', width: 110, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600, textAlign: 'right' }, children: "Valor" })] }) }), _jsx("tbody", { children: statementDetails.transactions.map((tx) => (_jsxs("tr", { style: { borderBottom: '1px solid #1f2436' }, children: [_jsx("td", { style: { padding: '0.5rem', color: '#cbd5e1', fontSize: '0.82rem', whiteSpace: 'nowrap' }, children: String(tx.occurredAt).slice(0, 10) }), _jsx("td", { style: { padding: '0.5rem', color: '#f3f4f6', fontSize: '0.84rem', overflowWrap: 'anywhere' }, children: tx.description }), _jsx("td", { style: { padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem' }, children: isCategoryEditableForBankTransaction(tx.movementType, tx.movementSubtype) ? (_jsxs("select", { value: tx.categoryId ?? '', disabled: updatingTxId === tx.id, onChange: (e) => handleBankCategoryChange(tx.id, e.target.value), style: {
                                                                         background: '#0f1117',
                                                                         border: '1px solid #2a2f45',
                                                                         borderRadius: 6,
                                                                         padding: '4px 8px',
                                                                         color: '#e5e7eb',
                                                                         fontSize: '0.78rem',
-                                                                        minWidth: 180,
+                                                                        width: '100%',
+                                                                        minWidth: 0,
                                                                         fontFamily: 'monospace',
                                                                     }, children: [_jsx("option", { value: "", children: "Sem categoria" }), getCategoryOptions(tx.amountMinor >= 0 ? 'income' : 'expense').map((opt) => (_jsx("option", { value: opt.id, disabled: opt.isParent, style: {
                                                                                 fontWeight: opt.isParent ? 'bold' : 'normal',
                                                                                 color: opt.isParent ? '#94a3b8' : '#e5e7eb',
-                                                                            }, children: opt.label }, opt.id)))] })) : (_jsx("span", { style: { color: '#94a3b8' }, children: tx.categoryName ?? 'Nao editavel' })) }), _jsx("td", { style: { padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem' }, children: _jsx(Badge, { variant: tx.movementType === 'income' ? 'green' : tx.movementType === 'transfer' ? 'blue' : 'gray', children: getMovementTypeLabel(tx.movementType) }) }), _jsx("td", { style: {
+                                                                            }, children: opt.label }, opt.id)))] })) : (_jsx("span", { style: { color: '#94a3b8' }, children: tx.categoryName ?? 'Nao editavel' })) }), _jsx("td", { style: { padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', verticalAlign: 'top' }, children: tx.movementType === 'liability_payment' || isCreditCardInvoiceCategoryId(tx.categoryId, categories) ? (_jsxs("div", { style: { display: 'flex', flexDirection: 'column', gap: 4 }, children: [_jsx(InvoicePaymentSelector, { value: tx.cardInvoiceId ?? null, options: invoiceSelectOptions, disabled: linkingPaymentId === tx.id, onChange: (invoiceId) => handleStatementInvoiceChange(tx.id, invoiceId), style: { width: '100%', minWidth: 0 } }), tx.settledInvoice && (_jsx("span", { style: { color: '#94a3b8', fontSize: '0.72rem', whiteSpace: 'nowrap' }, children: formatBRL(tx.settlementAllocatedMinor ?? 0) }))] })) : (_jsx("span", { style: { color: '#475569' }, children: "\u2014" })) }), _jsx("td", { style: { padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', whiteSpace: 'nowrap' }, children: _jsx(Badge, { variant: tx.movementType === 'income' ? 'green' : tx.movementType === 'transfer' ? 'blue' : 'gray', children: getMovementTypeLabel(tx.movementType) }) }), _jsx("td", { style: {
                                                                     padding: '0.5rem',
                                                                     color: tx.amountMinor < 0 ? '#f87171' : '#4ade80',
                                                                     fontSize: '0.85rem',
                                                                     textAlign: 'right',
                                                                     fontWeight: 600,
-                                                                }, children: formatBRL(tx.amountMinor) })] }, tx.id))) })] }) }))] }), _jsxs("div", { style: { marginTop: '1.6rem', borderTop: '1px solid #2a2f45', paddingTop: '1rem' }, children: [_jsx("h3", { style: { margin: 0, color: '#e5e7eb', fontSize: '1rem', fontWeight: 700 }, children: "Fatura do m\u00EAs" }), invoiceLoading && (_jsx("div", { style: { marginTop: '0.8rem', color: '#9ca3af', fontSize: '0.85rem' }, children: "Carregando detalhes da fatura..." })), !invoiceLoading && invoiceError && (_jsx(Alert, { variant: "error", style: { marginTop: '0.8rem' }, children: invoiceError })), !invoiceLoading && !invoiceError && !invoiceDetails?.invoice && (_jsx("p", { style: { margin: '0.8rem 0 0', color: '#9ca3af', fontSize: '0.85rem' }, children: "Este m\u00EAs n\u00E3o possui fatura importada para esta conta." })), !invoiceLoading && !invoiceError && invoiceDetails?.invoice && (_jsxs(_Fragment, { children: [_jsxs("div", { style: { display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginTop: '0.8rem' }, children: [_jsxs(Badge, { variant: "gray", children: ["Status: ", invoiceDetails.invoice.status] }), _jsxs(Badge, { variant: "gray", children: ["Vencimento: ", String(invoiceDetails.invoice.dueDate).slice(0, 10)] }), invoiceDetails.invoice.cardBrand && _jsx(Badge, { variant: "gray", children: invoiceDetails.invoice.cardBrand }), invoiceDetails.invoice.cardLast4 && _jsxs(Badge, { variant: "gray", children: ["**** ", invoiceDetails.invoice.cardLast4] }), invoiceDetails.invoice.parserStrategy && (_jsxs(Badge, { variant: "blue", children: ["Parser: ", invoiceDetails.invoice.parserStrategy] }))] }), _jsxs("div", { style: { display: 'flex', gap: '2rem', flexWrap: 'wrap', marginTop: '0.9rem' }, children: [_jsxs("div", { children: [_jsx("div", { style: { color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }, children: "Total da fatura" }), _jsx("div", { style: { color: '#f3f4f6', fontWeight: 700, fontSize: '1.05rem' }, children: formatBRL(invoiceDetails.invoice.totalAmountMinor) })] }), _jsxs("div", { children: [_jsx("div", { style: { color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }, children: "Valor pago" }), _jsx("div", { style: { color: '#f3f4f6', fontWeight: 700, fontSize: '1.05rem' }, children: formatBRL(invoiceDetails.invoice.paidAmountMinor) })] }), _jsxs("div", { children: [_jsx("div", { style: { color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }, children: "Em aberto" }), _jsx("div", { style: { color: '#f3f4f6', fontWeight: 700, fontSize: '1.05rem' }, children: formatBRL(invoiceDetails.invoice.emAbertoMinor) })] })] }), _jsx("div", { style: { marginTop: '1rem', overflowX: 'auto' }, children: _jsxs("table", { style: { width: '100%', borderCollapse: 'collapse', minWidth: 640 }, children: [_jsx("thead", { children: _jsxs("tr", { style: { borderBottom: '1px solid #2a2f45', textAlign: 'left' }, children: [_jsx("th", { style: { padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Data" }), _jsx("th", { style: { padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Descri\u00E7\u00E3o" }), _jsx("th", { style: { padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Categoria" }), _jsx("th", { style: { padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600, textAlign: 'right' }, children: "Valor" })] }) }), _jsx("tbody", { children: invoiceDetails.transactions.map((tx) => (_jsxs("tr", { style: { borderBottom: '1px solid #1f2436' }, children: [_jsx("td", { style: { padding: '0.5rem', color: '#cbd5e1', fontSize: '0.82rem' }, children: String(tx.occurredAt).slice(0, 10) }), _jsxs("td", { style: { padding: '0.5rem', color: '#f3f4f6', fontSize: '0.84rem' }, children: [tx.description, tx.installmentNumber && tx.installmentTotal
+                                                                    whiteSpace: 'nowrap',
+                                                                }, children: formatBRL(tx.amountMinor) })] }, tx.id))) })] }) }))] }), _jsxs("div", { style: { marginTop: '1.6rem', borderTop: '1px solid #2a2f45', paddingTop: '1rem' }, children: [_jsx("h3", { style: { margin: 0, color: '#e5e7eb', fontSize: '1rem', fontWeight: 700 }, children: "Fatura do m\u00EAs" }), invoiceLoading && (_jsx("div", { style: { marginTop: '0.8rem', color: '#9ca3af', fontSize: '0.85rem' }, children: "Carregando detalhes da fatura..." })), !invoiceLoading && invoiceError && (_jsx(Alert, { variant: "error", style: { marginTop: '0.8rem' }, children: invoiceError })), !invoiceLoading && !invoiceError && !invoiceDetails?.invoice && (_jsx("p", { style: { margin: '0.8rem 0 0', color: '#9ca3af', fontSize: '0.85rem' }, children: "Este m\u00EAs n\u00E3o possui fatura importada para esta conta." })), !invoiceLoading && !invoiceError && invoiceDetails?.invoice && (_jsxs(_Fragment, { children: [_jsxs("div", { style: { display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginTop: '0.8rem' }, children: [_jsxs(Badge, { variant: "gray", children: ["Status: ", invoiceDetails.invoice.status] }), _jsxs(Badge, { variant: "gray", children: ["Vencimento: ", String(invoiceDetails.invoice.dueDate).slice(0, 10)] }), invoiceDetails.invoice.cardBrand && _jsx(Badge, { variant: "gray", children: invoiceDetails.invoice.cardBrand }), invoiceDetails.invoice.cardLast4 && _jsxs(Badge, { variant: "gray", children: ["**** ", invoiceDetails.invoice.cardLast4] }), invoiceDetails.invoice.parserStrategy && (_jsxs(Badge, { variant: "blue", children: ["Parser: ", invoiceDetails.invoice.parserStrategy] }))] }), _jsxs("div", { style: { display: 'flex', gap: '2rem', flexWrap: 'wrap', marginTop: '0.9rem' }, children: [_jsxs("div", { children: [_jsx("div", { style: { color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }, children: "Total da fatura" }), _jsx("div", { style: { color: '#f3f4f6', fontWeight: 700, fontSize: '1.05rem' }, children: formatBRL(invoiceDetails.invoice.totalAmountMinor) })] }), _jsxs("div", { children: [_jsx("div", { style: { color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }, children: "Valor pago" }), _jsx("div", { style: { color: '#f3f4f6', fontWeight: 700, fontSize: '1.05rem' }, children: formatBRL(invoiceDetails.invoice.paidAmountMinor) })] }), _jsxs("div", { children: [_jsx("div", { style: { color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }, children: "Em aberto" }), _jsx("div", { style: { color: '#f3f4f6', fontWeight: 700, fontSize: '1.05rem' }, children: formatBRL(invoiceDetails.invoice.emAbertoMinor) })] })] }), liabilityPayments.length > 0 && (_jsxs("div", { style: {
+                                                    marginTop: '1rem',
+                                                    padding: '0.9rem',
+                                                    border: '1px solid #2a2f45',
+                                                    borderRadius: 10,
+                                                    background: '#0f1117',
+                                                }, children: [_jsx("h4", { style: { margin: '0 0 0.75rem', color: '#e5e7eb', fontSize: '0.92rem', fontWeight: 700 }, children: "Pagamentos do extrato vinculados" }), _jsx("div", { children: _jsxs("table", { style: { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }, children: [_jsx("thead", { children: _jsxs("tr", { style: { borderBottom: '1px solid #2a2f45', textAlign: 'left' }, children: [_jsx("th", { style: { padding: '0.45rem', width: 110, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Data" }), _jsx("th", { style: { padding: '0.45rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Descri\u00E7\u00E3o" }), _jsx("th", { style: { padding: '0.45rem', width: 380, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Fatura" }), _jsx("th", { style: { padding: '0.45rem', width: 120, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600, textAlign: 'right' }, children: "Valor" })] }) }), _jsx("tbody", { children: liabilityPayments.map((tx) => (_jsxs("tr", { style: { borderBottom: '1px solid #1f2436' }, children: [_jsx("td", { style: { padding: '0.45rem', color: '#cbd5e1', fontSize: '0.82rem', whiteSpace: 'nowrap' }, children: String(tx.occurredAt).slice(0, 10) }), _jsx("td", { style: { padding: '0.45rem', color: '#f3f4f6', fontSize: '0.84rem', overflowWrap: 'anywhere' }, children: tx.description }), _jsx("td", { style: { padding: '0.45rem', color: '#94a3b8', fontSize: '0.8rem', verticalAlign: 'top' }, children: _jsx(InvoicePaymentSelector, { value: tx.cardInvoiceId ?? null, options: invoiceSelectOptions, disabled: linkingPaymentId === tx.id, onChange: (invoiceId) => handleStatementInvoiceChange(tx.id, invoiceId), style: { width: '100%', minWidth: 0 } }) }), _jsx("td", { style: { padding: '0.45rem', color: '#f87171', fontSize: '0.85rem', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }, children: formatBRL(tx.amountMinor) })] }, tx.id))) })] }) })] })), _jsx("div", { style: { marginTop: '1rem' }, children: _jsxs("table", { style: { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }, children: [_jsx("thead", { children: _jsxs("tr", { style: { borderBottom: '1px solid #2a2f45', textAlign: 'left' }, children: [_jsx("th", { style: { padding: '0.5rem', width: 110, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Data" }), _jsx("th", { style: { padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Descri\u00E7\u00E3o" }), _jsx("th", { style: { padding: '0.5rem', width: 220, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Categoria" }), _jsx("th", { style: { padding: '0.5rem', width: 360, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }, children: "Fatura vinculada" }), _jsx("th", { style: { padding: '0.5rem', width: 120, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600, textAlign: 'right' }, children: "Valor" })] }) }), _jsx("tbody", { children: invoiceDetails.transactions.map((tx) => (_jsxs("tr", { style: { borderBottom: '1px solid #1f2436' }, children: [_jsx("td", { style: { padding: '0.5rem', color: '#cbd5e1', fontSize: '0.82rem', whiteSpace: 'nowrap' }, children: String(tx.occurredAt).slice(0, 10) }), _jsxs("td", { style: { padding: '0.5rem', color: '#f3f4f6', fontSize: '0.84rem', overflowWrap: 'anywhere' }, children: [tx.description, tx.installmentNumber && tx.installmentTotal
                                                                                 ? ` (${tx.installmentNumber}/${tx.installmentTotal})`
                                                                                 : ''] }), _jsx("td", { style: { padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem' }, children: _jsxs("select", { value: tx.categoryId ?? '', disabled: updatingTxId === tx.id, onChange: (e) => handleCategoryChange(tx.id, e.target.value), style: {
                                                                                 background: '#0f1117',
@@ -311,11 +487,12 @@ export function AccountDetail() {
                                                                                 padding: '4px 8px',
                                                                                 color: '#e5e7eb',
                                                                                 fontSize: '0.78rem',
-                                                                                minWidth: 180,
+                                                                                width: '100%',
+                                                                                minWidth: 0,
                                                                                 fontFamily: 'monospace',
                                                                             }, children: [_jsx("option", { value: "", children: "Sem categoria" }), getCategoryOptions('expense').map((opt) => (_jsx("option", { value: opt.id, disabled: opt.isParent, style: {
                                                                                         paddingLeft: opt.isParent ? '0' : '20px',
                                                                                         fontWeight: opt.isParent ? 'bold' : 'normal',
                                                                                         color: opt.isParent ? '#94a3b8' : '#e5e7eb',
-                                                                                    }, children: opt.label }, opt.id)))] }) }), _jsx("td", { style: { padding: '0.5rem', color: '#f87171', fontSize: '0.85rem', textAlign: 'right', fontWeight: 600 }, children: formatBRL(tx.amountMinor) })] }, tx.id))) })] }) })] }))] })] }))] }))] }));
+                                                                                    }, children: opt.label }, opt.id)))] }) }), _jsx("td", { style: { padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', verticalAlign: 'top' }, children: tx.movementType === 'liability_payment' || isCreditCardInvoiceCategoryId(tx.categoryId, categories) ? (_jsxs("div", { style: { display: 'flex', flexDirection: 'column', gap: 4 }, children: [_jsx(InvoicePaymentSelector, { value: tx.cardInvoiceId ?? null, options: invoiceSelectOptions, disabled: linkingPaymentId === tx.id, onChange: (invoiceId) => handleStatementInvoiceChange(tx.id, invoiceId), style: { width: '100%', minWidth: 0 } }), tx.settledInvoice && (_jsx("span", { style: { color: '#94a3b8', fontSize: '0.72rem', whiteSpace: 'nowrap' }, children: formatBRL(tx.settlementAllocatedMinor ?? 0) }))] })) : tx.settledInvoice ? (_jsxs("div", { style: { display: 'flex', flexDirection: 'column', gap: 4 }, children: [_jsx("span", { style: { color: '#e5e7eb', fontSize: '0.8rem' }, children: formatInvoicePaymentLabel(tx.settledInvoice) }), _jsx("span", { style: { color: '#94a3b8', fontSize: '0.72rem', whiteSpace: 'nowrap' }, children: formatBRL(tx.settlementAllocatedMinor ?? tx.amountMinor) })] })) : (_jsx("span", { style: { color: '#475569' }, children: "\u2014" })) }), _jsx("td", { style: { padding: '0.5rem', color: '#f87171', fontSize: '0.85rem', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }, children: formatBRL(tx.amountMinor) })] }, tx.id))) })] }) })] }))] })] }))] }))] }));
 }

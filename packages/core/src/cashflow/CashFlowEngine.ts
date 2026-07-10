@@ -114,6 +114,7 @@ export class CashFlowEngine {
       let income: Minor = zero()
       let expense: Minor = zero()
       let liabilityPayments: Minor = zero()
+      let cardInvoicePayments: Minor = zero()
       let committed: Minor = zero()
       let debtOpen: Minor = zero()
 
@@ -164,20 +165,25 @@ export class CashFlowEngine {
 
       // Corrigido: para cada mês, mostrar apenas o saldo devedor aberto naquele mês (não repetir valor nos meses seguintes)
       for (const inv of invoices) {
+        const sourceType = typeof inv.sourceType === 'string' ? inv.sourceType : 'statement'
+        const isProjectedInstallment = sourceType === 'installment'
+
         // Considera a fatura "em aberto" apenas se ainda não foi totalmente paga até este mês
         // e se o mês corrente está entre o mês da compra e o vencimento (inclusive)
         const paid = inv.paidMinor || zero()
         const outstanding = add(inv.amountMinor, (typeof paid === 'bigint' ? -BigInt(paid as any) : -(paid as any)))
         const outVal = typeof outstanding === 'bigint' ? (outstanding > 0n ? outstanding : 0n) : Math.max(0, outstanding as number)
 
-        // Só mostra como "em aberto" se ainda não foi pago e o mês está entre competência e vencimento
-        if (inv.competencyMonth <= month && month <= inv.dueMonth && outVal) {
+        // Só mostra como "em aberto" se ainda não foi pago, o mês está entre competência e vencimento
+        // e a linha não for uma parcela projetada (parcelas têm seu próprio indicador no gráfico).
+        if (!isProjectedInstallment && inv.competencyMonth <= month && month <= inv.dueMonth && outVal) {
           debtOpen = add(debtOpen, outVal)
         }
 
         // on due month, include as committed (will reduce cash when paid)
         if (inv.dueMonth === month) {
           committed = add(committed, outVal)
+          cardInvoicePayments = add(cardInvoicePayments, outVal)
         }
       }
 
@@ -187,6 +193,7 @@ export class CashFlowEngine {
       projected = add(projected, income)
       projected = add(projected, typeof expense === 'bigint' ? -BigInt(expense as any) : -(expense as any))
       projected = add(projected, typeof liabilityPayments === 'bigint' ? -BigInt(liabilityPayments as any) : -(liabilityPayments as any))
+      projected = add(projected, typeof cardInvoicePayments === 'bigint' ? -BigInt(cardInvoicePayments as any) : -(cardInvoicePayments as any))
 
       // convert numbers for consistent storage
       const monthFlow: MonthlyCashFlow = {
@@ -194,7 +201,8 @@ export class CashFlowEngine {
         openingBalanceMinor: opening,
         totalIncomeMinor: income,
         totalExpenseMinor: expense,
-        totalLiabilityPaymentMinor: liabilityPayments,
+        totalLiabilityPaymentMinor: add(liabilityPayments, cardInvoicePayments),
+        cardInvoicePaymentMinor: cardInvoicePayments,
         totalCommittedMinor: committed,
         projectedClosingBalanceMinor: projected,
         debtOpenMinor: debtOpen,

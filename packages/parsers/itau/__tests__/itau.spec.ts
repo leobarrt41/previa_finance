@@ -96,10 +96,9 @@ describe('parseItauInvoice — Abril 2026', () => {
     expect(manus!.amountMinor).toBe(21294)           // R$ 212,94
   })
 
-  it('identifica pagamento como crédito (valor negativo)', () => {
-    const pagamento = invoiceAbr.transactions.find(t => t.amountMinor < 0)
-    expect(pagamento).toBeDefined()
-    expect(pagamento!.amountMinor).toBe(-419103)
+  it('não expõe pagamento como transação', () => {
+    expect(invoiceAbr.transactions.some(t => /^pagamento\b/i.test(t.description))).toBe(false)
+    expect(invoiceAbr.summary.paymentsMinor).toBe(419103)
   })
 
   it('gera forecast de cashflow para o mês de vencimento', () => {

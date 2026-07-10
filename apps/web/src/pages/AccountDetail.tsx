@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   api,
   formatBRL,
+  type OpenCardInvoiceSummary,
   type AccountInvoiceDetails,
   type AccountStatementDetails,
   type AccountSummary,
   type Category,
 } from '../services/api'
 import { Alert, Badge, Button, Card, Spinner } from '../components/ui'
+import { InvoicePaymentSelector, buildInvoicePaymentOptions, formatInvoicePaymentLabel } from '../components/InvoicePaymentSelector'
+import { buildCategoryOptions } from '../utils/categoryOptions'
 
 function getAllMonths(acc: AccountSummary): string[] {
   const set = new Set<string>()
@@ -16,6 +19,198 @@ function getAllMonths(acc: AccountSummary): string[] {
   for (const m of acc.invoiceMonths) set.add(m.month)
   for (const m of acc.receiptMonths) set.add(m.month)
   return Array.from(set).sort((a, b) => b.localeCompare(a))
+}
+
+function normalizeCategoryText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+}
+
+function isCreditCardInvoiceCategoryId(
+  categoryId: string | null,
+  categories: Category[],
+): boolean {
+  if (!categoryId) return false
+
+  const byId = new Map(categories.map((category) => [category.id, category]))
+  let current = byId.get(categoryId) ?? null
+  let sawInvoice = false
+  let sawCard = false
+
+  while (current) {
+    const text = normalizeCategoryText(`${current.name} ${current.slug ?? ''}`)
+    if (/fatura/.test(text)) sawInvoice = true
+    if (/cartao|credito/.test(text)) sawCard = true
+    current = current.parentId ? byId.get(current.parentId) ?? null : null
+  }
+
+  return sawInvoice && sawCard
+}
+
+type InvoiceComponent = NonNullable<AccountInvoiceDetails['components']>[number]
+
+function getInvoiceComponentLabel(componentType: string): string {
+  if (componentType === 'installment_principal') return 'Parcelamento'
+  if (componentType === 'iof') return 'IOF'
+  if (componentType === 'finance_charge') return 'Encargo financeiro'
+  if (componentType === 'fee') return 'Tarifa'
+  if (componentType === 'previous_balance') return 'Saldo anterior'
+  if (componentType === 'payment_received') return 'Pagamento recebido'
+  if (componentType === 'credits_and_refunds') return 'Créditos e estornos'
+  if (componentType === 'monthly_expenses') return 'Compras do mês'
+  if (componentType === 'charges_total') return 'Encargos totais'
+  if (componentType === 'financed_balance') return 'Saldo financiado'
+  if (componentType === 'total_invoice') return 'Total da fatura'
+  return componentType
+}
+
+function InvoiceComponentsPanel({
+  installments,
+  fees,
+  progress,
+}: {
+  installments: InvoiceComponent[]
+  fees: InvoiceComponent[]
+  progress: {
+    progressPct: number
+    seriesCount: number
+    withPositionCount: number
+  } | null
+}) {
+  if (installments.length === 0 && fees.length === 0) return null
+
+  return (
+    <Card style={{ marginBottom: '1rem', border: '1px solid #334155', background: '#10121a' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.85rem' }}>
+        <div>
+          <p style={{ margin: 0, color: '#fbbf24', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+            Componentes da fatura
+          </p>
+          <p style={{ margin: '0.25rem 0 0', color: '#e5e7eb', fontWeight: 700, fontSize: '0.92rem' }}>
+            Parcelamentos, encargos e taxas são guardados em separado da lista principal
+          </p>
+        </div>
+        <div style={{ color: '#9ca3af', fontSize: '0.78rem', alignSelf: 'flex-end' }}>
+          Tudo isso continua vinculado à mesma fatura
+        </div>
+      </div>
+
+      {progress && progress.seriesCount > 0 && (
+        <div
+          style={{
+            marginBottom: '1rem',
+            padding: '0.9rem',
+            border: '1px solid #243042',
+            borderRadius: 12,
+            background: '#0f1117',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.45rem' }}>
+            <div>
+              <div style={{ color: '#e5e7eb', fontSize: '0.86rem', fontWeight: 800 }}>
+                Progresso total dos parcelamentos
+              </div>
+              <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+                Barra agregada das séries visíveis nesta fatura
+              </div>
+            </div>
+            <div style={{ color: '#cbd5e1', fontSize: '0.8rem', fontWeight: 700, alignSelf: 'center' }}>
+              {Math.round(progress.progressPct * 100)}% · {progress.seriesCount} série(s) · {progress.withPositionCount} item(ns) com parcela identificada
+            </div>
+          </div>
+          <div style={{ height: 10, borderRadius: 999, background: '#1f2937', overflow: 'hidden' }}>
+            <div
+              style={{
+                width: `${Math.max(0, Math.min(100, Math.round(progress.progressPct * 100)))}%`,
+                height: '100%',
+                borderRadius: 999,
+                background: 'linear-gradient(90deg, #6366f1 0%, #22c55e 100%)',
+                transition: 'width 0.2s ease',
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {installments.length > 0 && (
+        <div style={{ marginBottom: fees.length > 0 ? '1rem' : 0 }}>
+          <div style={{ color: '#e5e7eb', fontSize: '0.86rem', fontWeight: 700, marginBottom: '0.5rem' }}>
+            Parcelamentos detectados
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', tableLayout: 'fixed' }}>
+              <thead>
+                <tr style={{ color: '#6b7280', borderBottom: '1px solid #2a2f45', background: '#0f1117' }}>
+                  <th style={{ padding: '0.5rem', textAlign: 'left' }}>Descrição</th>
+                  <th style={{ padding: '0.5rem', width: 100, textAlign: 'left' }}>Parcela</th>
+                  <th style={{ padding: '0.5rem', width: 104, textAlign: 'left' }}>Data</th>
+                  <th style={{ padding: '0.5rem', width: 110, textAlign: 'right' }}>Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {installments.map((item, index) => (
+                  <tr key={`${item.id}-${index}`} style={{ borderBottom: '1px solid #1a1e2e' }}>
+                    <td style={{ padding: '0.55rem 0.5rem', color: '#e5e7eb', overflowWrap: 'anywhere' }}>
+                      {item.description}
+                    </td>
+                    <td style={{ padding: '0.55rem 0.5rem', color: '#cbd5e1', whiteSpace: 'nowrap' }}>
+                      {item.installmentNumber && item.installmentTotal ? `${item.installmentNumber}/${item.installmentTotal}` : '—'}
+                    </td>
+                    <td style={{ padding: '0.55rem 0.5rem', color: '#9ca3af', whiteSpace: 'nowrap' }}>
+                      {item.sourceDate ? String(item.sourceDate).slice(0, 10) : '—'}
+                    </td>
+                    <td style={{ padding: '0.55rem 0.5rem', textAlign: 'right', color: '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                      {formatBRL(item.amountMinor)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {fees.length > 0 && (
+        <div>
+          <div style={{ color: '#e5e7eb', fontSize: '0.86rem', fontWeight: 700, marginBottom: '0.5rem' }}>
+            Encargos, IOF e taxas
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', tableLayout: 'fixed' }}>
+              <thead>
+                <tr style={{ color: '#6b7280', borderBottom: '1px solid #2a2f45', background: '#0f1117' }}>
+                  <th style={{ padding: '0.5rem', width: 170, textAlign: 'left' }}>Tipo</th>
+                  <th style={{ padding: '0.5rem', textAlign: 'left' }}>Descrição</th>
+                  <th style={{ padding: '0.5rem', width: 104, textAlign: 'left' }}>Data</th>
+                  <th style={{ padding: '0.5rem', width: 110, textAlign: 'right' }}>Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fees.map((item, index) => (
+                  <tr key={`${item.id}-${index}`} style={{ borderBottom: '1px solid #1a1e2e' }}>
+                    <td style={{ padding: '0.55rem 0.5rem', color: '#cbd5e1', whiteSpace: 'nowrap' }}>
+                      {getInvoiceComponentLabel(item.componentType)}
+                    </td>
+                    <td style={{ padding: '0.55rem 0.5rem', color: '#e5e7eb', overflowWrap: 'anywhere' }}>
+                      {item.description ?? '—'}
+                    </td>
+                    <td style={{ padding: '0.55rem 0.5rem', color: '#9ca3af', whiteSpace: 'nowrap' }}>
+                      {item.sourceDate ? String(item.sourceDate).slice(0, 10) : '—'}
+                    </td>
+                    <td style={{ padding: '0.55rem 0.5rem', textAlign: 'right', color: '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                      {formatBRL(item.amountMinor)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </Card>
+  )
 }
 
 export function AccountDetail() {
@@ -33,8 +228,10 @@ export function AccountDetail() {
   const [statementDetails, setStatementDetails] = useState<AccountStatementDetails | null>(null)
   const [statementLoading, setStatementLoading] = useState(false)
   const [statementError, setStatementError] = useState('')
+  const [openInvoices, setOpenInvoices] = useState<OpenCardInvoiceSummary[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [updatingTxId, setUpdatingTxId] = useState<number | null>(null)
+  const [linkingPaymentId, setLinkingPaymentId] = useState<number | null>(null)
 
   async function loadAccount(keepActiveMonth = false) {
     setLoading(true)
@@ -65,6 +262,10 @@ export function AccountDetail() {
 
   useEffect(() => {
     api.categories.list().then(setCategories).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    api.accounts.openCardInvoices().then((result) => setOpenInvoices(result.items)).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -170,6 +371,7 @@ export function AccountDetail() {
         cardTransactionId,
         newCategoryId || null,
       )
+      const shouldShowInvoiceSelector = isCreditCardInvoiceCategoryId(updated.categoryId, categories)
 
       setInvoiceDetails((prev) => {
         if (!prev) return prev
@@ -181,6 +383,9 @@ export function AccountDetail() {
                   ...tx,
                   categoryId: updated.categoryId,
                   categoryName: updated.categoryName,
+                  cardInvoiceId: shouldShowInvoiceSelector ? tx.cardInvoiceId : null,
+                  settledInvoice: shouldShowInvoiceSelector ? tx.settledInvoice : null,
+                  settlementAllocatedMinor: shouldShowInvoiceSelector ? tx.settlementAllocatedMinor : null,
                 }
               : tx,
           ),
@@ -201,13 +406,27 @@ export function AccountDetail() {
         newCategoryId || null,
       )
 
+      const shouldShowInvoiceSelector = isCreditCardInvoiceCategoryId(updated.categoryId, categories)
+      const currentTx = statementDetails?.transactions.find((tx) => tx.id === transactionId) ?? null
+
+      if (!shouldShowInvoiceSelector && currentTx?.cardInvoiceId) {
+        await api.accounts.updateBankTransactionCardInvoice(transactionId, null)
+      }
+
       setStatementDetails((prev) => {
         if (!prev) return prev
         return {
           ...prev,
           transactions: prev.transactions.map((tx) =>
             tx.id === transactionId
-              ? { ...tx, categoryId: updated.categoryId, categoryName: updated.categoryName }
+              ? {
+                  ...tx,
+                  categoryId: updated.categoryId,
+                  categoryName: updated.categoryName,
+                  cardInvoiceId: shouldShowInvoiceSelector ? tx.cardInvoiceId : null,
+                  settledInvoice: shouldShowInvoiceSelector ? tx.settledInvoice : null,
+                  settlementAllocatedMinor: shouldShowInvoiceSelector ? tx.settlementAllocatedMinor : null,
+                }
               : tx,
           ),
         }
@@ -233,34 +452,117 @@ export function AccountDetail() {
     return true
   }
 
-  // Estrutura hierarquicamente as categorias para exibição prática
-  const getCategoryOptions = (type: 'expense' | 'income') => {
-    const filteredCategories = categories.filter((c) => c.type === type)
-    const parents = filteredCategories.filter((c) => !c.parentId)
-    const byParent = new Map<string | null, typeof filteredCategories>()
-    filteredCategories.forEach((cat) => {
-      const key = cat.parentId || null
-      if (!byParent.has(key)) byParent.set(key, [])
-      byParent.get(key)!.push(cat)
-    })
-
-    const options: { id: string; label: string; isParent: boolean }[] = []
-    for (const parent of parents) {
-      options.push({ id: parent.id, label: parent.name, isParent: true })
-      const children = byParent.get(parent.id) || []
-      for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
-        options.push({ id: child.id, label: `  └ ${child.name}`, isParent: false })
+  const occupiedInvoiceIds = useMemo(() => {
+    const ids = new Set<number>()
+    for (const tx of statementDetails?.transactions ?? []) {
+      if (typeof tx.cardInvoiceId === 'number' && tx.cardInvoiceId > 0) {
+        ids.add(tx.cardInvoiceId)
       }
     }
-    return options
+    for (const tx of invoiceDetails?.transactions ?? []) {
+      if (typeof tx.cardInvoiceId === 'number' && tx.cardInvoiceId > 0) {
+        ids.add(tx.cardInvoiceId)
+      }
+    }
+    return ids
+  }, [statementDetails, invoiceDetails])
+
+  function getAvailableInvoiceOptions(
+    currentInvoiceId: number | null,
+    currentInvoiceSummary: OpenCardInvoiceSummary | null,
+    occupiedInvoiceIds: Set<number>,
+  ) {
+    const currentInvoice = currentInvoiceSummary
+      ?? (currentInvoiceId
+      ? openInvoices.find((invoice) => invoice.id === currentInvoiceId) ?? null
+      : null)
+
+    const currentOption = currentInvoice
+      ? {
+          id: currentInvoice.id,
+          label: formatInvoicePaymentLabel(currentInvoice),
+        }
+      : null
+
+    const availableInvoices = openInvoices.filter((invoice) => invoice.id === currentInvoiceId || !occupiedInvoiceIds.has(invoice.id))
+    return buildInvoicePaymentOptions(currentOption, availableInvoices)
   }
+
+  async function handleStatementInvoiceChange(transactionId: number, cardInvoiceId: number | null) {
+    setLinkingPaymentId(transactionId)
+    try {
+      await api.accounts.updateBankTransactionCardInvoice(
+        transactionId,
+        cardInvoiceId,
+      )
+
+      if (account && activeMonth) {
+        const [updatedInvoice, updatedStatement, updatedOpenInvoices] = await Promise.all([
+          api.accounts.invoiceDetails(account.id, activeMonth),
+          api.accounts.statementDetails(account.id, activeMonth),
+          api.accounts.openCardInvoices(),
+        ])
+        setInvoiceDetails(updatedInvoice)
+        setStatementDetails(updatedStatement)
+        setOpenInvoices(updatedOpenInvoices.items)
+      }
+    } catch (error) {
+      setStatementError(error instanceof Error ? error.message : 'Erro ao vincular fatura')
+    } finally {
+      setLinkingPaymentId(null)
+    }
+  }
+
+  // Estrutura hierarquicamente as categorias para exibição prática
+  const getCategoryOptions = (type: 'expense' | 'income') =>
+    buildCategoryOptions(categories, type).map((option) => ({
+      id: option.id,
+      label: option.label,
+      isParent: option.disabled,
+    }))
 
   const months = account ? getAllMonths(account) : []
   const bankEntry = account?.bankMonths.find((m) => m.month === activeMonth)
   const invoiceEntry = account?.invoiceMonths.find((m) => m.month === activeMonth)
+  const invoiceComponents = invoiceDetails?.components ?? []
+  const invoiceInstallments = invoiceComponents.filter((item) => item.componentScope === 'line_item' && item.componentType === 'installment_principal')
+  const invoiceFees = invoiceComponents.filter((item) => item.componentScope === 'line_item' && item.componentType !== 'installment_principal')
+  const invoiceVisibleTransactions = (invoiceDetails?.transactions ?? []).filter((tx) => !(tx.installmentNumber && tx.installmentTotal))
+  const invoiceInstallmentProgress = useMemo(() => {
+    const grouped = new Map<string, { current: number; total: number }>()
+
+    for (const item of invoiceInstallments) {
+      if (!item.installmentNumber || !item.installmentTotal || item.installmentTotal <= 0) continue
+      const key = `${item.description ?? ''}::${item.installmentTotal}`
+      const current = grouped.get(key) ?? { current: 0, total: 0 }
+      current.current += Math.min(item.installmentNumber, item.installmentTotal)
+      current.total += item.installmentTotal
+      grouped.set(key, current)
+    }
+
+    if (grouped.size === 0) return null
+
+    let weightedProgress = 0
+    let weightedTotal = 0
+    for (const entry of grouped.values()) {
+      const ratio = entry.total > 0 ? entry.current / entry.total : 0
+      weightedProgress += ratio * entry.total
+      weightedTotal += entry.total
+    }
+
+    return {
+      progressPct: weightedTotal > 0 ? weightedProgress / weightedTotal : 0,
+      seriesCount: grouped.size,
+      withPositionCount: invoiceInstallments.filter((item) => item.installmentNumber && item.installmentTotal).length,
+    }
+  }, [invoiceInstallments])
+  const previousInvoiceOpenMinor = invoiceDetails?.invoice
+    ? Math.max(0, invoiceDetails.invoice.previousBalanceMinor - invoiceDetails.invoice.paidAmountMinor)
+    : 0
+  const liabilityPayments = statementDetails?.transactions.filter((tx) => tx.movementType === 'liability_payment') ?? []
 
   return (
-    <div style={{ maxWidth: 800 }}>
+    <div style={{ width: '100%', maxWidth: 1200 }}>
       {/* Back navigation */}
       <div style={{ marginBottom: '1.25rem' }}>
         <button
@@ -415,24 +717,25 @@ export function AccountDetail() {
                 )}
 
                 {!statementLoading && !statementError && (statementDetails?.transactions.length ?? 0) > 0 && (
-                  <div style={{ marginTop: '1rem', overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+                  <div style={{ marginTop: '1rem' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                       <thead>
                         <tr style={{ borderBottom: '1px solid #2a2f45', textAlign: 'left' }}>
-                          <th style={{ padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Data</th>
+                          <th style={{ padding: '0.5rem', width: 92, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Data</th>
                           <th style={{ padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Descrição</th>
-                          <th style={{ padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Categoria</th>
-                          <th style={{ padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Tipo</th>
-                          <th style={{ padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600, textAlign: 'right' }}>Valor</th>
+                          <th style={{ padding: '0.5rem', width: 220, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Categoria</th>
+                          <th style={{ padding: '0.5rem', width: 280, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Fatura</th>
+                          <th style={{ padding: '0.5rem', width: 112, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Tipo</th>
+                          <th style={{ padding: '0.5rem', width: 110, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600, textAlign: 'right' }}>Valor</th>
                         </tr>
                       </thead>
                       <tbody>
                         {statementDetails!.transactions.map((tx) => (
                           <tr key={tx.id} style={{ borderBottom: '1px solid #1f2436' }}>
-                            <td style={{ padding: '0.5rem', color: '#cbd5e1', fontSize: '0.82rem' }}>
+                            <td style={{ padding: '0.5rem', color: '#cbd5e1', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>
                               {String(tx.occurredAt).slice(0, 10)}
                             </td>
-                            <td style={{ padding: '0.5rem', color: '#f3f4f6', fontSize: '0.84rem' }}>
+                            <td style={{ padding: '0.5rem', color: '#f3f4f6', fontSize: '0.84rem', overflowWrap: 'anywhere' }}>
                               {tx.description}
                             </td>
                             <td style={{ padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem' }}>
@@ -448,7 +751,8 @@ export function AccountDetail() {
                                     padding: '4px 8px',
                                     color: '#e5e7eb',
                                     fontSize: '0.78rem',
-                                    minWidth: 180,
+                                    width: '100%',
+                                    minWidth: 0,
                                     fontFamily: 'monospace',
                                   }}
                                 >
@@ -473,7 +777,27 @@ export function AccountDetail() {
                                 </span>
                               )}
                             </td>
-                            <td style={{ padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem' }}>
+                              <td style={{ padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', verticalAlign: 'top' }}>
+                                {tx.movementType === 'liability_payment' || isCreditCardInvoiceCategoryId(tx.categoryId, categories) ? (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    <InvoicePaymentSelector
+                                      value={tx.cardInvoiceId ?? null}
+                                      options={getAvailableInvoiceOptions(tx.cardInvoiceId ?? null, tx.settledInvoice, occupiedInvoiceIds)}
+                                      disabled={linkingPaymentId === tx.id}
+                                    onChange={(invoiceId) => handleStatementInvoiceChange(tx.id, invoiceId)}
+                                    style={{ width: '100%', minWidth: 0 }}
+                                  />
+                                  {tx.settledInvoice && (
+                                    <span style={{ color: '#94a3b8', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+                                      {formatBRL(tx.settlementAllocatedMinor ?? 0)}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span style={{ color: '#475569' }}>—</span>
+                              )}
+                            </td>
+                            <td style={{ padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
                               <Badge variant={tx.movementType === 'income' ? 'green' : tx.movementType === 'transfer' ? 'blue' : 'gray'}>
                                 {getMovementTypeLabel(tx.movementType)}
                               </Badge>
@@ -485,6 +809,7 @@ export function AccountDetail() {
                                 fontSize: '0.85rem',
                                 textAlign: 'right',
                                 fontWeight: 600,
+                                whiteSpace: 'nowrap',
                               }}
                             >
                               {formatBRL(tx.amountMinor)}
@@ -535,15 +860,15 @@ export function AccountDetail() {
                     <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', marginTop: '0.9rem' }}>
                       <div>
                         <div style={{ color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                          Total da fatura
+                          Total da fatura anterior
                         </div>
                         <div style={{ color: '#f3f4f6', fontWeight: 700, fontSize: '1.05rem' }}>
-                          {formatBRL(invoiceDetails.invoice.totalAmountMinor)}
+                          {formatBRL(invoiceDetails.invoice.previousBalanceMinor)}
                         </div>
                       </div>
                       <div>
                         <div style={{ color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                          Valor pago
+                          Pago na fatura anterior
                         </div>
                         <div style={{ color: '#f3f4f6', fontWeight: 700, fontSize: '1.05rem' }}>
                           {formatBRL(invoiceDetails.invoice.paidAmountMinor)}
@@ -551,7 +876,23 @@ export function AccountDetail() {
                       </div>
                       <div>
                         <div style={{ color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                          Em aberto
+                          Saldo da fatura anterior
+                        </div>
+                        <div style={{ color: previousInvoiceOpenMinor === 0 ? '#4ade80' : '#f87171', fontWeight: 700, fontSize: '1.05rem' }}>
+                          {formatBRL(previousInvoiceOpenMinor)}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          Total da fatura atual
+                        </div>
+                        <div style={{ color: '#f3f4f6', fontWeight: 700, fontSize: '1.05rem' }}>
+                          {formatBRL(invoiceDetails.invoice.totalAmountMinor)}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          Em aberto da fatura atual
                         </div>
                         <div style={{ color: '#f3f4f6', fontWeight: 700, fontSize: '1.05rem' }}>
                           {formatBRL(invoiceDetails.invoice.emAbertoMinor)}
@@ -559,23 +900,78 @@ export function AccountDetail() {
                       </div>
                     </div>
 
-                    <div style={{ marginTop: '1rem', overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+                    <InvoiceComponentsPanel installments={invoiceInstallments} fees={invoiceFees} progress={invoiceInstallmentProgress} />
+
+                    {liabilityPayments.length > 0 && (
+                      <div
+                        style={{
+                          marginTop: '1rem',
+                          padding: '0.9rem',
+                          border: '1px solid #2a2f45',
+                          borderRadius: 10,
+                          background: '#0f1117',
+                        }}
+                      >
+                        <h4 style={{ margin: '0 0 0.75rem', color: '#e5e7eb', fontSize: '0.92rem', fontWeight: 700 }}>
+                          Pagamentos do extrato vinculados
+                        </h4>
+                        <div>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                            <thead>
+                              <tr style={{ borderBottom: '1px solid #2a2f45', textAlign: 'left' }}>
+                                <th style={{ padding: '0.45rem', width: 110, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Data</th>
+                                <th style={{ padding: '0.45rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Descrição</th>
+                                <th style={{ padding: '0.45rem', width: 380, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Fatura</th>
+                                <th style={{ padding: '0.45rem', width: 120, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600, textAlign: 'right' }}>Valor</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {liabilityPayments.map((tx) => (
+                                <tr key={tx.id} style={{ borderBottom: '1px solid #1f2436' }}>
+                                  <td style={{ padding: '0.45rem', color: '#cbd5e1', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>
+                                    {String(tx.occurredAt).slice(0, 10)}
+                                  </td>
+                                  <td style={{ padding: '0.45rem', color: '#f3f4f6', fontSize: '0.84rem', overflowWrap: 'anywhere' }}>
+                                    {tx.description}
+                                  </td>
+                                  <td style={{ padding: '0.45rem', color: '#94a3b8', fontSize: '0.8rem', verticalAlign: 'top' }}>
+                                    <InvoicePaymentSelector
+                                      value={tx.cardInvoiceId ?? null}
+                                      options={getAvailableInvoiceOptions(tx.cardInvoiceId ?? null, tx.settledInvoice, occupiedInvoiceIds)}
+                                      disabled={linkingPaymentId === tx.id}
+                                      onChange={(invoiceId) => handleStatementInvoiceChange(tx.id, invoiceId)}
+                                      style={{ width: '100%', minWidth: 0 }}
+                                    />
+                                  </td>
+                                  <td style={{ padding: '0.45rem', color: '#f87171', fontSize: '0.85rem', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                    {formatBRL(tx.amountMinor)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{ marginTop: '1rem' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
                           <tr style={{ borderBottom: '1px solid #2a2f45', textAlign: 'left' }}>
-                            <th style={{ padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Data</th>
+                            <th style={{ padding: '0.5rem', width: 110, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Data</th>
                             <th style={{ padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Descrição</th>
-                            <th style={{ padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Categoria</th>
-                            <th style={{ padding: '0.5rem', color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600, textAlign: 'right' }}>Valor</th>
+                            <th style={{ padding: '0.5rem', width: 220, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Categoria</th>
+                            <th style={{ padding: '0.5rem', width: 360, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600 }}>Fatura vinculada</th>
+                            <th style={{ padding: '0.5rem', width: 120, color: '#9ca3af', fontSize: '0.75rem', fontWeight: 600, textAlign: 'right' }}>Valor</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {invoiceDetails.transactions.map((tx) => (
+                          {invoiceVisibleTransactions.map((tx) => (
                             <tr key={tx.id} style={{ borderBottom: '1px solid #1f2436' }}>
-                              <td style={{ padding: '0.5rem', color: '#cbd5e1', fontSize: '0.82rem' }}>
+                              <td style={{ padding: '0.5rem', color: '#cbd5e1', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>
                                 {String(tx.occurredAt).slice(0, 10)}
                               </td>
-                              <td style={{ padding: '0.5rem', color: '#f3f4f6', fontSize: '0.84rem' }}>
+                              <td style={{ padding: '0.5rem', color: '#f3f4f6', fontSize: '0.84rem', overflowWrap: 'anywhere' }}>
                                 {tx.description}
                                 {tx.installmentNumber && tx.installmentTotal
                                   ? ` (${tx.installmentNumber}/${tx.installmentTotal})`
@@ -593,7 +989,8 @@ export function AccountDetail() {
                                     padding: '4px 8px',
                                     color: '#e5e7eb',
                                     fontSize: '0.78rem',
-                                    minWidth: 180,
+                                    width: '100%',
+                                    minWidth: 0,
                                     fontFamily: 'monospace',
                                   }}
                                 >
@@ -608,17 +1005,53 @@ export function AccountDetail() {
                                         fontWeight: opt.isParent ? 'bold' : 'normal',
                                         color: opt.isParent ? '#94a3b8' : '#e5e7eb',
                                       }}
-                                    >
-                                      {opt.label}
-                                    </option>
-                                  ))}
+                                  >
+                                    {opt.label}
+                                  </option>
+                                ))}
                                 </select>
                               </td>
-                              <td style={{ padding: '0.5rem', color: '#f87171', fontSize: '0.85rem', textAlign: 'right', fontWeight: 600 }}>
+                              <td style={{ padding: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', verticalAlign: 'top' }}>
+                                {tx.movementType === 'liability_payment' || isCreditCardInvoiceCategoryId(tx.categoryId, categories) ? (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    <InvoicePaymentSelector
+                                      value={tx.cardInvoiceId ?? null}
+                                      options={getAvailableInvoiceOptions(tx.cardInvoiceId ?? null, tx.settledInvoice, occupiedInvoiceIds)}
+                                      disabled={linkingPaymentId === tx.id}
+                                      onChange={(invoiceId) => handleStatementInvoiceChange(tx.id, invoiceId)}
+                                      style={{ width: '100%', minWidth: 0 }}
+                                    />
+                                    {tx.settledInvoice && (
+                                      <span style={{ color: '#94a3b8', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+                                        {formatBRL(tx.settlementAllocatedMinor ?? 0)}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : tx.settledInvoice ? (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    <span style={{ color: '#e5e7eb', fontSize: '0.8rem' }}>
+                                      {formatInvoicePaymentLabel(tx.settledInvoice)}
+                                    </span>
+                                    <span style={{ color: '#94a3b8', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+                                      {formatBRL(tx.settlementAllocatedMinor ?? tx.amountMinor)}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#475569' }}>—</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '0.5rem', color: '#f87171', fontSize: '0.85rem', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
                                 {formatBRL(tx.amountMinor)}
                               </td>
                             </tr>
                           ))}
+                          {invoiceVisibleTransactions.length === 0 && (
+                            <tr>
+                              <td colSpan={5} style={{ padding: '0.85rem 0.5rem', color: '#94a3b8', fontSize: '0.82rem' }}>
+                                Nenhum lançamento principal nesta fatura. Os parcelamentos aparecem acima em "Componentes da fatura".
+                              </td>
+                            </tr>
+                          )}
                         </tbody>
                       </table>
                     </div>

@@ -85,6 +85,7 @@ const statementRowSchema = z.object({
   amountMinor: z.number().int(),
   competencyMonth: z.string().regex(/^\d{4}-\d{2}$/).optional(),
   categoryId: z.string().trim().min(1).max(128).nullable().optional(),
+  cardInvoiceId: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
   providerCategory: z.string().trim().max(128).nullable().optional(),
   providerCategoryRaw: z.string().trim().max(255).nullable().optional(),
   categoryAssignedBy: z.enum(['provider', 'history', 'ai', 'user', 'legacy']).nullable().optional(),
@@ -454,7 +455,7 @@ function isCashNeutralSweep(description: string): boolean {
 }
 
 const CARD_PAYMENT_PATTERN =
-  /PAG(AMENTO)?\s+(FATURA|CART[A\u00c3]O|FAT)|FATURA\s+CART[A\u00c3]O|PAGTO\s+CART[A\u00c3]O(\s+CR[E\u00c9]DITO)?|PAYMENT\s+CREDIT|PAG\s+CARTAO|PAGTO\s+CART\b/i
+  /PAG(AMENTO)?\s+(FATURA|CART[A\u00c3]O|FAT|RECEBID[OA])|PAGTO\s+(CART[A\u00c3]O(\s+CR[E\u00c9]DITO)?|RECEBID[OA])|FATURA\s+CART[A\u00c3]O|PAYMENT\s+CREDIT|PAG\s+CARTAO|PAGTO\s+CART\b/i
 
 function isLikelyCardPayment(description: string): boolean {
   const normalized = normalizeText(description)
@@ -470,11 +471,13 @@ function isLikelyCardPayment(description: string): boolean {
 
   if (!hasTransferMarker) return false
 
+  // "Pagamento PIX" sozinho não é suficiente: isso pode ser um simples envio
+  // entre contas. Só tratamos como pagamento de fatura quando há indício claro
+  // de cartão/fatura/crédito na descrição.
   return normalized.includes('cartao')
     || normalized.includes('fatura')
     || normalized.includes('pagto')
     || normalized.includes('pgto')
-    || normalized.includes('pagamento')
     || normalized.includes('credito')
 }
 
@@ -722,6 +725,15 @@ function buildDedupeKey(args: {
   return `${args.competencyMonth}|${args.amountMinor.toString()}|${args.normalizedDescription}|${args.occurredYmd}`
 }
 
+function buildRelaxedDedupeKey(args: {
+  competencyMonth: string
+  amountMinor: bigint
+  normalizedDescription: string
+  occurredYmd: string
+}) {
+  return `${args.competencyMonth}|${args.amountMinor.toString()}|${canonicalDescriptionForLearning(args.normalizedDescription)}|${args.occurredYmd}`
+}
+
 function inferInstitutionFromName(fileName: string): string | null {
   const lower = fileName.toLowerCase()
   if (lower.includes('itau') || lower.includes('itaú')) return 'Itaú'
@@ -758,6 +770,49 @@ async function detectStatementAccount(ownerId: number, sourceAccount: StatementS
       )
       .limit(1)
     if (byProvider) return byProvider
+  }
+
+  if (desiredLast4) {
+    const bankAccounts = await db
+      .select({
+        id: accounts.id,
+        displayName: accounts.displayName,
+        institutionName: accounts.institutionName,
+        providerAccountId: accounts.providerAccountId,
+      })
+      .from(accounts)
+      .where(
+        and(
+          eq(accounts.userId, ownerId),
+          eq(accounts.financialChannel, 'bank_account'),
+        ),
+      )
+      .orderBy(desc(accounts.id))
+
+    const matchesByLast4 = bankAccounts.filter((account) => {
+      const providerSuffix = extractLast4Digits(account.providerAccountId)
+      const displaySuffix = account.displayName.match(/(\d{4})(?!.*\d)/)?.[1] ?? null
+      return providerSuffix === desiredLast4 || displaySuffix === desiredLast4
+    })
+
+    if (matchesByLast4.length === 1) {
+      return {
+        id: matchesByLast4[0].id,
+        displayName: matchesByLast4[0].displayName,
+      }
+    }
+
+    if (sourceAccount.institutionName && matchesByLast4.length > 1) {
+      const matchedByInstitution = matchesByLast4.find(
+        (account) => account.institutionName === sourceAccount.institutionName,
+      )
+      if (matchedByInstitution) {
+        return {
+          id: matchedByInstitution.id,
+          displayName: matchedByInstitution.displayName,
+        }
+      }
+    }
   }
 
   if (sourceAccount.institutionName) {
@@ -990,7 +1045,7 @@ router.post('/statement/classify', async (req: Request, res: Response) => {
   const body = statementClassifySchema.parse(req.body)
   const db = getDatabase()
 
-  const pending = body.transactions.filter((tx) => tx.movementType !== 'transfer' && !tx.categoryId)
+  const pending = body.transactions.filter((tx) => tx.movementType !== 'transfer' && tx.movementType !== 'liability_payment' && !tx.categoryId)
   if (pending.length === 0) {
     res.json({ suggestions: {} })
     return
@@ -1147,8 +1202,11 @@ router.post('/statement/import', async (req: Request, res: Response) => {
     amountMinor: bigint
     normalizedDescription: string
     occurredAt: Date
+    fingerprint: string
     dedupeKey: string
+    relaxedDedupeKey: string
     providerTransactionId: string | null
+    cardInvoiceId: number | null
     values: typeof transactions.$inferInsert
   }> = []
 
@@ -1178,14 +1236,23 @@ router.post('/statement/import', async (req: Request, res: Response) => {
       normalizedDescription,
       occurredYmd: dateYmd,
     })
+    const relaxedDedupeKey = buildRelaxedDedupeKey({
+      competencyMonth,
+      amountMinor,
+      normalizedDescription,
+      occurredYmd: dateYmd,
+    })
 
     prepared.push({
       competencyMonth,
       amountMinor,
       normalizedDescription,
       occurredAt,
+      fingerprint,
       dedupeKey,
+      relaxedDedupeKey,
       providerTransactionId: tx.providerTransactionId ?? null,
+      cardInvoiceId: tx.cardInvoiceId ?? null,
       values: {
         userId: owner.id,
         accountId: destinationAccountId,
@@ -1251,6 +1318,7 @@ router.post('/statement/import', async (req: Request, res: Response) => {
     )
 
   const existingKeys = new Set<string>()
+  const existingRelaxedKeys = new Set<string>()
   const existingProviderIds = new Set<string>()
   for (const row of existing) {
     const normalizedDescription = row.normalizedDescription
@@ -1260,6 +1328,12 @@ router.post('/statement/import', async (req: Request, res: Response) => {
         rawDescription: row.description,
       }).normalizedDescription
     existingKeys.add(buildDedupeKey({
+      competencyMonth: row.competencyMonth,
+      amountMinor: row.amountMinor,
+      normalizedDescription,
+      occurredYmd: new Date(row.occurredAt).toISOString().slice(0, 10),
+    }))
+    existingRelaxedKeys.add(buildRelaxedDedupeKey({
       competencyMonth: row.competencyMonth,
       amountMinor: row.amountMinor,
       normalizedDescription,
@@ -1308,6 +1382,7 @@ router.post('/statement/import', async (req: Request, res: Response) => {
   if (stmtApiKey) {
     const stillUnclassified = prepared.filter(p => {
       if (p.values.categoryId) return false
+      if (p.values.movementType === 'liability_payment') return false
       if (historyMap.has(p.normalizedDescription)) return false
       return true
     })
@@ -1323,8 +1398,12 @@ router.post('/statement/import', async (req: Request, res: Response) => {
           .filter(p => p.values.movementType === 'income' || (p.values.amountMinor > 0n && p.values.movementType !== 'expense'))
           .map((p, i) => ({ id: `inc-${i}`, description: p.values.description as string, amountMinor: Number(p.values.amountMinor) }))
         const [expSuggestions, incSuggestions] = await Promise.all([
-          expenseItems.length > 0 ? classifyTransactionsWithAI(expenseItems, allCategories, 'expense') : Promise.resolve({}),
-          incomeItems.length > 0 ? classifyTransactionsWithAI(incomeItems, allCategories, 'income') : Promise.resolve({}),
+          expenseItems.length > 0
+            ? classifyTransactionsWithAI(expenseItems, allCategories, 'expense')
+            : Promise.resolve({} as Record<string, { categoryId: string; subcategoryId: string | null }>),
+          incomeItems.length > 0
+            ? classifyTransactionsWithAI(incomeItems, allCategories, 'income')
+            : Promise.resolve({} as Record<string, { categoryId: string; subcategoryId: string | null }>),
         ])
         const expFiltered = stillUnclassified.filter(p => p.values.movementType === 'expense' || p.values.amountMinor < 0n)
         const incFiltered = stillUnclassified.filter(p => p.values.movementType === 'income' || (p.values.amountMinor > 0n && p.values.movementType !== 'expense'))
@@ -1340,6 +1419,7 @@ router.post('/statement/import', async (req: Request, res: Response) => {
   // Apply history + AI to prepared items that lack a category
   for (const item of prepared) {
     if (item.values.categoryId) continue
+    if (item.values.movementType === 'liability_payment') continue
     const histCat = historyMap.get(item.normalizedDescription)
     if (histCat) {
       item.values.categoryId = histCat
@@ -1353,7 +1433,11 @@ router.post('/statement/import', async (req: Request, res: Response) => {
     }
   }
 
-  const toInsert: Array<typeof transactions.$inferInsert> = []
+  const toInsert: Array<{
+    values: typeof transactions.$inferInsert
+    fingerprint: string
+    cardInvoiceId: number | null
+  }> = []
   for (const item of prepared) {
     if (item.providerTransactionId && existingProviderIds.has(item.providerTransactionId)) {
       skippedDuplicates += 1
@@ -1363,19 +1447,35 @@ router.post('/statement/import', async (req: Request, res: Response) => {
       skippedDuplicates += 1
       continue
     }
-    toInsert.push(item.values)
+    if (existingRelaxedKeys.has(item.relaxedDedupeKey)) {
+      skippedDuplicates += 1
+      continue
+    }
+    toInsert.push({
+      values: item.values,
+      fingerprint: item.fingerprint,
+      cardInvoiceId: item.cardInvoiceId,
+    })
     existingKeys.add(item.dedupeKey)
+    existingRelaxedKeys.add(item.relaxedDedupeKey)
     if (item.providerTransactionId) existingProviderIds.add(item.providerTransactionId)
   }
 
   if (toInsert.length > 0) {
-    await db.insert(transactions).values(toInsert)
+    await db.insert(transactions).values(toInsert.map((item) => item.values))
 
     // Reconcile liability_payment transactions against open card invoices
-    const liabilityItems = toInsert.filter(tx => tx.movementType === 'liability_payment')
+    const liabilityItems = toInsert.filter(item => item.values.movementType === 'liability_payment')
     if (liabilityItems.length > 0) {
       try {
-        const fps = liabilityItems.map(tx => tx.fingerprint).filter(Boolean) as string[]
+        const fps = liabilityItems.map((item) => item.fingerprint).filter(Boolean) as string[]
+        const manualInvoiceByFingerprint = new Map<string, Array<number | null>>()
+        for (const item of liabilityItems) {
+          const queue = manualInvoiceByFingerprint.get(item.fingerprint) ?? []
+          queue.push(item.cardInvoiceId ?? null)
+          manualInvoiceByFingerprint.set(item.fingerprint, queue)
+        }
+
         const [sourceAcc] = await db
           .select({ institutionName: accounts.institutionName })
           .from(accounts)
@@ -1386,11 +1486,12 @@ router.post('/statement/import', async (req: Request, res: Response) => {
           ? await db
               .select({
                 id: transactions.id,
-                amountMinor: transactions.amountMinor,
-                occurredAt: transactions.occurredAt,
-                description: transactions.description,
-                categoryId: transactions.categoryId,
-              })
+              amountMinor: transactions.amountMinor,
+              occurredAt: transactions.occurredAt,
+              description: transactions.description,
+              categoryId: transactions.categoryId,
+              fingerprint: transactions.fingerprint,
+            })
               .from(transactions)
               .where(
                 and(
@@ -1402,6 +1503,8 @@ router.post('/statement/import', async (req: Request, res: Response) => {
           : []
 
         for (const tx of insertedPayments) {
+          const queue = tx.fingerprint ? manualInvoiceByFingerprint.get(tx.fingerprint) : null
+          const selectedCardInvoiceId = queue && queue.length > 0 ? queue.shift() ?? null : null
           await reconcileInvoicePayment(
             db,
             owner.id,
@@ -1410,6 +1513,7 @@ router.post('/statement/import', async (req: Request, res: Response) => {
               amountMinor: tx.amountMinor,
               occurredAt: tx.occurredAt,
               description: tx.description,
+              cardInvoiceId: selectedCardInvoiceId,
               forceInvoiceMatch: isCreditCardInvoiceCategory(tx.categoryId ?? null, categoryById),
             },
             sourceAcc?.institutionName ?? null,

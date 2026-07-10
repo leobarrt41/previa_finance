@@ -16,17 +16,25 @@
 import { Router, Request, Response } from 'express'
 import multer from 'multer'
 import { spawn } from 'node:child_process'
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { getDatabase } from '../config/database.js'
 import { cardInvoices, cardTransactions, receiptDocuments } from '@previa/db'
 import { eq, and, sql } from 'drizzle-orm'
 import { buildFingerprintFromRaw } from '@previa/core'
 import { requireClerkAuth } from '../middlewares/auth.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
+import { sanitizeSensitiveText } from '../services/textSanitizer.js'
 import { config } from '../config/env.js'
 import { resolveOrCreateCreditCardAccount } from '../services/cardAccountResolver.js'
 
 export const receiptDocumentsRouter: Router = Router()
 receiptDocumentsRouter.use(requireClerkAuth)
+
+function getPythonBin(): string {
+  return process.env.PREVIA_PYTHON || process.env.PYTHON_BIN || 'python3'
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -313,6 +321,76 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
   })
 }
 
+async function rasterizePdfToImageDataUrl(buffer: Buffer): Promise<string | null> {
+  const workDir = mkdtempSync(join(tmpdir(), 'previa-receipt-'))
+  const inputPath = join(workDir, 'input.pdf')
+  const outputPrefix = join(workDir, 'page')
+  try {
+    writeFileSync(inputPath, buffer)
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('pdftoppm', ['-png', '-r', '180', inputPath, outputPrefix], { stdio: ['ignore', 'pipe', 'pipe'] })
+      let stderr = ''
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8') })
+      child.on('error', reject)
+      child.on('close', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(stderr.trim() || 'pdftoppm failed'))
+      })
+    })
+
+    const pageFiles = readdirSync(workDir)
+      .filter((name) => /^page-\d+\.png$/i.test(name))
+      .sort()
+      .slice(0, 4)
+      .map((name) => join(workDir, name))
+
+    if (pageFiles.length === 0) return null
+
+    const script = [
+      'import io, sys',
+      'from PIL import Image',
+      'paths = sys.argv[1:]',
+      'images = [Image.open(path).convert("RGB") for path in paths]',
+      'width = max(img.width for img in images)',
+      'height = sum(img.height for img in images)',
+      'canvas = Image.new("RGB", (width, height), "white")',
+      'y = 0',
+      'for img in images:',
+      '    canvas.paste(img, (0, y))',
+      '    y += img.height',
+      'out = io.BytesIO()',
+      'canvas.save(out, format="PNG")',
+      'sys.stdout.buffer.write(out.getvalue())',
+    ].join('\n')
+
+    return await new Promise<string | null>((resolve) => {
+      const child = spawn(getPythonBin(), ['-c', script, ...pageFiles], { stdio: ['ignore', 'pipe', 'pipe'] })
+      const chunks: Buffer[] = []
+      let stderr = ''
+
+      child.stdout.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8') })
+      child.on('error', () => resolve(null))
+      child.on('close', (code) => {
+        if (code === 0 && chunks.length > 0) {
+          resolve(`data:image/png;base64,${Buffer.concat(chunks).toString('base64')}`)
+          return
+        }
+        resolve(null)
+      })
+    })
+  } catch {
+    return null
+  } finally {
+    try {
+      rmSync(workDir, { recursive: true, force: true })
+    } catch {
+      // best effort cleanup
+    }
+  }
+}
+
 async function preprocessImageForOcr(buffer: Buffer): Promise<Buffer> {
   return await new Promise<Buffer>((resolve) => {
     const script = [
@@ -334,7 +412,7 @@ async function preprocessImageForOcr(buffer: Buffer): Promise<Buffer> {
       'sys.stdout.buffer.write(out.getvalue())',
     ].join('\n')
 
-    const child = spawn('python3', ['-c', script], { stdio: ['pipe', 'pipe', 'pipe'] })
+      const child = spawn(getPythonBin(), ['-c', script], { stdio: ['pipe', 'pipe', 'pipe'] })
     const chunks: Buffer[] = []
     const errors: Buffer[] = []
 
@@ -354,6 +432,40 @@ async function preprocessImageForOcr(buffer: Buffer): Promise<Buffer> {
   })
 }
 
+async function ocrImageToText(buffer: Buffer): Promise<string | null> {
+  const workDir = mkdtempSync(join(tmpdir(), 'previa-ocr-'))
+  const inputPath = join(workDir, 'input.png')
+  try {
+    writeFileSync(inputPath, buffer)
+
+    return await new Promise<string | null>((resolve) => {
+      const child = spawn('tesseract', [inputPath, 'stdout', '--psm', '6', '-l', 'por+eng'], { stdio: ['ignore', 'pipe', 'pipe'] })
+      let stdout = ''
+      let stderr = ''
+
+      child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8') })
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8') })
+      child.on('error', () => resolve(null))
+      child.on('close', (code) => {
+        if (code === 0) {
+          const text = stdout.trim()
+          resolve(text || null)
+          return
+        }
+        resolve(null)
+      })
+    })
+  } catch {
+    return null
+  } finally {
+    try {
+      rmSync(workDir, { recursive: true, force: true })
+    } catch {
+      // best effort cleanup
+    }
+  }
+}
+
 async function callReceiptExtractionAI(payload: unknown): Promise<ReceiptExtractionAIResult> {
   if (!config.ai.apiKey) {
     throw new Error('AI não configurada para extrair notas')
@@ -364,8 +476,18 @@ async function callReceiptExtractionAI(payload: unknown): Promise<ReceiptExtract
     mimeType?: string
     source?: { kind?: 'pdf' | 'image'; text?: string; imageUrl?: string }
   }
+  const sanitizedText = input.source?.text ? sanitizeSensitiveText(input.source.text).sanitizedText : ''
   const userContent =
-    input.source?.kind === 'image' && input.source.imageUrl
+    input.source?.kind === 'image' && input.source.text
+      ? JSON.stringify({
+          filename: input.filename,
+          mimeType: input.mimeType,
+          source: {
+            kind: 'image',
+            text: sanitizedText,
+          },
+        })
+      : input.source?.kind === 'image' && input.source.imageUrl
       ? [
           {
             type: 'text',
@@ -385,7 +507,7 @@ async function callReceiptExtractionAI(payload: unknown): Promise<ReceiptExtract
           mimeType: input.mimeType,
           source: {
             kind: 'pdf',
-            text: input.source?.text ?? '',
+            text: sanitizedText,
           },
         })
 
@@ -639,20 +761,50 @@ receiptDocumentsRouter.post('/scan', upload.single('file'), async (req: Request,
       textContext = await extractPdfText(req.file.buffer)
     }
 
+    const sanitizedTextContext = textContext ? sanitizeSensitiveText(textContext).sanitizedText : ''
+    const pdfHasUsefulText = sanitizedTextContext.replace(/\s+/g, '').length >= 40
     const imageBuffer = isImage ? await preprocessImageForOcr(req.file.buffer) : req.file.buffer
-    const aiPayload = {
-      filename: req.file.originalname,
-      mimeType,
-      source: isPdf
-        ? {
-            kind: 'pdf',
-            text: textContext.slice(0, 12000),
-          }
-        : {
-            kind: 'image',
-            imageUrl: `data:${mimeType};base64,${imageBuffer.toString('base64')}`,
-          },
+    const imageText = isImage ? await ocrImageToText(imageBuffer) : null
+    const sanitizedImageText = imageText ? sanitizeSensitiveText(imageText).sanitizedText : ''
+    const imageHasUsefulText = Boolean(sanitizedImageText.replace(/\s+/g, '').length >= 20)
+    const pdfImageUrl = isPdf && !pdfHasUsefulText
+      ? await rasterizePdfToImageDataUrl(req.file.buffer)
+      : null
+    if (isPdf && !pdfHasUsefulText && !pdfImageUrl) {
+      return res.status(422).json({ error: 'PDF sem texto útil e sem rasterização local disponível.' })
     }
+    if (isImage && !imageHasUsefulText) {
+      return res.status(422).json({ error: 'Imagem sem OCR local disponível para sanitização.' })
+    }
+
+    const aiPayload = isPdf && pdfHasUsefulText
+      ? {
+          filename: req.file.originalname,
+          mimeType,
+          source: {
+            kind: 'pdf',
+            text: sanitizedTextContext.slice(0, 12000),
+          },
+        }
+      : isImage
+        ? {
+            filename: req.file.originalname,
+            mimeType,
+            source: {
+              kind: 'image',
+              text: sanitizedImageText.slice(0, 12000),
+            },
+          }
+      : {
+          filename: req.file.originalname,
+          mimeType: isPdf ? 'image/png' : mimeType,
+          source: {
+            kind: 'image',
+            imageUrl: isPdf
+              ? pdfImageUrl
+              : `data:${mimeType};base64,${imageBuffer.toString('base64')}`,
+          },
+        }
 
     const extracted = await callReceiptExtractionAI(aiPayload)
 

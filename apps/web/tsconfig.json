@@ -4,8 +4,8 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
     "types": ["vite/client", "node", "jest"]
   },
   "include": ["src/**/*", "types/**/*"]
 }
-

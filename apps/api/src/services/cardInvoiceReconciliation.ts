@@ -1,5 +1,6 @@
 import { and, eq, gt, gte, inArray, lte, sql } from 'drizzle-orm'
 import { accounts, cardInvoicePayments, cardInvoices, categories } from '@previa/db'
+import { createError } from '../middlewares/errorHandler.js'
 import { syncCardInvoiceSemanticFields } from './cardInvoiceSemantics.js'
 
 type DbLike = {
@@ -98,7 +99,7 @@ const INSTITUTION_PATTERNS: Array<{ pattern: RegExp; key: string }> = [
 ]
 
 const CARD_PAYMENT_PATTERN =
-  /PAG(AMENTO)?\s+(FATURA|CART[A\u00c3]O|FAT)|FATURA\s+CART[A\u00c3]O|PAGTO\s+CART[A\u00c3]O(\s+CR[E\u00c9]DITO)?|PAYMENT\s+CREDIT|PAG\s+CARTAO|PAGTO\s+CART\b/i
+  /PAG(AMENTO)?\s+(FATURA|CART[A\u00c3]O|FAT|RECEBID[OA])|PAGTO\s+(CART[A\u00c3]O(\s+CR[E\u00c9]DITO)?|RECEBID[OA])|FATURA\s+CART[A\u00c3]O|PAYMENT\s+CREDIT|PAG\s+CARTAO|PAGTO\s+CART\b/i
 
 function detectInvoiceTargetInstitution(
   description: string,
@@ -120,16 +121,12 @@ export async function reconcileInvoicePayment(
     occurredAt: Date
     description: string
     forceInvoiceMatch?: boolean
+    cardInvoiceId?: number | null
   },
   sourceInstitution: string | null,
 ): Promise<void> {
   const paymentAmount = payment.amountMinor < 0n ? -payment.amountMinor : payment.amountMinor
   if (paymentAmount === 0n) return
-
-  const targetInstitution = payment.forceInvoiceMatch
-    ? sourceInstitution
-    : detectInvoiceTargetInstitution(payment.description, sourceInstitution)
-  if (!targetInstitution) return
 
   const existing = await db
     .select({ id: cardInvoicePayments.id })
@@ -137,6 +134,81 @@ export async function reconcileInvoicePayment(
     .where(eq(cardInvoicePayments.transactionId, payment.id))
     .limit(1)
   if (existing.length > 0) return
+
+  const targetCardInvoiceId = payment.cardInvoiceId ?? null
+
+  if (targetCardInvoiceId) {
+    const [conflictingPayment] = await db
+      .select({
+        id: cardInvoicePayments.id,
+        transactionId: cardInvoicePayments.transactionId,
+      })
+      .from(cardInvoicePayments)
+      .where(
+        and(
+          eq(cardInvoicePayments.cardInvoiceId, targetCardInvoiceId),
+          eq(cardInvoicePayments.userId, userId),
+          sql`${cardInvoicePayments.transactionId} <> ${payment.id}`,
+        ),
+      )
+      .limit(1)
+
+    if (conflictingPayment) {
+      throw createError('Esta fatura já está vinculada a outra transação bancária.', 409)
+    }
+
+    const [selectedInvoice] = await db
+      .select({
+        id: cardInvoices.id,
+        openAmountMinor: cardInvoices.openAmountMinor,
+        paidAmountMinor: cardInvoices.paidAmountMinor,
+      })
+      .from(cardInvoices)
+      .where(
+        and(
+          eq(cardInvoices.id, targetCardInvoiceId),
+          eq(cardInvoices.userId, userId),
+          gt(cardInvoices.openAmountMinor, 0n),
+        ),
+      )
+      .limit(1)
+
+    if (!selectedInvoice) return
+
+    const invoiceOpenAmountMinor = BigInt(selectedInvoice.openAmountMinor)
+    const invoicePaidAmountMinor = BigInt(selectedInvoice.paidAmountMinor)
+    const allocate = paymentAmount < invoiceOpenAmountMinor ? paymentAmount : invoiceOpenAmountMinor
+
+    await db.insert(cardInvoicePayments).values({
+      userId,
+      cardInvoiceId: selectedInvoice.id,
+      transactionId: payment.id,
+      allocatedAmountMinor: allocate,
+      currencyCode: 'BRL',
+      paymentDate: payment.occurredAt,
+      source: 'statement_manual_match',
+      matchedBy: 'user_selection',
+      confidenceScore: '1.0000',
+    }).onDuplicateKeyUpdate({ set: { allocatedAmountMinor: allocate } })
+
+    const newPaid = invoicePaidAmountMinor + allocate
+    const newOpen = invoiceOpenAmountMinor - allocate
+    await db.update(cardInvoices)
+      .set({
+        paidAmountMinor: newPaid,
+        openAmountMinor: newOpen,
+        status: newOpen === 0n ? 'PAID' : 'OPEN',
+      })
+      .where(eq(cardInvoices.id, selectedInvoice.id))
+
+    await syncCardInvoiceSemanticFields(db, selectedInvoice.id)
+    return
+  }
+
+  const targetInstitution = payment.forceInvoiceMatch
+    ? sourceInstitution
+    : detectInvoiceTargetInstitution(payment.description, sourceInstitution)
+  if (!targetInstitution) return
 
   const windowStart = new Date(payment.occurredAt.getTime() - 60 * 24 * 60 * 60 * 1000)
   const windowEnd = new Date(payment.occurredAt.getTime() + 5 * 24 * 60 * 60 * 1000)

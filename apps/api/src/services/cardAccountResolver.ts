@@ -22,6 +22,35 @@ function normalizeLast4(value: NullableString): string | null {
   return digits.slice(-4)
 }
 
+function formatBrandDisplay(value: string | null): string | null {
+  if (!value) return null
+  const upper = value.toUpperCase()
+  if (upper.includes('MASTERCARD') || upper.includes('MASTER')) return 'Mastercard'
+  if (upper.includes('VISA')) return 'Visa'
+  if (upper.includes('ELO')) return 'Elo'
+  if (upper.includes('AMERICAN EXPRESS') || upper.includes('AMEX')) return 'Amex'
+  if (upper.includes('HIPERCARD')) return 'Hipercard'
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase()
+}
+
+export function buildCreditCardDisplayName(
+  institutionName: NullableString,
+  cardBrand: NullableString,
+  cardLast4: NullableString,
+): string {
+  const institution = normalizeText(institutionName) ?? 'Cartão'
+  const brand = formatBrandDisplay(normalizeText(cardBrand))
+  const suffix = normalizeLast4(cardLast4)
+  return [institution, brand, suffix ? `•••• ${suffix}` : null].filter(Boolean).join(' ')
+}
+
+type ExistingCreditCardAccount = {
+  id: number
+  institutionName: string | null
+  cardBrand: string | null
+  displayName: string
+}
+
 export async function resolveOrCreateCreditCardAccount(
   db: any,
   ownerId: number,
@@ -32,34 +61,53 @@ export async function resolveOrCreateCreditCardAccount(
   const cardLast4 = normalizeLast4(identity.cardLast4)
   const cardBrand = normalizeText(identity.cardBrand)?.toUpperCase() ?? null
 
-  if (!institutionName || !cardLast4) {
+  if (!cardLast4) {
     return null
   }
 
-  const [existing] = await db
-    .select({ id: accounts.id })
+  const existingRows = (await db
+    .select({
+      id: accounts.id,
+      institutionName: accounts.institutionName,
+      cardBrand: accounts.cardBrand,
+      displayName: accounts.displayName,
+    })
     .from(accounts)
     .where(and(
       eq(accounts.userId, ownerId),
       eq(accounts.financialChannel, 'credit_card'),
-      eq(accounts.institutionName, institutionName),
       eq(accounts.cardLast4, cardLast4),
     ))
-    .limit(1)
+    .limit(20)) as ExistingCreditCardAccount[]
 
-  if (existing) {
-    return existing.id
+  if (existingRows.length > 0) {
+    if (institutionName) {
+      const normalizedInstitution = institutionName.toLowerCase()
+      const exactInstitutionMatch = existingRows.find((row) =>
+        normalizeText(row.institutionName)?.toLowerCase() === normalizedInstitution,
+      )
+      if (exactInstitutionMatch) {
+        return exactInstitutionMatch.id
+      }
+    }
+
+    if (cardBrand) {
+      const exactBrandMatch = existingRows.find((row) =>
+        normalizeText(row.cardBrand)?.toUpperCase() === cardBrand,
+      )
+      if (exactBrandMatch) {
+        return exactBrandMatch.id
+      }
+    }
+
+    return existingRows[0].id
   }
-
-  const institutionDisplay = institutionName
-  const cardBrandDisplay = cardBrand ? ` ${cardBrand}` : ''
-  const last4Display = ` ••••${cardLast4}`
 
   await db.insert(accounts).values({
     userId: ownerId,
     type: 'CREDIT_CARD',
     financialChannel: 'credit_card',
-    displayName: `${institutionDisplay}${cardBrandDisplay}${last4Display}`.trim(),
+    displayName: buildCreditCardDisplayName(institutionName, cardBrand, cardLast4),
     institutionName,
     cardBrand: cardBrand ?? undefined,
     cardLast4,
@@ -74,7 +122,6 @@ export async function resolveOrCreateCreditCardAccount(
     .where(and(
       eq(accounts.userId, ownerId),
       eq(accounts.financialChannel, 'credit_card'),
-      eq(accounts.institutionName, institutionName),
       eq(accounts.cardLast4, cardLast4),
     ))
     .limit(1)

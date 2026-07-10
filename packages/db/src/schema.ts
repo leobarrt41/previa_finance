@@ -21,7 +21,7 @@
  *
  * Tables defined here:
  *   financial_connections, financial_connection_consents, accounts,
- *   transactions, card_invoices, card_transactions, card_invoice_payments,
+ *   transactions, card_invoices, card_invoice_components, card_transactions, card_invoice_payments,
  *   investments, investment_transactions, provider_webhook_events, sync_runs
  *
  * External dependencies (not redefined here):
@@ -386,6 +386,52 @@ export type CardInvoice = typeof cardInvoices.$inferSelect;
 export type NewCardInvoice = typeof cardInvoices.$inferInsert;
 
 // ---------------------------------------------------------------------------
+// card_invoice_components
+// Semantic invoice breakdown for invoice-level reporting.
+// Stores header summary values and line-item semantic buckets so the app can
+// answer "how much was previous balance, purchase, installment, interest, IOF"
+// without relying on Open Finance.
+// ---------------------------------------------------------------------------
+export const cardInvoiceComponents = mysqlTable(
+  "card_invoice_components",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),   // @external-fk: users.id
+    cardInvoiceId: int("card_invoice_id").notNull(),
+
+    componentScope: varchar("component_scope", { length: 20 }).notNull(), // summary | line_item
+    componentType: varchar("component_type", { length: 50 }).notNull(),
+
+    amountMinor: bigint("amount_minor", { mode: "bigint" }).notNull(), // @serialize-to-string
+    currencyCode: varchar("currency_code", { length: 3 }).notNull().default("BRL"),
+
+    description: varchar("description", { length: 255 }),
+    source: varchar("source", { length: 50 }).notNull().default("pdf_invoice"), // pdf_invoice | open_finance | manual | ai
+    sourceDate: timestamp("source_date"),
+
+    cardTransactionId: int("card_transaction_id"),
+    transactionId: int("transaction_id"),
+    installmentNumber: int("installment_number"),
+    installmentTotal: int("installment_total"),
+
+    providerPayload: json("provider_payload"),
+
+    ...timestamps,
+  },
+  (t) => [
+    index("idx_invoice_component_user").on(t.userId),
+    index("idx_invoice_component_invoice").on(t.cardInvoiceId),
+    index("idx_invoice_component_scope").on(t.componentScope),
+    index("idx_invoice_component_type").on(t.componentType),
+    index("idx_invoice_component_card_tx").on(t.cardTransactionId),
+    index("idx_invoice_component_transaction").on(t.transactionId),
+  ],
+);
+
+export type CardInvoiceComponent = typeof cardInvoiceComponents.$inferSelect;
+export type NewCardInvoiceComponent = typeof cardInvoiceComponents.$inferInsert;
+
+// ---------------------------------------------------------------------------
 // card_transactions
 // Individual purchases on a credit card that compose an invoice.
 // These do NOT affect the bank account cash flow directly.
@@ -498,6 +544,42 @@ export const cardInvoicePayments = mysqlTable(
 
 export type CardInvoicePayment = typeof cardInvoicePayments.$inferSelect;
 export type NewCardInvoicePayment = typeof cardInvoicePayments.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// card_invoice_settlements
+// Links a compra em um cartão ao abatimento de uma fatura de outro cartão.
+// Isto modela o caso "paguei a fatura do cartão A com o cartão B".
+// ---------------------------------------------------------------------------
+export const cardInvoiceSettlements = mysqlTable(
+  "card_invoice_settlements",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),   // @external-fk: users.id
+    sourceCardTransactionId: int("source_card_transaction_id").notNull(),
+    targetCardInvoiceId: int("target_card_invoice_id").notNull(),
+
+    allocatedAmountMinor: bigint("allocated_amount_minor", { mode: "bigint" }).notNull(), // @serialize-to-string
+    currencyCode: varchar("currency_code", { length: 3 }).notNull().default("BRL"),
+    settlementDate: timestamp("settlement_date").notNull(),
+    source: varchar("source", { length: 50 }).notNull().default("manual"),
+    matchedBy: varchar("matched_by", { length: 50 }),
+    confidenceScore: decimal("confidence_score", { precision: 5, scale: 4 }),
+    notes: text("notes"),
+    providerPayload: json("provider_payload"),
+
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("uq_settlement_source_target").on(t.sourceCardTransactionId, t.targetCardInvoiceId),
+    index("idx_settlement_user").on(t.userId),
+    index("idx_settlement_source").on(t.sourceCardTransactionId),
+    index("idx_settlement_target").on(t.targetCardInvoiceId),
+    index("idx_settlement_source_kind").on(t.source),
+  ],
+);
+
+export type CardInvoiceSettlement = typeof cardInvoiceSettlements.$inferSelect;
+export type NewCardInvoiceSettlement = typeof cardInvoiceSettlements.$inferInsert;
 
 // ---------------------------------------------------------------------------
 // investments

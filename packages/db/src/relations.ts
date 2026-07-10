@@ -18,8 +18,10 @@ import {
   accounts,
   transactions,
   cardInvoices,
+  cardInvoiceComponents,
   cardTransactions,
   cardInvoicePayments,
+  cardInvoiceSettlements,
   investments,
   investmentTransactions,
   syncRuns,
@@ -84,20 +86,44 @@ export const cardInvoicesRelations = relations(cardInvoices, ({ one, many }) => 
     fields: [cardInvoices.accountId],
     references: [accounts.id],
   }),
+  components: many(cardInvoiceComponents),
   cardTransactions: many(cardTransactions),
   payments: many(cardInvoicePayments),
+  incomingSettlements: many(cardInvoiceSettlements),
 }));
+
+// ---------------------------------------------------------------------------
+// card_invoice_components
+// ---------------------------------------------------------------------------
+export const cardInvoiceComponentsRelations = relations(
+  cardInvoiceComponents,
+  ({ one }) => ({
+    invoice: one(cardInvoices, {
+      fields: [cardInvoiceComponents.cardInvoiceId],
+      references: [cardInvoices.id],
+    }),
+    cardTransaction: one(cardTransactions, {
+      fields: [cardInvoiceComponents.cardTransactionId],
+      references: [cardTransactions.id],
+    }),
+    transaction: one(transactions, {
+      fields: [cardInvoiceComponents.transactionId],
+      references: [transactions.id],
+    }),
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // card_transactions
 // ---------------------------------------------------------------------------
 export const cardTransactionsRelations = relations(
   cardTransactions,
-  ({ one }) => ({
+  ({ one, many }) => ({
     cardInvoice: one(cardInvoices, {
       fields: [cardTransactions.cardInvoiceId],
       references: [cardInvoices.id],
     }),
+    invoiceSettlements: many(cardInvoiceSettlements),
   }),
 );
 
@@ -114,6 +140,23 @@ export const cardInvoicePaymentsRelations = relations(
     transaction: one(transactions, {
       fields: [cardInvoicePayments.transactionId],
       references: [transactions.id],
+    }),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// card_invoice_settlements
+// ---------------------------------------------------------------------------
+export const cardInvoiceSettlementsRelations = relations(
+  cardInvoiceSettlements,
+  ({ one }) => ({
+    sourceCardTransaction: one(cardTransactions, {
+      fields: [cardInvoiceSettlements.sourceCardTransactionId],
+      references: [cardTransactions.id],
+    }),
+    targetCardInvoice: one(cardInvoices, {
+      fields: [cardInvoiceSettlements.targetCardInvoiceId],
+      references: [cardInvoices.id],
     }),
   }),
 );

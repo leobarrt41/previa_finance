@@ -60,6 +60,10 @@ export interface ItauInvoice {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function getPythonBin(): string {
+  return process.env.PREVIA_PYTHON || process.env.PYTHON_BIN || 'python3'
+}
+
 function parseBRL(raw: string): number {
   if (!raw || raw.trim() === '' || raw.trim() === '-') return 0
   const str = raw.trim()
@@ -103,6 +107,23 @@ function normalizeCategory(raw: string): string {
   return 'Outros'
 }
 
+function shouldSkipTransaction(description: string): boolean {
+  const normalized = description
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return (
+    !normalized
+    || /^pagamento\b/.test(normalized)
+    || /^pgto\b/.test(normalized)
+    || /^pagto\b/.test(normalized)
+    || /^saldo anterior\b/.test(normalized)
+  )
+}
+
 // ─── PDF extraction via pdfplumber (bounding box) ─────────────────────────────
 
 /**
@@ -117,7 +138,14 @@ function normalizeCategory(raw: string): string {
  * O separador de secções no output é "===LEFT===" e "===RIGHT===".
  */
 const PYTHON_EXTRACTOR = `
-import sys, pdfplumber, re
+import sys, re
+try:
+    import pdfplumber
+except ModuleNotFoundError as exc:
+    if getattr(exc, 'name', '') == 'pdfplumber':
+        print('PDF_DEPENDENCY_MISSING: pdfplumber', file=sys.stderr)
+        raise SystemExit(3)
+    raise
 
 path = sys.argv[1]
 password = sys.argv[2] if len(sys.argv) > 2 else None
@@ -212,7 +240,7 @@ async function extractStructuredText(buffer: Buffer, password?: string): Promise
 
   try {
     const args = password ? ['-c', PYTHON_EXTRACTOR, tmpFile, password] : ['-c', PYTHON_EXTRACTOR, tmpFile]
-    const output = execFileSync('python3', args, {
+    const output = execFileSync(getPythonBin(), args, {
       encoding: 'utf8',
       maxBuffer: 10 * 1024 * 1024,
     })
@@ -429,26 +457,11 @@ function parseNationalTransactions(
       const [, datePart, rawDesc, valuePart] = m
       const desc = rawDesc.trim()
       if (shouldIgnore(desc)) continue
+      if (shouldSkipTransaction(desc)) continue
 
       const txMonth = parseInt(datePart.slice(3, 5), 10)
       const value = parseBRL(valuePart)
       if (value === 0) continue
-
-      // Pagamento
-      if (/^PAGAMENTO/i.test(desc)) {
-        const key = `${datePart}|PAGAMENTO|${value}`
-        if (!seen.has(key)) {
-          seen.add(key)
-          transactions.push({
-            date: parseDate(datePart, inferTxYear(txMonth, invoiceYear, invoiceMonth)),
-            description: desc,
-            category: 'Pagamento',
-            amountMinor: value,
-            country: 'BR',
-          })
-        }
-        continue
-      }
 
       // Detectar parcela
       const installMatch = desc.match(/\s(\d{2}\/\d{2})$/)

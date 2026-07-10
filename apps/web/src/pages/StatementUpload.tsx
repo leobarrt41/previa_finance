@@ -3,13 +3,15 @@ import {
   api,
   currentMonth,
   formatBRL,
+  type OpenCardInvoiceSummary,
   type Category,
   type StatementPreviewTransaction,
 } from '../services/api'
-import { Alert, Button, Card, SectionTitle, Spinner } from '../components/ui'
+import { buildCategoryOptions, type CategoryOption } from '../utils/categoryOptions'
+import { Alert, Badge, Button, Card, SectionTitle, Spinner } from '../components/ui'
+import { InvoicePaymentSelector, buildInvoicePaymentOptions } from '../components/InvoicePaymentSelector'
 
 type UploadStep = 'select' | 'parsing' | 'preview' | 'importing' | 'done' | 'error'
-type CategoryOption = { id: string; label: string; disabled: boolean }
 
 function isInvestmentSweep(description: string): boolean {
   return /(rende\s*facil|rende\s*fácil|aplica(c|ç)(a|ã)o|resgate|investimento|cdb|tesouro|fundo)/i.test(
@@ -32,19 +34,24 @@ function isCreditCardInvoiceCategoryId(
 
   const byId = new Map(categories.map((category) => [category.id, category]))
   let current = byId.get(categoryId) ?? null
-  let sawPayment = false
   let sawInvoice = false
   let sawCard = false
 
   while (current) {
     const text = normalizeCategoryText(`${current.name} ${current.slug ?? ''}`)
-    if (/(pagament|pagos?)/.test(text)) sawPayment = true
     if (/fatura/.test(text)) sawInvoice = true
     if (/cartao|credito/.test(text)) sawCard = true
     current = current.parentId ? byId.get(current.parentId) ?? null : null
   }
 
-  return sawPayment && sawInvoice && sawCard
+  return sawInvoice && sawCard
+}
+
+function getStatementTypeLabel(tx: StatementPreviewTransaction): string {
+  if (tx.movementType === 'liability_payment') return 'Fatura'
+  if (tx.movementType === 'income') return 'Receita'
+  if (tx.movementType === 'transfer') return 'Transferência'
+  return tx.amountMinor < 0 ? 'Despesa' : 'Receita'
 }
 
 function DropZone({ onFile }: { onFile: (file: File) => void }) {
@@ -106,10 +113,14 @@ function DropZone({ onFile }: { onFile: (file: File) => void }) {
 function TransactionRow({
   tx,
   categoryOptions,
+  showInvoiceSelector,
+  getInvoiceOptionsForTransaction,
   onChange,
 }: {
   tx: StatementPreviewTransaction
   categoryOptions: CategoryOption[]
+  showInvoiceSelector: boolean
+  getInvoiceOptionsForTransaction: (currentInvoiceId: number | null) => Array<{ id: number; label: string }>
   onChange: (id: string, patch: Partial<StatementPreviewTransaction>) => void
 }) {
   const categoryEditable = tx.movementType !== 'transfer'
@@ -123,34 +134,25 @@ function TransactionRow({
           onChange={(e) => onChange(tx.id, { include: e.target.checked })}
         />
       </td>
-      <td style={{ padding: '0.5rem', color: '#cbd5e1', fontSize: '0.8rem' }}>{tx.date}</td>
-      <td style={{ padding: '0.5rem', color: '#f3f4f6', fontSize: '0.84rem' }}>{tx.description}</td>
-      <td
-        style={{
-          padding: '0.5rem',
-          color: tx.amountMinor < 0 ? '#f87171' : '#4ade80',
-          textAlign: 'right',
-          fontWeight: 700,
-          fontSize: '0.83rem',
-        }}
-      >
-        {formatBRL(tx.amountMinor)}
-      </td>
-      <td style={{ padding: '0.5rem' }}>
+      <td style={{ padding: '0.5rem', color: '#cbd5e1', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+        <div>{tx.date}</div>
         <input
           value={tx.competencyMonth}
           onChange={(e) => onChange(tx.id, { competencyMonth: e.target.value })}
           style={{
+            marginTop: 4,
             background: '#0f1117',
             border: '1px solid #2a2f45',
             borderRadius: 6,
             color: '#e5e7eb',
-            padding: '4px 8px',
-            fontSize: '0.78rem',
-            width: 90,
+            padding: '3px 6px',
+            fontSize: '0.74rem',
+            width: 104,
+            minWidth: 0,
           }}
         />
       </td>
+      <td style={{ padding: '0.5rem', color: '#f3f4f6', fontSize: '0.84rem', overflowWrap: 'anywhere' }}>{tx.description}</td>
       <td style={{ padding: '0.5rem' }}>
         {categoryEditable ? (
           <select
@@ -163,8 +165,9 @@ function TransactionRow({
               color: '#e5e7eb',
               padding: '4px 8px',
               fontSize: '0.78rem',
-              minWidth: 210,
-              maxWidth: 260,
+              width: '100%',
+              minWidth: 0,
+              maxWidth: 'none',
               fontFamily: 'monospace',
             }}
           >
@@ -179,6 +182,37 @@ function TransactionRow({
           <span style={{ color: '#94a3b8', fontSize: '0.82rem' }}>Não editável</span>
         )}
       </td>
+      <td style={{ padding: '0.5rem' }}>
+        {showInvoiceSelector ? (
+          <InvoicePaymentSelector
+            value={tx.cardInvoiceId ?? null}
+            options={getInvoiceOptionsForTransaction(tx.cardInvoiceId ?? null)}
+            onChange={(invoiceId) => onChange(tx.id, { cardInvoiceId: invoiceId })}
+            style={{ width: '100%', minWidth: 0 }}
+          />
+        ) : (
+          <span style={{ color: '#475569', fontSize: '0.82rem' }}>—</span>
+        )}
+      </td>
+      <td style={{ padding: '0.5rem' }}>
+        <Badge
+          variant={tx.movementType === 'liability_payment' ? 'blue' : tx.amountMinor < 0 ? 'gray' : 'green'}
+        >
+          {getStatementTypeLabel(tx)}
+        </Badge>
+      </td>
+      <td
+        style={{
+          padding: '0.5rem',
+          color: tx.amountMinor < 0 ? '#f87171' : '#4ade80',
+          textAlign: 'right',
+          fontWeight: 700,
+          fontSize: '0.83rem',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {formatBRL(tx.amountMinor)}
+      </td>
     </tr>
   )
 }
@@ -188,6 +222,7 @@ export function StatementUpload() {
   const [file, setFile] = useState<File | null>(null)
   const [transactions, setTransactions] = useState<StatementPreviewTransaction[]>([])
   const [categories, setCategories] = useState<Category[]>([])
+  const [openInvoices, setOpenInvoices] = useState<OpenCardInvoiceSummary[]>([])
   const [accountHint, setAccountHint] = useState<{
     institutionName: string | null
     providerAccountId: string | null
@@ -201,46 +236,47 @@ export function StatementUpload() {
     api.categories.list().then(setCategories).catch(() => {})
   }, [])
 
-  const categoryOptionsByType = useMemo(() => {
-    const buildOptions = (type: 'expense' | 'income') => {
-      const filtered = categories.filter((c) => c.type === type)
-      const parents = filtered.filter((c) => !c.parentId)
-      const byParent = new Map<string, Category[]>()
+  const categoryOptionsByType = useMemo(() => ({
+    expense: buildCategoryOptions(categories, 'expense'),
+    income: buildCategoryOptions(categories, 'income'),
+  }), [categories])
 
-      for (const c of filtered) {
-        if (!c.parentId) continue
-        const arr = byParent.get(c.parentId) || []
-        arr.push(c)
-        byParent.set(c.parentId, arr)
+  const occupiedInvoiceIds = useMemo(() => {
+    const ids = new Set<number>()
+    for (const tx of transactions) {
+      if (typeof tx.cardInvoiceId === 'number' && tx.cardInvoiceId > 0) {
+        ids.add(tx.cardInvoiceId)
       }
+    }
+    return ids
+  }, [transactions])
 
-      const sortByName = (a: Category, b: Category) => a.name.localeCompare(b.name)
-      const options: CategoryOption[] = []
-      for (const p of [...parents].sort(sortByName)) {
-        const children = [...(byParent.get(p.id) || [])].sort(sortByName)
-        if (children.length > 0) {
-          options.push({ id: p.id, label: p.name, disabled: true })
-          for (const child of children) {
-            options.push({ id: child.id, label: `  └ ${child.name}`, disabled: false })
-          }
-        } else {
-          options.push({ id: p.id, label: p.name, disabled: false })
+  function getInvoiceOptionsForTransaction(currentInvoiceId: number | null) {
+    const currentInvoice = currentInvoiceId
+      ? openInvoices.find((invoice) => invoice.id === currentInvoiceId) ?? null
+      : null
+
+    const currentOption = currentInvoice
+      ? {
+          id: currentInvoice.id,
+          label: `${currentInvoice.displayName} · ${currentInvoice.invoiceMonth} · vence ${currentInvoice.dueDate.slice(0, 10)} · ${currentInvoice.status} · ${formatBRL(currentInvoice.openAmountMinor)} em aberto`,
         }
-      }
-      return options
-    }
+      : null
 
-    return {
-      expense: buildOptions('expense'),
-      income: buildOptions('income'),
-    }
-  }, [categories])
+    const availableInvoices = openInvoices.filter((invoice) => invoice.id === currentInvoiceId || !occupiedInvoiceIds.has(invoice.id))
+    return buildInvoicePaymentOptions(currentOption, availableInvoices)
+  }
 
   const included = transactions.filter((tx) => tx.include)
   const neutralIncluded = included.filter((tx) => tx.movementType === 'transfer')
-  const total = included
-    .filter((tx) => tx.movementType !== 'transfer')
+  const liabilityIncluded = included.filter((tx) => tx.movementType === 'liability_payment')
+  const operatingIncluded = included.filter(
+    (tx) => tx.movementType !== 'transfer' && tx.movementType !== 'liability_payment',
+  )
+  const missingInvoiceSelection = liabilityIncluded.filter((tx) => !tx.cardInvoiceId).length
+  const operatingTotal = operatingIncluded
     .reduce((sum, tx) => sum + tx.amountMinor, 0)
+  const liabilityTotal = liabilityIncluded.reduce((sum, tx) => sum + tx.amountMinor, 0)
   const monthFallback = currentMonth()
 
   function updateRow(id: string, patch: Partial<StatementPreviewTransaction>) {
@@ -252,6 +288,7 @@ export function StatementUpload() {
     updateRow(id, {
       categoryId,
       movementType: isInvoicePayment ? 'liability_payment' : undefined,
+      cardInvoiceId: isInvoicePayment ? undefined : null,
     })
   }
 
@@ -286,7 +323,7 @@ export function StatementUpload() {
     })
 
     const pending = normalized.filter(
-      (tx) => tx.include && tx.movementType !== 'transfer' && !tx.categoryId,
+      (tx) => tx.include && tx.movementType !== 'transfer' && tx.movementType !== 'liability_payment' && !tx.categoryId,
     )
 
     if (pending.length === 0) return normalized
@@ -334,6 +371,12 @@ export function StatementUpload() {
       const parsed = await api.transactions.parseStatement(selected)
       setAccountHint(parsed.sourceAccount)
       setDetectedAccount(parsed.detectedAccount)
+      try {
+        const invoices = await api.accounts.openCardInvoices()
+        setOpenInvoices(invoices.items)
+      } catch {
+        setOpenInvoices([])
+      }
       const baseTransactions = parsed.transactions.map((tx) => ({
           ...tx,
           competencyMonth: tx.competencyMonth || tx.date.slice(0, 7) || monthFallback,
@@ -367,6 +410,7 @@ export function StatementUpload() {
           movementSubtype: tx.movementSubtype ?? null,
           providerTransactionId: tx.providerTransactionId ?? null,
           categoryId: tx.categoryId ?? null,
+          cardInvoiceId: tx.cardInvoiceId ?? null,
           include: tx.include,
         })),
       })
@@ -382,6 +426,7 @@ export function StatementUpload() {
     setStep('select')
     setFile(null)
     setTransactions([])
+    setOpenInvoices([])
     setAccountHint(null)
     setDetectedAccount(null)
     setErrorMsg('')
@@ -447,26 +492,39 @@ export function StatementUpload() {
                     {neutralIncluded.length} neutra(s)
                   </p>
                 )}
-                <p style={{ fontSize: '0.85rem', color: total < 0 ? '#f87171' : '#4ade80', fontWeight: 700 }}>
-                  {formatBRL(total)}
+                <p style={{ fontSize: '0.85rem', color: operatingTotal < 0 ? '#f87171' : '#4ade80', fontWeight: 700 }}>
+                  {formatBRL(operatingTotal)}
                 </p>
+                {liabilityIncluded.length > 0 && (
+                  <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: 2, fontWeight: 600 }}>
+                    Fatura: {liabilityTotal < 0 ? '-' : ''}{formatBRL(Math.abs(liabilityTotal))}
+                  </p>
+                )}
               </div>
             </div>
           </Card>
 
+          {liabilityIncluded.length > 0 && (
+            <Alert variant="warning" style={{ marginBottom: '1rem' }}>
+              <strong>{liabilityIncluded.length} pagamento(s) de fatura</strong> foram separados do total principal.
+              Esses lançamentos afetam o caixa, mas não são compras do cartão.
+            </Alert>
+          )}
+
           {errorMsg && <Alert variant="error" style={{ marginBottom: '1rem' }}>{errorMsg}</Alert>}
 
           <Card style={{ padding: 0, overflow: 'hidden' }}>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: 980 }}>
+            <div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', tableLayout: 'fixed' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid #2a2f45', background: '#0f1117', color: '#9ca3af' }}>
                     <th style={{ padding: '0.5rem', width: 36 }} />
-                    <th style={{ padding: '0.5rem', textAlign: 'left' }}>Data</th>
+                    <th style={{ padding: '0.5rem', width: 122, textAlign: 'left' }}>Data</th>
                     <th style={{ padding: '0.5rem', textAlign: 'left' }}>Descrição</th>
-                    <th style={{ padding: '0.5rem', textAlign: 'right' }}>Valor</th>
-                    <th style={{ padding: '0.5rem', textAlign: 'left' }}>Competência</th>
-                    <th style={{ padding: '0.5rem', textAlign: 'left' }}>Categoria</th>
+                    <th style={{ padding: '0.5rem', width: 220, textAlign: 'left' }}>Categoria</th>
+                    <th style={{ padding: '0.5rem', width: 360, textAlign: 'left' }}>Fatura</th>
+                    <th style={{ padding: '0.5rem', width: 110, textAlign: 'left' }}>Tipo</th>
+                    <th style={{ padding: '0.5rem', width: 110, textAlign: 'right' }}>Valor</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -475,6 +533,8 @@ export function StatementUpload() {
                       key={tx.id}
                       tx={tx}
                       categoryOptions={tx.movementType === 'income' ? categoryOptionsByType.income : categoryOptionsByType.expense}
+                      showInvoiceSelector={tx.movementType === 'liability_payment' || isCreditCardInvoiceCategoryId(tx.categoryId ?? null, categories)}
+                      getInvoiceOptionsForTransaction={getInvoiceOptionsForTransaction}
                       onChange={(id, patch) => {
                         if (patch.categoryId !== undefined) {
                           updateRowCategory(id, patch.categoryId)
@@ -495,6 +555,11 @@ export function StatementUpload() {
               Importar {included.length} lançamento(s)
             </Button>
           </div>
+          {liabilityIncluded.length > 0 && openInvoices.length > 0 && missingInvoiceSelection > 0 && (
+            <p style={{ marginTop: '0.5rem', color: '#fbbf24', fontSize: '0.78rem', textAlign: 'right' }}>
+              Vincular a fatura é opcional. Se não houver uma fatura aberta correspondente, você pode importar assim mesmo.
+            </p>
+          )}
         </>
       )}
 
