@@ -14,7 +14,7 @@ import { createError } from '../middlewares/errorHandler.js'
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
-import { buildCardInvoiceSemanticView, syncCardInvoiceSemanticFields } from '../services/cardInvoiceSemantics.js'
+import { buildCardInvoiceSemanticView, syncCardInvoiceSemanticFields, syncCardInvoiceSemanticFieldsForUser } from '../services/cardInvoiceSemantics.js'
 import { shouldProjectInstallmentSeries } from '../services/installmentProjection.js'
 
 const router: Router = Router()
@@ -406,6 +406,11 @@ router.post('/projection', async (req: Request, res: Response) => {
 
     const useDbTransactions = !data.transactions || data.transactions.length === 0
     const useDbCardInvoices = !data.cardInvoices || data.cardInvoices.length === 0
+
+    if (useDbCardInvoices) {
+      // Garante que a projeção leia os campos semânticos já recalculados a partir das pivôs.
+      await syncCardInvoiceSemanticFieldsForUser(db, owner.id)
+    }
 
     const dbTransactions = useDbTransactions
       ? await db
