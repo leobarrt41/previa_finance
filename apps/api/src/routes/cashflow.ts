@@ -926,8 +926,6 @@ router.post('/projection', async (req: Request, res: Response) => {
         .where(
           and(
             eq(cardTransactions.userId, owner.id),
-            gte(cardTransactions.competencyMonth, startMonth),
-            lte(cardTransactions.competencyMonth, endMonth),
           ),
         )
         .groupBy(cardTransactions.cardInvoiceId)

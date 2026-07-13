@@ -1224,6 +1224,7 @@ router.post('/statement/import', async (req: Request, res: Response) => {
 
     const competencyMonth = tx.competencyMonth ?? dateYmd.slice(0, 7)
     const amountMinor = BigInt(tx.amountMinor)
+    const providerTransactionId = tx.providerTransactionId ? tx.providerTransactionId.trim() : null
     const occurredAt = new Date(`${dateYmd}T12:00:00.000Z`)
     const { fingerprint, normalizedDescription } = buildFingerprintFromRaw({
       competencyMonth,
@@ -1251,7 +1252,7 @@ router.post('/statement/import', async (req: Request, res: Response) => {
       fingerprint,
       dedupeKey,
       relaxedDedupeKey,
-      providerTransactionId: tx.providerTransactionId ?? null,
+      providerTransactionId,
       cardInvoiceId: tx.cardInvoiceId ?? null,
       values: {
         userId: owner.id,
@@ -1283,7 +1284,7 @@ router.post('/statement/import', async (req: Request, res: Response) => {
         fingerprint,
         isReconciled: false,
         reconciledGroupId: null,
-        providerTransactionId: tx.providerTransactionId ?? null,
+        providerTransactionId: providerTransactionId,
         providerPayload: null,
       },
     })
@@ -1320,6 +1321,16 @@ router.post('/statement/import', async (req: Request, res: Response) => {
   const existingKeys = new Set<string>()
   const existingRelaxedKeys = new Set<string>()
   const existingProviderIds = new Set<string>()
+  const preparedProviderIds = new Set<string>()
+
+  const allExistingProviderIds = await db
+    .select({ providerTransactionId: transactions.providerTransactionId })
+    .from(transactions)
+    .where(sql`${transactions.providerTransactionId} IS NOT NULL`)
+
+  for (const row of allExistingProviderIds) {
+    if (row.providerTransactionId) existingProviderIds.add(row.providerTransactionId)
+  }
   for (const row of existing) {
     const normalizedDescription = row.normalizedDescription
       ?? buildFingerprintFromRaw({
@@ -1439,7 +1450,8 @@ router.post('/statement/import', async (req: Request, res: Response) => {
     cardInvoiceId: number | null
   }> = []
   for (const item of prepared) {
-    if (item.providerTransactionId && existingProviderIds.has(item.providerTransactionId)) {
+    const providerTransactionId = item.providerTransactionId ? item.providerTransactionId.trim() : null
+    if (providerTransactionId && (existingProviderIds.has(providerTransactionId) || preparedProviderIds.has(providerTransactionId))) {
       skippedDuplicates += 1
       continue
     }
@@ -1458,7 +1470,10 @@ router.post('/statement/import', async (req: Request, res: Response) => {
     })
     existingKeys.add(item.dedupeKey)
     existingRelaxedKeys.add(item.relaxedDedupeKey)
-    if (item.providerTransactionId) existingProviderIds.add(item.providerTransactionId)
+    if (item.providerTransactionId) {
+      existingProviderIds.add(item.providerTransactionId)
+      preparedProviderIds.add(item.providerTransactionId)
+    }
   }
 
   if (toInsert.length > 0) {
