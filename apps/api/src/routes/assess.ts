@@ -243,7 +243,7 @@ async function buildSpendingOverview(
     return current?.id ?? null
   }
 
-  const [statementRows, invoiceRows] = await Promise.all([
+  const [statementRows, invoiceRows, incomeRows] = await Promise.all([
     db
       .select({
         amountMinor: transactions.amountMinor,
@@ -265,6 +265,16 @@ async function buildSpendingOverview(
         eq(cardTransactions.userId, ownerId),
         eq(cardTransactions.movementType, 'card_purchase'),
         eq(cardTransactions.competencyMonth, month),
+      )),
+    db
+      .select({
+        amountMinor: transactions.amountMinor,
+      })
+      .from(transactions)
+      .where(and(
+        eq(transactions.userId, ownerId),
+        eq(transactions.movementType, 'income'),
+        eq(transactions.competencyMonth, month),
       )),
   ])
 
@@ -301,10 +311,15 @@ async function buildSpendingOverview(
     item.pctOfTotal = totalMinor > 0 ? Math.round((item.amountMinor / totalMinor) * 1000) / 10 : 0
   }
 
+  const totalIncomeMinor = incomeRows.reduce((sum, row) => sum + Math.abs(Number(row.amountMinor)), 0)
+  const totalExpenseMinor = totalMinor
+
   return {
     mode: 'overview' as const,
     month,
     totalMinor,
+    totalIncomeMinor,
+    totalExpenseMinor,
     sourceSummary: {
       statementMinor: statementRows.reduce((sum, row) => sum + spendMinor(row.amountMinor), 0),
       invoiceMinor: invoiceRows.reduce((sum, row) => sum + spendMinor(row.amountMinor), 0),
