@@ -1050,8 +1050,10 @@ export const api = {
 
   accounts: {
     list: () => request<{ items: AccountSummary[] }>('/api/accounts'),
-    openCardInvoices: () =>
-      request<{ items: OpenCardInvoiceSummary[] }>('/api/accounts/open-card-invoices'),
+    openCardInvoices: (month?: string) =>
+      request<{ items: OpenCardInvoiceSummary[] }>(
+        month ? `/api/accounts/open-card-invoices?month=${encodeURIComponent(month)}` : '/api/accounts/open-card-invoices'
+      ),
     invoiceDetails: (accountId: number, month: string) =>
       request<AccountInvoiceDetails>(`/api/accounts/${accountId}/month/${month}/invoice`),
     statementDetails: (accountId: number, month: string) =>

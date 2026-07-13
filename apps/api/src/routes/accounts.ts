@@ -258,6 +258,26 @@ router.get('/open-card-invoices', async (req: Request, res: Response) => {
   const clerkUserId = req.authUser!.clerkUserId
   const owner = await resolveOwnerId(clerkUserId)
 
+  // Parâmetro opcional: mês do extrato (YYYY-MM). Quando fornecido, filtra faturas
+  // cujo dueDate pertence ao mesmo mês — ou faturas em aberto de meses anteriores
+  // que ainda não foram totalmente pagas.
+  const statementMonth = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month)
+    ? req.query.month
+    : null
+
+  const whereConditions = statementMonth
+    ? and(
+        eq(cardInvoices.userId, owner.id),
+        sql`(
+          DATE_FORMAT(${cardInvoices.dueDate}, '%Y-%m') = ${statementMonth}
+          OR (
+            DATE_FORMAT(${cardInvoices.dueDate}, '%Y-%m') < ${statementMonth}
+            AND ${cardInvoices.effectiveOpenAmountMinor} > 0
+          )
+        )`,
+      )
+    : and(eq(cardInvoices.userId, owner.id))
+
   const invoices = await db
     .select({
       id: cardInvoices.id,
@@ -275,9 +295,7 @@ router.get('/open-card-invoices', async (req: Request, res: Response) => {
     })
     .from(cardInvoices)
     .innerJoin(accounts, eq(accounts.id, cardInvoices.accountId))
-    .where(and(
-      eq(cardInvoices.userId, owner.id),
-    ))
+    .where(whereConditions)
     .orderBy(cardInvoices.dueDate)
 
   res.json({

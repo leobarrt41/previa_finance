@@ -265,8 +265,9 @@ export function AccountDetail() {
   }, [])
 
   useEffect(() => {
-    api.accounts.openCardInvoices().then((result) => setOpenInvoices(result.items)).catch(() => {})
-  }, [])
+    if (!activeMonth) return
+    api.accounts.openCardInvoices(activeMonth).then((result) => setOpenInvoices(result.items)).catch(() => {})
+  }, [activeMonth])
 
   useEffect(() => {
     if (!account || !activeMonth) {
@@ -510,7 +511,7 @@ export function AccountDetail() {
         const [updatedInvoice, updatedStatement, updatedOpenInvoices] = await Promise.all([
           api.accounts.invoiceDetails(account.id, activeMonth),
           api.accounts.statementDetails(account.id, activeMonth),
-          api.accounts.openCardInvoices(),
+          api.accounts.openCardInvoices(activeMonth),
         ])
         setInvoiceDetails(updatedInvoice)
         setStatementDetails(updatedStatement)
