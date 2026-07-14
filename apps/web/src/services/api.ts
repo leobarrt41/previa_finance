@@ -607,6 +607,7 @@ export interface InvoiceParseResult {
       current?: number
       total?: number
       date?: string
+      isPrepayment?: boolean
     }>
     fees: Array<{
       description: string

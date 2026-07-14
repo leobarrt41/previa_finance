@@ -312,11 +312,33 @@ function InvoiceInstallmentsPanel({ installments }: { installments: ParsedInstal
           </thead>
           <tbody>
             {installments.map((item, index) => (
-              <tr key={`${item.description}-${item.date ?? 'nodate'}-${index}`} style={{ borderBottom: '1px solid #1a1e2e' }}>
+              <tr
+                key={`${item.description}-${item.date ?? 'nodate'}-${index}`}
+                style={{ borderBottom: '1px solid #1a1e2e', opacity: item.isPrepayment ? 0.6 : 1 }}
+              >
                 <td style={{ padding: '0.55rem 0.5rem', color: '#e5e7eb', overflowWrap: 'anywhere' }}>
                   {item.description}
+                  {item.isPrepayment && (
+                    <span
+                      title="Adiantamento automático de parcelas — não entra nos gastos mensais"
+                      style={{
+                        marginLeft: '0.4rem',
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        color: '#f59e0b',
+                        background: '#78350f33',
+                        border: '1px solid #92400e',
+                        borderRadius: 4,
+                        padding: '1px 5px',
+                        verticalAlign: 'middle',
+                        letterSpacing: 0.3,
+                      }}
+                    >
+                      ADIANTAMENTO
+                    </span>
+                  )}
                 </td>
-                <td style={{ padding: '0.55rem 0.5rem', textAlign: 'right', color: '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                <td style={{ padding: '0.55rem 0.5rem', textAlign: 'right', color: item.isPrepayment ? '#6b7280' : '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }}>
                   {formatBRL(Math.round(item.amount * 100))}
                 </td>
                 <td style={{ padding: '0.55rem 0.5rem', color: '#9ca3af', whiteSpace: 'nowrap' }}>
@@ -549,6 +571,7 @@ export function InvoiceUpload() {
           competencyMonth: toCompetencyMonth(item.date?.slice(0, 7), item.date ?? invoiceSummary?.dueDate ?? `${invoiceMonth}-01`),
           installment: item.current && item.total ? `${item.current}/${item.total}` : undefined,
           categoryId: null,
+          isPrepayment: item.isPrepayment ?? false,
         })) ?? [],
         invoiceMonth,
         dueMonth,

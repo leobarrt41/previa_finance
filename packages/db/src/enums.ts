@@ -67,6 +67,7 @@ export const MOVEMENT_SUBTYPE_VALUES = [
   "auto_debit",       // Débito automático
   "invoice_payment",  // Pagamento de fatura de cartão
   "installment",      // Parcela de compra parcelada
+  "installment_prepayment", // Parcela de adiantamento automático (ex: PARC AUTOMATIC Itaú) — excluída dos gastos mensais
   "single",           // Compra à vista
   "recurring",        // Recorrente (assinatura, mensalidade)
 ] as const;

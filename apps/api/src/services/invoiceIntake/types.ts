@@ -58,6 +58,12 @@ export type FinancialExtractionResult = {
     current?: number
     total?: number
     date?: string
+    /**
+     * true quando esta parcela faz parte de um adiantamento automático de parcelas
+     * (ex: PARC AUTOMATIC do Itaú). Parcelas com isPrepayment=true devem ser
+     * excluídas do cálculo de gastos mensais para evitar duplicação.
+     */
+    isPrepayment?: boolean
   }>
   fees: Array<{
     description: string

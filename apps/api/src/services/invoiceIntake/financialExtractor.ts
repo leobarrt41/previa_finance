@@ -1167,6 +1167,63 @@ export async function extractFinancialInvoiceWithAI(
     payments.push(paymentEntry)
   }
 
+// ─── Detecção de adiantamento automático de parcelas ───────────────────────────
+// Padrão Itaú: quando o utilizador não paga a fatura e o banco adianta as parcelas
+// restantes, a fatura mostra:
+//   - N linhas "PARC AUTOMATIC XX/YY" (as parcelas antecipadas, com juros crescentes)
+//   - 1 linha "CREDITO PARC AUTOMATICO" (crédito de compensação, valor negativo)
+//   - 1 linha "IOF REFINANCIAMENTO" (encargo sobre os juros do adiantamento)
+//
+// Estratégia: se a fatura tiver um payment com descrição contendo
+// "credito parc" ou "credito parcelamento", marcar todas as installments
+// cujo nome contenha "parc automatic" como isPrepayment=true.
+// Isso sinaliza ao frontend/importação para excluí-las dos gastos mensais.
+function markPrepaymentInstallments(
+  installments: FinancialExtractionResult['installments'],
+  payments: FinancialExtractionResult['payments'],
+  transactions: FinancialExtractionResult['transactions'],
+): FinancialExtractionResult['installments'] {
+  const PREPAYMENT_CREDIT_PATTERN = /credito\s+parc|cr[eé]dito\s+parcelamento|credito\s+automatic/i
+  const PREPAYMENT_INSTALLMENT_PATTERN = /parc\s*automatic|parcelamento\s*automatic/i
+
+  const hasPrepaymentCredit = payments.some((p) =>
+    PREPAYMENT_CREDIT_PATTERN.test(p.description),
+  )
+
+  // Também detectar quando há múltiplas parcelas PARC AUTOMATIC na mesma data
+  // (sinal de adiantamento mesmo sem crédito explícito na mesma fatura)
+  const parcAutoGroups = new Map<string, number>()
+  for (const inst of installments) {
+    if (PREPAYMENT_INSTALLMENT_PATTERN.test(inst.description)) {
+      const dateKey = inst.date ?? 'no-date'
+      parcAutoGroups.set(dateKey, (parcAutoGroups.get(dateKey) ?? 0) + 1)
+    }
+  }
+  const hasMultipleParcAutoSameDate = [...parcAutoGroups.values()].some((count) => count >= 2)
+
+  // Também detectar quando PARC AUTOMATIC aparece nas transactions (a IA colocou lá em vez de installments)
+  const hasParcAutoInTransactions = transactions.some(
+    (t) => PREPAYMENT_INSTALLMENT_PATTERN.test(t.description),
+  )
+
+  if (!hasPrepaymentCredit && !hasMultipleParcAutoSameDate && !hasParcAutoInTransactions) {
+    return installments
+  }
+
+  return installments.map((inst) => {
+    if (PREPAYMENT_INSTALLMENT_PATTERN.test(inst.description)) {
+      return { ...inst, isPrepayment: true }
+    }
+    return inst
+  })
+}
+
+  // Detectar adiantamento automático de parcelas (ex: PARC AUTOMATIC do Itaú)
+  // Quando a fatura contém um crédito de compensação (CREDITO PARC AUTOMATICO),
+  // todas as parcelas PARC AUTOMATIC são marcadas como isPrepayment=true
+  // para que não sejam contabilizadas nos gastos mensais.
+  const markedInstallments = markPrepaymentInstallments(installments, payments, transactions)
+
   return {
     document_type: activeParsed.document_type,
     institution: activeParsed.institution,
@@ -1175,7 +1232,7 @@ export async function extractFinancialInvoiceWithAI(
     due_date: dueDate || activeParsed.due_date.trim(),
     total_amount: normalizeMoney(activeParsed.total_amount ?? 0),
     transactions,
-    installments,
+    installments: markedInstallments,
     fees,
     payments,
     warnings,

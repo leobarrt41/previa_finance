@@ -1153,6 +1153,7 @@ const importBodySchema = z.object({
       categoryId: z.string().nullable().optional(),
       competencyMonth: z.string().regex(/^\d{4}-\d{2}$/),
       installment: z.string().optional(),
+      isPrepayment: z.boolean().optional(),
     })
   ).optional(),
   invoiceMonth: z.string().regex(/^\d{4}-\d{2}$/),
@@ -1185,6 +1186,7 @@ const importBodySchema = z.object({
           (value) => (typeof value === 'number' && value > 0 ? value : undefined),
           z.number().int().positive().optional(),
         ).optional(),
+        isPrepayment: z.boolean().optional(),
       }),
     ).optional(),
     fees: z.array(
@@ -1859,7 +1861,7 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
           source: 'pdf_invoice',
           dataState: 'consolidated',
           movementType: 'card_purchase',
-          movementSubtype: 'installment',
+          movementSubtype: tx.isPrepayment ? 'installment_prepayment' : 'installment',
           amountMinor,
           currencyCode: 'BRL',
           occurredAt,

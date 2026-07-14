@@ -295,6 +295,8 @@ function mergeInstallmentHints(
       current: match.current ?? item.current,
       total: match.total ?? item.total,
       date: normalizedMatchDate || item.date,
+      // preservar o flag isPrepayment da extracção original
+      isPrepayment: item.isPrepayment,
     }
   })
 
