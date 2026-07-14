@@ -20,7 +20,22 @@ const financialResponseSchema = z.object({
   document_type: z.literal('fatura_cartao'),
   institution: z.string().min(1),
   card_last4: z.string().default(''),
-  billing_period: z.string().regex(/^\d{4}-\d{2}$/),
+  billing_period: z.preprocess((val) => {
+    if (typeof val !== 'string') return val
+    const trimmed = val.trim()
+    // Aceitar YYYY-MM directamente
+    if (/^\d{4}-\d{2}$/.test(trimmed)) return trimmed
+    // Converter MM/YYYY → YYYY-MM
+    const mmyyyy = trimmed.match(/^(\d{2})\/(\d{4})$/)
+    if (mmyyyy) return `${mmyyyy[2]}-${mmyyyy[1]}`
+    // Converter YYYY/MM → YYYY-MM
+    const yyyymm = trimmed.match(/^(\d{4})\/(\d{2})$/)
+    if (yyyymm) return `${yyyymm[1]}-${yyyymm[2]}`
+    // Converter MM-YYYY → YYYY-MM
+    const mmyyyy2 = trimmed.match(/^(\d{2})-(\d{4})$/)
+    if (mmyyyy2) return `${mmyyyy2[2]}-${mmyyyy2[1]}`
+    return trimmed
+  }, z.string().regex(/^\d{4}-\d{2}$/).or(z.string().max(0))).default(''),
   due_date: z.string().min(1),
   total_amount: moneySchema.optional(),
   transactions: z.array(
@@ -54,8 +69,8 @@ const financialResponseSchema = z.object({
   ).default([]),
   payments: z.array(
     z.object({
-      date: z.string().min(1).optional(),
-      description: z.string().min(1).optional(),
+      date: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.string().min(1).optional()),
+      description: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.string().min(1).optional()),
       amount: moneySchema.optional(),
       source: z.string().optional(),
     })
@@ -166,9 +181,14 @@ function normalizeInstitutionKey(value: string): string {
   const mapping: Record<string, string> = {
     itau: 'itau',
     'itau unibanco': 'itau',
+    credicard: 'itau',
     'banco do brasil': 'bb',
     bb: 'bb',
+    ourocard: 'bb',
     bradesco: 'bradesco',
+    carrefour: 'carrefour',
+    'banco csf': 'carrefour',
+    'banco csf s.a.': 'carrefour',
     picpay: 'picpay',
     nubank: 'nubank',
     santander: 'santander',
@@ -184,7 +204,7 @@ function detectInstitutionHintFromAscii(asciiText: string): string | null {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .slice(0, 40)
+    .slice(0, 60)
 
   for (const line of topLines) {
     const normalized = line
@@ -192,9 +212,15 @@ function detectInstitutionHintFromAscii(asciiText: string): string | null {
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
 
-    if (/(?:banco do brasil|\bbb\b|pag\s*bb\b)/i.test(normalized)) return 'bb'
+    // OUROCARD é produto exclusivo do Banco do Brasil — prioridade máxima
+    if (/ourocard/i.test(normalized)) return 'bb'
+    if (/(?:banco do brasil|\bbb\b|pag\s*bb\b|app\s+bb\b)/i.test(normalized)) return 'bb'
+    // Credicard é emitida pelo Itaú
+    if (/credicard/i.test(normalized)) return 'itau'
     if (/(?:itau\s+unibanco|\bita[uú]\b)/i.test(normalized)) return 'itau'
     if (/bradesco/i.test(normalized)) return 'bradesco'
+    // Banco CSF S.A. é o emissor do Carrefour
+    if (/(?:carrefour|banco\s+csf)/i.test(normalized)) return 'carrefour'
     if (/picpay/i.test(normalized)) return 'picpay'
     if (/nubank/i.test(normalized)) return 'nubank'
     if (/santander/i.test(normalized)) return 'santander'
@@ -832,6 +858,8 @@ function buildFinancialExtractionPrompt(mode: FinancialPromptMode, institutionHi
     'Se a linha mostrar merchant em uma linha e a linha seguinte trouxer data, dolar e valor em reais, una os dois elementos no mesmo item com country="international".',
     'Classifique como fees linhas com IOF, juros, encargos, rotativo, tarifa, anuidade, câmbio ou diário rotativo.',
     'Classifique como installments linhas com parcelamento, parcela, financiamento, crédito parcelado, fin parc ou automático de fatura.',
+    'Inclua parcelas mesmo que a data seja de um mês diferente do billing_period — parcelas de compras anteriores aparecem na fatura com a data original da parcela.',
+    'Seções como "Nacionais em Reais (R$)", "Lançamentos", "Lançamentos Total parcelado" são seções de transações e devem ser extraídas.',
     'Se aparecer um bloco como "Operações de crédito contratados" ou uma linha como "FIN PARC AUTOM..." ou "PARCxx/yy", classifique como installments e nunca como transaction.',
     'Se a linha de installment mostrar algo como "10/24", "02/24" ou "(10/24)", preencha current=10 e total=24 usando esses números.',
     'Não herde current/total de outra linha próxima, como anuidade, juros, encargos ou lançamento financeiro diferente.',
@@ -861,12 +889,17 @@ function isSparseFinancialExtraction(
   parsed: FinancialResponse,
   asciiText: string,
 ): boolean {
-  const hasTabularSections = /transa[cç][oõ]es?\s+internacionais|transa[cç][oõ]es?\s+nacionais|compras parceladas\s*-\s*pr[óo]ximas faturas|opera[cç][oõ]es de cr[eé]dito contratados|pagamentos efetuados|lan[cç]amentos:\s*compras e saques/i.test(asciiText)
+  const hasTabularSections = /transa[cç][oõ]es?\s+internacionais|transa[cç][oõ]es?\s+nacionais|compras parceladas\s*-\s*pr[óo]ximas faturas|opera[cç][oõ]es de cr[eé]dito contratados|pagamentos efetuados|lan[cç]amentos:\s*compras e saques|nacionais\s+em\s+reais|lan[cç]amentos\s+total\s+parcelado/i.test(asciiText)
   const hasPurchaseLikeLines = asciiText
     .split(/\r?\n/)
     .map((line) => line.replace(/\s+/g, ' ').trim())
-    .some((line) => /\bR\$\s*[\d.,]+/.test(line) && !/\bPARCELA\b|\bPARC\s*\d{1,2}\/\d{1,2}\b/i.test(line))
-  return hasTabularSections && hasPurchaseLikeLines && parsed.transactions.length === 0
+    .some((line) =>
+      // Linha com R$ e sem padrão de parcela simples
+      (/\bR\$\s*[\d.,]+/.test(line) && !/\bPARCELA\b|\bPARC\s*\d{1,2}\/\d{1,2}\b/i.test(line))
+      // Ou linha no formato "DD/MM DESCRIÇÃO VALOR" sem R$ (formato Bradesco/Bradescard)
+      || /^\d{2}\/\d{2}\s+[A-ZÀ-Ü].{3,}\s+[\d.,]{3,}$/.test(line)
+    )
+  return hasTabularSections && hasPurchaseLikeLines && (parsed.transactions.length === 0 && parsed.installments.length === 0)
 }
 
 function hasInstallmentSignals(asciiText: string): boolean {
@@ -994,15 +1027,9 @@ export async function extractFinancialInvoiceWithAI(
   const fees: FinancialExtractionResult['fees'] = []
   const payments: FinancialExtractionResult['payments'] = []
 
-  const installmentSeen = new Set(
-    activeParsed.installments.map((item) => buildFinancialEntryKey({
-      date: item.date ? normalizeDate(item.date, normalizedBillingPeriod) || normalizeText(item.date) : undefined,
-      description: normalizeText(item.description),
-      amount: normalizeMoney(item.amount ?? 0),
-      current: item.current ?? null,
-      total: item.total ?? null,
-    })),
-  )
+  // installmentSeen: inicializado vazio — as chaves são adicionadas à medida que os itens são processados
+  // (não pré-popular com as chaves da IA, pois isso impediria a adição das installments ao array)
+  const installmentSeen = new Set<string>()
   const feeSeen = new Set(
     activeParsed.fees.map((item) => buildFinancialEntryKey({
       description: normalizeText(item.description),
@@ -1087,6 +1114,7 @@ export async function extractFinancialInvoiceWithAI(
     })
   }
 
+  // Processar installments da IA (activeParsed.installments) — fonte primária
   for (const item of activeParsed.installments) {
     const description = normalizeText(item.description)
     if (!description) {
