@@ -306,10 +306,10 @@ export function Budget() {
           : { direction: 'same' as const, label: 'Igual ao mês anterior' })
     : undefined
 
-  const categoryRows = result?.categoryBreakdown
+  const categoryRows = (result?.categoryBreakdown ?? [])
     .filter(c => c.amountMinor > 0)
     .sort((a, b) => b.pctOfIncome - a.pctOfIncome)
-    .slice(0, 8) ?? []
+    .slice(0, 8)
 
   const hasData = result && (consideredIncomeMinor > 0 || consideredExpenseMinor > 0)
 
@@ -374,11 +374,11 @@ export function Budget() {
             Importe uma fatura de cartão ou adicione transações para ver a avaliação do orçamento.
           </p>
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <Button variant="primary" onClick={() => window.location.href = '/invoices'}>
+            <Button variant="primary" onClick={() => window.location.href = '/invoices/upload'}>
               Importar fatura
             </Button>
-            <Button variant="secondary" onClick={() => window.location.href = '/transactions'}>
-              Ver transações
+            <Button variant="secondary" onClick={() => window.location.href = '/statements/upload'}>
+              Importar extrato
             </Button>
           </div>
         </Card>
@@ -535,13 +535,13 @@ export function Budget() {
           )}
 
           {/* Histórico comparativo */}
-          {result.historicalMonths.length > 0 && (
+          {(result.historicalMonths ?? []).length > 0 && (
             <Card>
               <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: '1rem', fontWeight: 600 }}>
                 Histórico
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(result.historicalMonths.length, 5)}, 1fr)`, gap: '0.75rem' }}>
-                {result.historicalMonths.slice(0, 5).map(h => {
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min((result.historicalMonths ?? []).length, 5)}, 1fr)`, gap: '0.75rem' }}>
+                {(result.historicalMonths ?? []).slice(0, 5).map(h => {
                   const balance = h.incomeMinor - h.expenseMinor
                   return (
                     <div key={h.month} style={{ background: '#0f1117', borderRadius: 8, padding: '0.75rem' }}>

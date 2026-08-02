@@ -397,7 +397,27 @@ router.post('/budget', async (req: Request, res: Response) => {
     .where(eq(accounts.userId, owner.id))
 
   if (userAccounts.length === 0) {
-    res.json({ error: 'Nenhuma conta encontrada' })
+    // Retornar payload válido com zeros em vez de { error } para não quebrar o frontend
+    const emptyAssessment = buildBudgetAutoAssessment({
+      month,
+      incomeMinor: 0, expenseMinor: 0, liabilityMinor: 0,
+      openDebtMinor: 0, installmentDebtMinor: 0,
+      projectedIncomeMinor: 0, projectedExpenseMinor: 0, projectedLiabilityMinor: 0,
+      consideredIncomeMinor: 0, consideredExpenseMinor: 0, consideredLiabilityMinor: 0,
+      totalCommittedMinor: 0, availableMinor: 0, commitmentPct: 0,
+      categoryBreakdown: [], historicalMonths: [],
+      usedProjectedIncome: false, usedProjectedExpense: false, usedProjectedLiability: false,
+    })
+    res.json({
+      month,
+      incomeMinor: 0, expenseMinor: 0, liabilityMinor: 0,
+      openDebtMinor: 0, installmentDebtMinor: 0,
+      projectedIncomeMinor: 0, projectedExpenseMinor: 0, projectedLiabilityMinor: 0,
+      consideredIncomeMinor: 0, consideredExpenseMinor: 0, consideredLiabilityMinor: 0,
+      totalCommittedMinor: 0, availableMinor: 0,
+      categoryBreakdown: [], historicalMonths: [], purchaseImpact: null,
+      ai: emptyAssessment,
+    })
     return
   }
 

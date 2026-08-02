@@ -286,10 +286,14 @@ function parseInstallmentMeta(description: string): {
   current?: number
   total?: number
 } {
-  const match = description.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\b/)
+  // Usar regex que rejeita matches seguidos de /AAAA (data completa DD/MM/AAAA)
+  // e que rejeita matches precedidos de /DD (parte de data DD/MM)
+  const match = description.match(/(?<!\d\/)\b(\d{1,2})\s*\/\s*(\d{1,2})\b(?!\/\d{2,4})(?!\s*\/)/)
   if (!match) return { description }
   const current = Number(match[1])
   const total = Number(match[2])
+  // Rejeitar se total for > 72 (impossível para parcelas) ou current > total
+  if (total > 72 || current > total) return { description }
   return {
     description: description.replace(match[0], ' ').replace(/\s+/g, ' ').trim(),
     current: Number.isFinite(current) ? current : undefined,
@@ -805,7 +809,7 @@ function looksLikeInstallmentEntry(description: string): boolean {
 }
 
 function looksLikePaymentEntry(description: string): boolean {
-  return /\b(?:PAGAMENTO|PAGAMENTOS|PAGAMENTO\s+EFETUADO|PIX|TRANSFER[ÊE]NCIA|TRANSFERENCIA|ESTORNO|REEMBOLSO|RESTITUI[ÇC][AÃ]O)\b/.test(description)
+  return /\b(?:PAGAMENTO|PAGAMENTOS|PAGAMENTO\s+EFETUADO|PAGAMENTO\s+EFETUADO\s+EM|PIX|TRANSFER[ÊE]NCIA|TRANSFERENCIA|ESTORNO|REEMBOLSO|RESTITUI[ÇC][AÃ]O)\b/.test(description)
 }
 
 function looksLikeInvoiceTotalEntry(description: string): boolean {
@@ -1061,6 +1065,10 @@ export async function extractFinancialInvoiceWithAI(
       continue
     }
     const classification = normalizeForClassification(description)
+    if (looksLikeInvoiceTotalEntry(classification)) {
+      warnings.push(`transaction descartada (total da fatura): ${description}`)
+      continue
+    }
     if (looksLikePaymentEntry(classification)) {
       warnings.push(`transaction reclassificada como payment: ${description}`)
       const paymentEntry = {

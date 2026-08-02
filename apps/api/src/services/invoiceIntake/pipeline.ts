@@ -346,27 +346,43 @@ function mergeInstallmentHints(
   }
 }
 
-function removeInvalidInstallments(extraction: FinancialExtractionResult): FinancialExtractionResult {
-  const installments = extraction.installments.filter((item) => {
-    const description = item.description
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/\s+/g, ' ')
-      .toLowerCase()
+/** Padrões de descrição que nunca devem aparecer como installments ou transactions */
+function isInvoiceSummaryNoise(description: string): boolean {
+  const d = description
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+  return d.includes('pagamento efetuado')
+    || d.includes('total desta fatura')
+    || d.includes('total da fatura')
+    || /^vencimento\s*:/.test(d)
+    || /\btotal\s+da\s+fatura\b/.test(d)
+    || /\bpagamento\s+efetuado\s+em\b/.test(d)
+}
 
-    return !description.includes('pagamento efetuado')
-      && !description.includes('total desta fatura')
-      && !description.includes('total da fatura')
-  })
-  if (installments.length === extraction.installments.length) return extraction
+function removeInvalidInstallments(extraction: FinancialExtractionResult): FinancialExtractionResult {
+  const installments = extraction.installments.filter((item) => !isInvoiceSummaryNoise(item.description))
+  const transactions = extraction.transactions.filter((item) => !isInvoiceSummaryNoise(item.description))
+
+  const removedInstallments = extraction.installments.length - installments.length
+  const removedTransactions = extraction.transactions.length - transactions.length
+
+  if (removedInstallments === 0 && removedTransactions === 0) return extraction
+
+  const addedWarnings: string[] = []
+  if (removedInstallments > 0) {
+    addedWarnings.push(`${removedInstallments} resumo(s) de pagamento/fatura removido(s) dos parcelamentos.`)
+  }
+  if (removedTransactions > 0) {
+    addedWarnings.push(`${removedTransactions} resumo(s) de pagamento/fatura removido(s) das transações.`)
+  }
 
   return {
     ...extraction,
     installments,
-    warnings: [
-      ...extraction.warnings,
-      `${extraction.installments.length - installments.length} resumo(s) de pagamento/fatura removido(s) dos parcelamentos.`,
-    ],
+    transactions,
+    warnings: [...extraction.warnings, ...addedWarnings],
   }
 }
 

@@ -122,6 +122,50 @@ describe('runInvoiceAsciiIngestionPipeline', () => {
     })
   })
 
+  it('remove total da fatura quando a IA o coloca em transactions', async () => {
+    mockExtractFinancialInvoiceWithAI.mockResolvedValue({
+      document_type: 'fatura_cartao', institution: 'Itau', card_last4: '9970',
+      billing_period: '2026-07', due_date: '2026-08-06', total_amount: 1879.67,
+      transactions: [
+        { date: '2026-08-06', description: 'Vencimento: 06/08/2026 = Total desta fatura', amount: 1879.67 },
+        { date: '2026-07-15', description: 'SUPERMERCADO EXTRA', amount: 150.00 },
+      ],
+      installments: [], fees: [], payments: [], warnings: [],
+    })
+
+    const result = await runInvoiceAsciiIngestionPipeline(Buffer.from('pdf'), {
+      filename: 'fatura-itau-agosto.pdf',
+    })
+
+    // O total da fatura não deve aparecer como transação
+    expect(result.payload.transactions).toHaveLength(1)
+    expect(result.payload.transactions[0].description).toBe('SUPERMERCADO EXTRA')
+    // O warning deve ser adicionado
+    expect(result.payload.analysis?.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining('resumo(s) de pagamento/fatura removido(s) das transações')])
+    )
+  })
+
+  it('remove pagamento efetuado em DD/MM/AAAA quando a IA o coloca em transactions', async () => {
+    mockExtractFinancialInvoiceWithAI.mockResolvedValue({
+      document_type: 'fatura_cartao', institution: 'Itau', card_last4: '9970',
+      billing_period: '2026-07', due_date: '2026-08-06', total_amount: 500.00,
+      transactions: [
+        { date: '2026-07-07', description: 'Pagamento efetuado em 07/07/2026', amount: 2268.85 },
+        { date: '2026-07-20', description: 'NETFLIX', amount: 55.90 },
+      ],
+      installments: [], fees: [], payments: [], warnings: [],
+    })
+
+    const result = await runInvoiceAsciiIngestionPipeline(Buffer.from('pdf'), {
+      filename: 'fatura-itau-agosto.pdf',
+    })
+
+    // O pagamento efetuado não deve aparecer como transação
+    expect(result.payload.transactions).toHaveLength(1)
+    expect(result.payload.transactions[0].description).toBe('NETFLIX')
+  })
+
   it('não interpreta datas completas de pagamentos e totais como parcelas', async () => {
     const ascii = [
       '[REDACTED] Pagamento efetuado em 07/07/2026 R$ 2.268,85',
