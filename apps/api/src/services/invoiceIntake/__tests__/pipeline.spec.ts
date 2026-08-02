@@ -121,4 +121,41 @@ describe('runInvoiceAsciiIngestionPipeline', () => {
       total: 10,
     })
   })
+
+  it('não interpreta datas completas de pagamentos e totais como parcelas', async () => {
+    const ascii = [
+      '[REDACTED] Pagamento efetuado em 07/07/2026 R$ 2.268,85',
+      'Vencimento: 06/08/2026 = Total desta fatura R$ 1.879,67',
+      'Contratação em 08/12/2025 - Parcela 7/12 R$ 3,77',
+    ].join('\n')
+
+    mockExtractAsciiStructuralTextFromPdf.mockResolvedValue({ asciiText: ascii })
+    mockSanitizeInvoiceAsciiDeterministically.mockReturnValue({ source_lines: 3, local_redactions: 0, sanitized_ascii: ascii })
+    mockApplyPiiRedactionsToAscii.mockReturnValue({ appliedCount: 0, sanitizedAscii: ascii })
+    mockSanitizeSensitiveText.mockReturnValue({ source_lines: 3, local_redactions: 0, sanitizedText: ascii })
+    mockExtractFinancialInvoiceWithAI.mockResolvedValue({
+      document_type: 'fatura_cartao', institution: 'Itau', card_last4: '9970',
+      billing_period: '2026-07', due_date: '2026-08-06', total_amount: 1879.67,
+      transactions: [],
+      installments: [
+        { description: '[REDACTED] Pagamento efetuado em 07/07/2026', amount: 2268.85, current: 7, total: 7 },
+        { description: 'Vencimento: 06/08/2026 = Total desta fatura', amount: 1879.67, current: 6, total: 8 },
+        { description: 'FINANCIAM FAT', amount: 3.77, current: 7, total: 12 },
+      ],
+      fees: [], payments: [], warnings: [],
+    })
+
+    const result = await runInvoiceAsciiIngestionPipeline(Buffer.from('pdf'), {
+      filename: 'fatura-itau-agosto.pdf',
+    })
+
+    expect(result.payload.analysis?.installments).toEqual([
+      expect.objectContaining({
+        description: 'FINANCIAM FAT',
+        amount: 3.77,
+        current: 7,
+        total: 12,
+      }),
+    ])
+  })
 })

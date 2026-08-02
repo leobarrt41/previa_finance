@@ -42,8 +42,37 @@ import { InvoicePaymentSelector, buildInvoicePaymentOptions } from '../component
 // ---------------------------------------------------------------------------
 type ParsedTransaction = InvoiceTransaction
 type ParsedInstallment = NonNullable<InvoiceParseResult['analysis']>['installments'][number]
+type InstallmentCategoryMap = Record<string, string | null>
 
 type UploadStep = 'select' | 'parsing' | 'preview' | 'importing' | 'done' | 'error'
+
+function isInvalidInstallmentDescription(value: string): boolean {
+  const description = value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+
+  return description.includes('pagamento efetuado')
+    || description.includes('total desta fatura')
+    || description.includes('total da fatura')
+}
+
+function sanitizeInvoiceAnalysis(
+  analysis: InvoiceParseResult['analysis'] | null,
+): InvoiceParseResult['analysis'] | null {
+  if (!analysis) return null
+  return {
+    ...analysis,
+    installments: analysis.installments.filter(
+      (item) => !isInvalidInstallmentDescription(item.description),
+    ),
+  }
+}
+
+function installmentKey(item: ParsedInstallment, index: number): string {
+  return [item.description, item.date ?? '', item.current ?? '', item.total ?? '', item.amount, index].join('|')
+}
 
 function getInitialDebugEnabled(): boolean {
   if (typeof window === 'undefined') return false
@@ -282,7 +311,17 @@ function InvoiceDebugPanel({ debug }: { debug: InvoiceParseDebug }) {
   )
 }
 
-function InvoiceInstallmentsPanel({ installments }: { installments: ParsedInstallment[] }) {
+function InvoiceInstallmentsPanel({
+  installments,
+  categoryOptions,
+  categoryIds,
+  onCategoryChange,
+}: {
+  installments: ParsedInstallment[]
+  categoryOptions: CategoryOption[]
+  categoryIds: InstallmentCategoryMap
+  onCategoryChange: (key: string, categoryId: string | null) => void
+}) {
   if (installments.length === 0) return null
 
   return (
@@ -308,6 +347,7 @@ function InvoiceInstallmentsPanel({ installments }: { installments: ParsedInstal
               <th style={{ padding: '0.5rem', width: 100, textAlign: 'right' }}>Valor</th>
               <th style={{ padding: '0.5rem', width: 104, textAlign: 'left' }}>Data</th>
               <th style={{ padding: '0.5rem', width: 100, textAlign: 'left' }}>Parcela</th>
+              <th style={{ padding: '0.5rem', width: 240, textAlign: 'left' }}>Categoria</th>
             </tr>
           </thead>
           <tbody>
@@ -346,6 +386,27 @@ function InvoiceInstallmentsPanel({ installments }: { installments: ParsedInstal
                 </td>
                 <td style={{ padding: '0.55rem 0.5rem', color: '#cbd5e1' }}>
                   {item.current && item.total ? `${item.current}/${item.total}` : '—'}
+                </td>
+                <td style={{ padding: '0.45rem 0.5rem' }}>
+                  <select
+                    value={categoryIds[installmentKey(item, index)] ?? ''}
+                    onChange={(event) => onCategoryChange(installmentKey(item, index), event.target.value || null)}
+                    style={{
+                      background: '#0f1117',
+                      border: `1px solid ${categoryIds[installmentKey(item, index)] ? '#2a2f45' : '#f87171'}`,
+                      borderRadius: 6,
+                      padding: '3px 6px',
+                      color: '#e5e7eb',
+                      fontSize: '0.78rem',
+                      width: '100%',
+                      fontFamily: 'monospace',
+                    }}
+                  >
+                    <option value="">— sem categoria —</option>
+                    {categoryOptions.map((option) => (
+                      <option key={option.id} value={option.id} disabled={option.disabled}>{option.label}</option>
+                    ))}
+                  </select>
                 </td>
               </tr>
             ))}
@@ -394,6 +455,7 @@ export function InvoiceUpload() {
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number } | null>(null)
   const [invoiceSummary, setInvoiceSummary] = useState<InvoiceParseResult['summary'] | null>(null)
   const [invoiceAnalysis, setInvoiceAnalysis] = useState<InvoiceParseResult['analysis'] | null>(null)
+  const [installmentCategoryIds, setInstallmentCategoryIds] = useState<InstallmentCategoryMap>({})
   const [invoiceBank, setInvoiceBank] = useState<string | null>(null)
   const [openInvoices, setOpenInvoices] = useState<OpenCardInvoiceSummary[]>([])
   const [parseDebug, setParseDebug] = useState<InvoiceParseDebug | null>(null)
@@ -435,22 +497,43 @@ export function InvoiceUpload() {
       && error.message.toLowerCase().includes('pdf protegido por senha')
   }
 
-  async function suggestCategoriesWithAI(parsedTransactions: ParsedTransaction[]): Promise<ParsedTransaction[]> {
-    if (expenseCategories.length === 0) return parsedTransactions
+  async function suggestCategoriesWithAI(
+    parsedTransactions: ParsedTransaction[],
+    parsedInstallments: ParsedInstallment[],
+    availableExpenseCategories: Category[] = expenseCategories,
+  ): Promise<{ transactions: ParsedTransaction[]; installmentCategories: InstallmentCategoryMap }> {
+    if (availableExpenseCategories.length === 0) {
+      return { transactions: parsedTransactions, installmentCategories: {} }
+    }
 
     const pending = parsedTransactions.filter((t) => t.include && !t.categoryId)
-    if (pending.length === 0) return parsedTransactions
+    const installmentCandidates = parsedInstallments.map((item, index) => ({
+      id: `invoice-installment-${index}`,
+      key: installmentKey(item, index),
+      item,
+    }))
+    if (pending.length === 0 && installmentCandidates.length === 0) {
+      return { transactions: parsedTransactions, installmentCategories: {} }
+    }
 
     try {
       const response = await api.invoices.classify({
-        transactions: pending.map((t) => ({
-          id: t.id,
-          description: t.description,
-          amountMinor: t.amountMinor,
-          country: t.country,
-          installment: t.installment,
-        })),
-        categories: expenseCategories.map((c) => ({
+        transactions: [
+          ...pending.map((t) => ({
+            id: t.id,
+            description: t.description,
+            amountMinor: t.amountMinor,
+            country: t.country,
+            installment: t.installment,
+          })),
+          ...installmentCandidates.map(({ id, item }) => ({
+            id,
+            description: item.description,
+            amountMinor: Math.round(item.amount * 100),
+            installment: item.current && item.total ? `${item.current}/${item.total}` : undefined,
+          })),
+        ],
+        categories: availableExpenseCategories.map((c) => ({
           id: c.id,
           name: c.name,
           slug: c.slug,
@@ -460,20 +543,26 @@ export function InvoiceUpload() {
       })
 
       const suggestions = response.suggestions ?? {}
-      if (Object.keys(suggestions).length === 0) return parsedTransactions
+      const installmentCategories = Object.fromEntries(
+        installmentCandidates.map(({ id, key }) => {
+          const suggestion = suggestions[id]
+          return [key, suggestion ? (suggestion.subcategoryId ?? suggestion.categoryId) : null]
+        }),
+      )
 
-      return parsedTransactions.map((t) => {
-        const suggestion = suggestions[t.id]
-        if (!suggestion) return t
-        return {
-          ...t,
-          // card_transactions has one categoryId field today.
-          // Persist subcategory when available; fallback to parent category.
-          categoryId: suggestion.subcategoryId ?? suggestion.categoryId,
-        }
-      })
+      return {
+        transactions: parsedTransactions.map((t) => {
+          const suggestion = suggestions[t.id]
+          if (!suggestion) return t
+          return {
+            ...t,
+            categoryId: suggestion.subcategoryId ?? suggestion.categoryId,
+          }
+        }),
+        installmentCategories,
+      }
     } catch {
-      return parsedTransactions
+      return { transactions: parsedTransactions, installmentCategories: {} }
     }
   }
 
@@ -487,12 +576,29 @@ export function InvoiceUpload() {
       if (result.summary.dueMonth) setDueMonth(result.summary.dueMonth)
       if (result.summary.invoiceMonth) setInvoiceMonth(result.summary.invoiceMonth)
       setInvoiceSummary(result.summary)
-      setInvoiceAnalysis(result.analysis ?? null)
+      const sanitizedAnalysis = sanitizeInvoiceAnalysis(result.analysis ?? null)
+      setInvoiceAnalysis(sanitizedAnalysis)
       setInvoiceBank(result.bank)
       setParseDebug(result.debug ?? null)
 
-      const suggestedTransactions = await suggestCategoriesWithAI(result.transactions)
-      setTransactions(suggestedTransactions)
+      let availableExpenseCategories = expenseCategories
+      if (availableExpenseCategories.length === 0) {
+        try {
+          const loadedCategories = await api.categories.list()
+          setCategories(loadedCategories)
+          availableExpenseCategories = loadedCategories.filter((category) => category.type === 'expense')
+        } catch {
+          // A categorização continua manual quando as categorias não puderem ser carregadas.
+        }
+      }
+
+      const categorized = await suggestCategoriesWithAI(
+        result.transactions,
+        sanitizedAnalysis?.installments ?? [],
+        availableExpenseCategories,
+      )
+      setTransactions(categorized.transactions)
+      setInstallmentCategoryIds(categorized.installmentCategories)
 
       setAwaitingPassword(false)
       setStep('preview')
@@ -547,6 +653,9 @@ export function InvoiceUpload() {
 
   const included = transactions.filter((t) => t.include)
   const uncategorized = included.filter((t) => !t.categoryId)
+  const uncategorizedInstallments = (invoiceAnalysis?.installments ?? []).filter(
+    (item, index) => !installmentCategoryIds[installmentKey(item, index)],
+  )
   const total = included.reduce((sum, t) => sum + t.amountMinor, 0)
 
   async function handleImport() {
@@ -564,13 +673,13 @@ export function InvoiceUpload() {
           installment,
           settlesInvoiceId,
         })),
-        installments: invoiceAnalysis?.installments.map((item) => ({
+        installments: invoiceAnalysis?.installments.map((item, index) => ({
           date: item.date ?? invoiceSummary?.dueDate ?? `${invoiceMonth}-01`,
           description: item.description,
           amountMinor: Math.round(item.amount * 100),
           competencyMonth: toCompetencyMonth(item.date?.slice(0, 7), item.date ?? invoiceSummary?.dueDate ?? `${invoiceMonth}-01`),
           installment: item.current && item.total ? `${item.current}/${item.total}` : undefined,
-          categoryId: null,
+          categoryId: installmentCategoryIds[installmentKey(item, index)] ?? null,
           isPrepayment: item.isPrepayment ?? false,
         })) ?? [],
         invoiceMonth,
@@ -620,6 +729,7 @@ export function InvoiceUpload() {
     setImportResult(null)
     setInvoiceSummary(null)
     setInvoiceAnalysis(null)
+    setInstallmentCategoryIds({})
     setInvoiceBank(null)
     setParseDebug(null)
   }
@@ -842,7 +952,21 @@ export function InvoiceUpload() {
           )}
 
           {invoiceAnalysis?.installments && invoiceAnalysis.installments.length > 0 && (
-            <InvoiceInstallmentsPanel installments={invoiceAnalysis.installments} />
+            <InvoiceInstallmentsPanel
+              installments={invoiceAnalysis.installments}
+              categoryOptions={categoryOptions}
+              categoryIds={installmentCategoryIds}
+              onCategoryChange={(key, categoryId) => setInstallmentCategoryIds((current) => ({
+                ...current,
+                [key]: categoryId,
+              }))}
+            />
+          )}
+
+          {uncategorizedInstallments.length > 0 && (
+            <Alert variant="warning" style={{ marginBottom: '1rem' }}>
+              <strong>{uncategorizedInstallments.length} parcelamento(s)</strong> sem categoria. Categorize para melhorar os relatórios por categoria.
+            </Alert>
           )}
 
           {/* Warnings */}

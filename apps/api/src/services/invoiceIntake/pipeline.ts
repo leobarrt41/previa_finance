@@ -174,7 +174,13 @@ function extractInstallmentHintsFromAscii(asciiText: string): InstallmentHint[] 
       const descriptionWithInstallment = rest.slice(0, amountIndex).replace(/\s+/g, ' ').trim()
       if (!descriptionWithInstallment) continue
 
-      const installmentMatch = descriptionWithInstallment.match(/\(?(\d{1,2})\s*\/\s*(\d{1,2})\)?/)
+      // A data completa (por exemplo, 07/07/2026) não representa uma parcela.
+      // Também evitamos iniciar a captura no segundo algarismo de uma data como
+      // 08/12/2025. Quando a linha contém data e "Parcela 7/12", somente 7/12
+      // deve ser considerado.
+      const installmentMatch = descriptionWithInstallment.match(
+        /(?<![\d/])\(?(\d{1,2})\s*\/\s*(\d{1,2})\)?(?!\s*\/\s*\d{2,4})(?!\d)/,
+      )
       if (!installmentMatch) continue
 
       const description = descriptionWithInstallment
@@ -337,6 +343,30 @@ function mergeInstallmentHints(
     ...extraction,
     installments,
     warnings,
+  }
+}
+
+function removeInvalidInstallments(extraction: FinancialExtractionResult): FinancialExtractionResult {
+  const installments = extraction.installments.filter((item) => {
+    const description = item.description
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .toLowerCase()
+
+    return !description.includes('pagamento efetuado')
+      && !description.includes('total desta fatura')
+      && !description.includes('total da fatura')
+  })
+  if (installments.length === extraction.installments.length) return extraction
+
+  return {
+    ...extraction,
+    installments,
+    warnings: [
+      ...extraction.warnings,
+      `${extraction.installments.length - installments.length} resumo(s) de pagamento/fatura removido(s) dos parcelamentos.`,
+    ],
   }
 }
 
@@ -578,7 +608,7 @@ export async function runInvoiceAsciiIngestionPipeline(
     filename: meta.filename,
     cardLast4Hint,
   })
-  const extraction = extractedFinancial
+  const extraction = removeInvalidInstallments(extractedFinancial)
   const cardLast4 =
     extraction.card_last4
     || cardLast4Hint

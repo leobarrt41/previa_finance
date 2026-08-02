@@ -808,6 +808,10 @@ function looksLikePaymentEntry(description: string): boolean {
   return /\b(?:PAGAMENTO|PAGAMENTOS|PAGAMENTO\s+EFETUADO|PIX|TRANSFER[ÊE]NCIA|TRANSFERENCIA|ESTORNO|REEMBOLSO|RESTITUI[ÇC][AÃ]O)\b/.test(description)
 }
 
+function looksLikeInvoiceTotalEntry(description: string): boolean {
+  return /\bTOTAL\s+(?:DESTA|DA)\s+FATURA\b/i.test(description)
+}
+
 function buildFinancialEntryKey(input: {
   date?: string
   description: string
@@ -1118,6 +1122,11 @@ export async function extractFinancialInvoiceWithAI(
   for (const item of activeParsed.installments) {
     const description = normalizeText(item.description)
     if (!description) {
+      continue
+    }
+    const classification = normalizeForClassification(description)
+    if (looksLikePaymentEntry(classification) || looksLikeInvoiceTotalEntry(classification)) {
+      warnings.push(`resumo removido de installments: ${description}`)
       continue
     }
     const installmentMeta = parseInstallmentMeta(description)

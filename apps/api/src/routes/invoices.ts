@@ -1109,13 +1109,77 @@ router.post('/classify', async (req: Request, res: Response, next: NextFunction)
   try {
     const body = classifyBodySchema.parse(req.body)
 
-    // Feature is optional: when no key is configured, keep manual flow untouched.
-    if (!config.ai.apiKey) {
-      return res.json({ suggestions: {}, enabled: false })
+    const owner = await resolveOwnerId(req.authUser!.clerkUserId)
+    const categoryById = new Map(body.categories.map((category) => [category.id, category]))
+    const normalizedByTransactionId = new Map(
+      body.transactions.map((transaction) => [transaction.id, normalizeDescription(transaction.description)]),
+    )
+    const normalizedDescriptions = [...new Set(normalizedByTransactionId.values())].filter(Boolean)
+    const historyByDescription = new Map<string, { categoryId: string; subcategoryId: string | null }>()
+
+    if (normalizedDescriptions.length > 0) {
+      const historicTransactions = await getDatabase()
+        .select({
+          normalizedDescription: cardTransactions.normalizedDescription,
+          categoryId: cardTransactions.categoryId,
+        })
+        .from(cardTransactions)
+        .where(and(
+          eq(cardTransactions.userId, owner.id),
+          inArray(cardTransactions.normalizedDescription, normalizedDescriptions),
+        ))
+        .orderBy(desc(cardTransactions.id))
+        .limit(500)
+
+      for (const historic of historicTransactions) {
+        const normalizedDescription = historic.normalizedDescription ?? ''
+        if (!normalizedDescription || historyByDescription.has(normalizedDescription) || !historic.categoryId) continue
+
+        const category = categoryById.get(historic.categoryId)
+        if (!category || category.type !== 'expense') continue
+        historyByDescription.set(normalizedDescription, category.parentId
+          ? { categoryId: category.parentId, subcategoryId: category.id }
+          : { categoryId: category.id, subcategoryId: null })
+      }
     }
 
-    const suggestions = await classifyTransactionsWithAI(body.transactions, body.categories)
-    return res.json({ suggestions, enabled: true })
+    const suggestions: Record<string, { categoryId: string; subcategoryId: string | null }> = {}
+    const unresolvedByDescription = new Map<string, typeof body.transactions[number]>()
+    for (const transaction of body.transactions) {
+      const normalizedDescription = normalizedByTransactionId.get(transaction.id) ?? ''
+      const historical = historyByDescription.get(normalizedDescription)
+      if (historical) {
+        suggestions[transaction.id] = historical
+      } else if (normalizedDescription && !unresolvedByDescription.has(normalizedDescription)) {
+        unresolvedByDescription.set(normalizedDescription, transaction)
+      }
+    }
+
+    if (config.ai.apiKey && unresolvedByDescription.size > 0) {
+      try {
+        const uniqueTransactions = [...unresolvedByDescription.values()]
+        const aiSuggestions = await classifyTransactionsWithAI(uniqueTransactions, body.categories)
+        for (const transaction of body.transactions) {
+          if (suggestions[transaction.id]) continue
+          const normalizedDescription = normalizedByTransactionId.get(transaction.id) ?? ''
+          const representative = unresolvedByDescription.get(normalizedDescription)
+          const suggestion = representative ? aiSuggestions[representative.id] : undefined
+          if (suggestion) suggestions[transaction.id] = suggestion
+        }
+      } catch (error) {
+        console.warn('[invoices/classify] AI failed; returning history matches:', error)
+      }
+    }
+
+    return res.json({
+      suggestions,
+      enabled: Boolean(config.ai.apiKey),
+      historyMatches: body.transactions.filter((transaction) => {
+        const normalizedDescription = normalizedByTransactionId.get(transaction.id) ?? ''
+        return historyByDescription.has(normalizedDescription)
+      }).length,
+      aiCandidates: unresolvedByDescription.size,
+    })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return next(createError('Payload inválido para classificação de categorias.', 400))
