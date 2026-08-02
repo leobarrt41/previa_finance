@@ -211,16 +211,16 @@ async function buildSpendingOverview(
   ownerId: number,
   month: string,
 ) {
-  const categoryRows = await db
+    const categoryRows = await db
     .select({
       id: categories.id,
       name: categories.name,
       parentId: categories.parentId,
       type: categories.type,
+      isNonConsumptionExpense: categories.isNonConsumptionExpense,
     })
     .from(categories)
     .where(eq(categories.type, 'expense'))
-
   const categoryById = new Map<string, { id: string; name: string; parentId: string | null }>()
   for (const row of categoryRows) {
     categoryById.set(row.id, {
@@ -229,9 +229,9 @@ async function buildSpendingOverview(
       parentId: row.parentId ?? null,
     })
   }
-
+  // Excluir categorias de não-consumo (ex: Pagamento de Fatura) dos gráficos de gastos
   const rootCategoryIds = categoryRows
-    .filter((row) => !row.parentId)
+    .filter((row) => !row.parentId && !row.isNonConsumptionExpense)
     .map((row) => row.id)
 
   const rootOf = (categoryId: string | null | undefined): string | null => {

@@ -11,9 +11,10 @@ type CatDef = {
   id: string;
   name: string;
   slug: string;
-  type: "expense" | "income";
+  type: "expense" | "income" | "transfer";
   sortOrder: number;
   parentId?: string;
+  isNonConsumptionExpense?: boolean;
 };
 
 async function main() {
@@ -29,12 +30,21 @@ async function main() {
       });
 
   try {
+    // Garantir que a coluna is_non_consumption_expense existe (idempotente)
+    await (pool as any).execute(`
+      ALTER TABLE categories
+      ADD COLUMN IF NOT EXISTS is_non_consumption_expense BOOLEAN NOT NULL DEFAULT FALSE
+    `).catch(() => {
+      // MySQL < 8.0 não suporta ADD COLUMN IF NOT EXISTS — ignorar erro
+    });
+
     const cats: CatDef[] = buildSystemCategoryTaxonomy();
 
     // Insert with ON DUPLICATE KEY UPDATE for idempotency
     const insertSql = `
-      INSERT INTO categories (id, name, slug, type, parent_id, is_system, sort_order, external_owner_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 1, ?, NULL, NOW(), NOW())
+      INSERT INTO categories
+        (id, name, slug, type, parent_id, is_system, sort_order, is_non_consumption_expense, external_owner_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?, NULL, NOW(), NOW())
       ON DUPLICATE KEY UPDATE
         name = VALUES(name),
         slug = VALUES(slug),
@@ -42,17 +52,26 @@ async function main() {
         parent_id = VALUES(parent_id),
         is_system = VALUES(is_system),
         sort_order = VALUES(sort_order),
+        is_non_consumption_expense = VALUES(is_non_consumption_expense),
         external_owner_id = VALUES(external_owner_id),
         updated_at = NOW();
     `;
 
     for (const c of cats) {
-      const params = [c.id, c.name, c.slug, c.type, c.parentId ?? null, c.sortOrder];
+      const params = [
+        c.id,
+        c.name,
+        c.slug,
+        c.type,
+        c.parentId ?? null,
+        c.sortOrder,
+        c.isNonConsumptionExpense ? 1 : 0,
+      ];
       await (pool as any).execute(insertSql, params);
       console.log("Upserted category:", c.id, c.name);
     }
 
-    console.log("Seeding completed.");
+    console.log(`Seeding completed. ${cats.length} categories upserted.`);
   } finally {
     await pool.end();
   }

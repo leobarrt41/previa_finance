@@ -29,6 +29,14 @@ export const categories = mysqlTable(
     isSystem: boolean("is_system").notNull().default(true),
     sortOrder: int("sort_order").notNull().default(0),
 
+    /**
+     * Quando true, esta categoria representa um movimento financeiro que não é
+     * gasto de consumo (ex: pagamento de fatura, transferência).
+     * Deve ser excluída dos relatórios de gastos por categoria mas incluída
+     * no fluxo de caixa.
+     */
+    isNonConsumptionExpense: boolean("is_non_consumption_expense").notNull().default(false),
+
     externalOwnerId: varchar("external_owner_id", { length: 255 }),
 
     createdAt: timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
