@@ -35,15 +35,6 @@ importers:
       '@previa/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@previa/parser-bb':
-        specifier: workspace:*
-        version: link:../../packages/parsers/bb
-      '@previa/parser-bradesco':
-        specifier: workspace:*
-        version: link:../../packages/parsers/bradesco
-      '@previa/parser-itau':
-        specifier: workspace:*
-        version: link:../../packages/parsers/itau
       '@types/multer':
         specifier: ^2.1.0
         version: 2.1.0

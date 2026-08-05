@@ -12,6 +12,7 @@
  * simula o preview com dados de exemplo para permitir testar o fluxo.
  */
 import { useState, useRef, useMemo, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import {
   api,
   formatBRL,
@@ -220,21 +221,11 @@ function TransactionPreviewRow({
         />
       </td>
       <td style={{ padding: '0.45rem 0.5rem' }}>
-        <select
+        <SearchableCategorySelect
           value={tx.categoryId ?? ''}
-          onChange={(e) => onChange(tx.id, { categoryId: e.target.value || null })}
-          style={{
-            background: '#0f1117', border: `1px solid ${tx.categoryId ? '#2a2f45' : '#f87171'}`,
-            borderRadius: 6, padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', width: '100%',
-            minWidth: 0, maxWidth: 'none',
-            fontFamily: 'monospace',
-          }}
-        >
-          <option value="">— sem categoria —</option>
-          {categoryOptions.map((opt) => (
-            <option key={opt.id} value={opt.id} disabled={opt.disabled}>{opt.label}</option>
-          ))}
-        </select>
+          options={categoryOptions}
+          onChange={(categoryId) => onChange(tx.id, { categoryId })}
+        />
       </td>
       <td style={{ padding: '0.45rem 0.5rem' }}>
         {showInvoiceSelector ? (
@@ -249,6 +240,221 @@ function TransactionPreviewRow({
         )}
       </td>
     </tr>
+  )
+}
+
+function SearchableCategorySelect({
+  value,
+  options,
+  onChange,
+}: {
+  value: string
+  options: CategoryOption[]
+  onChange: (categoryId: string | null) => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const selectedOption = options.find((option) => option.id === value)
+  const cleanLabel = (label: string) => label.replace(/^\s*└\s*/, '').trim()
+  const [query, setQuery] = useState(selectedOption ? cleanLabel(selectedOption.label) : '')
+  const [open, setOpen] = useState(false)
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, width: 320 })
+
+  const groups = useMemo(() => {
+    const result: Array<{ category: CategoryOption | null; subcategories: CategoryOption[] }> = []
+    let current: { category: CategoryOption | null; subcategories: CategoryOption[] } | null = null
+
+    for (const option of options) {
+      if (option.disabled) {
+        current = { category: option, subcategories: [] }
+        result.push(current)
+        continue
+      }
+
+      if (!current) {
+        current = { category: null, subcategories: [] }
+        result.push(current)
+      }
+      current.subcategories.push(option)
+    }
+
+    return result
+  }, [options])
+
+  const visibleGroups = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase('pt-BR')
+    if (!normalizedQuery) return groups
+
+    return groups.flatMap((group) => {
+      const categoryMatches = group.category
+        ? cleanLabel(group.category.label).toLocaleLowerCase('pt-BR').includes(normalizedQuery)
+        : false
+      const subcategories = categoryMatches
+        ? group.subcategories
+        : group.subcategories.filter((option) =>
+            cleanLabel(option.label).toLocaleLowerCase('pt-BR').includes(normalizedQuery),
+          )
+      return categoryMatches || subcategories.length > 0 ? [{ ...group, subcategories }] : []
+    })
+  }, [groups, query])
+
+  useEffect(() => {
+    setQuery(selectedOption ? cleanLabel(selectedOption.label) : '')
+  }, [selectedOption?.id, selectedOption?.label])
+
+  useEffect(() => {
+    if (!open) return
+
+    const updatePosition = () => {
+      const rect = inputRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const width = Math.max(320, rect.width)
+      setMenuPosition({
+        top: rect.bottom + 6,
+        left: Math.min(rect.left, Math.max(8, window.innerWidth - width - 8)),
+        width,
+      })
+    }
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (!inputRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false)
+    }
+
+    updatePosition()
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+      document.removeEventListener('mousedown', closeOnOutsideClick)
+    }
+  }, [open])
+
+  const firstVisibleSubcategory = visibleGroups.flatMap((group) => group.subcategories)[0]
+
+  const isPending = !value
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value)
+          setOpen(true)
+          if (!event.target.value.trim()) onChange(null)
+        }}
+        onFocus={(event) => {
+          event.currentTarget.select()
+          setOpen(true)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setOpen(false)
+          if (event.key === 'Enter' && firstVisibleSubcategory) {
+            event.preventDefault()
+            onChange(firstVisibleSubcategory.id)
+            setQuery(cleanLabel(firstVisibleSubcategory.label))
+            setOpen(false)
+          }
+        }}
+        placeholder="🔎 Pesquisar subcategoria..."
+        aria-label="Pesquisar e selecionar subcategoria"
+        aria-expanded={open}
+        title={isPending ? 'Categoria obrigatória: pesquise e selecione uma subcategoria' : selectedOption?.label}
+        style={{
+          background: isPending ? '#450a0a' : '#0f1117',
+          border: `2px solid ${isPending ? '#ef4444' : '#2a2f45'}`,
+          boxShadow: isPending ? '0 0 0 2px rgba(239, 68, 68, 0.22)' : 'none',
+          borderRadius: 6,
+          padding: '4px 7px',
+          color: isPending ? '#fecaca' : '#e5e7eb',
+          fontSize: '0.78rem',
+          fontWeight: isPending ? 800 : 500,
+          width: '100%',
+          minWidth: 0,
+          boxSizing: 'border-box',
+          outline: 'none',
+        }}
+      />
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          role="listbox"
+          style={{
+            position: 'fixed',
+            zIndex: 10000,
+            top: menuPosition.top,
+            left: menuPosition.left,
+            width: menuPosition.width,
+            maxHeight: 390,
+            overflowY: 'auto',
+            background: '#111318',
+            border: '1px solid #ef4444',
+            borderRadius: 10,
+            boxShadow: '0 18px 45px rgba(0, 0, 0, 0.65)',
+            padding: '6px 0',
+          }}
+        >
+          {visibleGroups.length === 0 && (
+            <div style={{ padding: '12px 14px', color: '#9ca3af', fontSize: '0.8rem' }}>
+              Nenhuma subcategoria encontrada
+            </div>
+          )}
+          {visibleGroups.map((group, groupIndex) => (
+            <div key={group.category?.id ?? `uncategorized-${groupIndex}`}>
+              {group.category && (
+                <div
+                  style={{
+                    padding: '9px 14px 6px',
+                    color: '#ff3b30',
+                    background: '#2b0b0b',
+                    borderTop: groupIndex > 0 ? '1px solid #4c1111' : 'none',
+                    fontSize: '0.78rem',
+                    fontWeight: 900,
+                    letterSpacing: '0.055em',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {cleanLabel(group.category.label)}
+                </div>
+              )}
+              {group.subcategories.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="option"
+                  aria-selected={option.id === value}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    onChange(option.id)
+                    setQuery(cleanLabel(option.label))
+                    setOpen(false)
+                  }}
+                  onMouseEnter={(event) => { event.currentTarget.style.background = '#312e3f' }}
+                  onMouseLeave={(event) => { event.currentTarget.style.background = option.id === value ? '#29213a' : 'transparent' }}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    border: 0,
+                    background: option.id === value ? '#29213a' : 'transparent',
+                    padding: '8px 14px 8px 28px',
+                    color: '#f8fafc',
+                    textAlign: 'left',
+                    fontSize: '0.84rem',
+                    fontWeight: option.id === value ? 800 : 500,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {cleanLabel(option.label)}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
   )
 }
 
@@ -388,25 +594,11 @@ function InvoiceInstallmentsPanel({
                   {item.current && item.total ? `${item.current}/${item.total}` : '—'}
                 </td>
                 <td style={{ padding: '0.45rem 0.5rem' }}>
-                  <select
+                  <SearchableCategorySelect
                     value={categoryIds[installmentKey(item, index)] ?? ''}
-                    onChange={(event) => onCategoryChange(installmentKey(item, index), event.target.value || null)}
-                    style={{
-                      background: '#0f1117',
-                      border: `1px solid ${categoryIds[installmentKey(item, index)] ? '#2a2f45' : '#f87171'}`,
-                      borderRadius: 6,
-                      padding: '3px 6px',
-                      color: '#e5e7eb',
-                      fontSize: '0.78rem',
-                      width: '100%',
-                      fontFamily: 'monospace',
-                    }}
-                  >
-                    <option value="">— sem categoria —</option>
-                    {categoryOptions.map((option) => (
-                      <option key={option.id} value={option.id} disabled={option.disabled}>{option.label}</option>
-                    ))}
-                  </select>
+                    options={categoryOptions}
+                    onChange={(categoryId) => onCategoryChange(installmentKey(item, index), categoryId)}
+                  />
                 </td>
               </tr>
             ))}

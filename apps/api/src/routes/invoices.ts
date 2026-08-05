@@ -36,10 +36,12 @@ import { sanitizeSensitiveText, sanitizeTextForInvoiceDebug } from '../services/
 import { runInvoiceAsciiIngestionPipeline } from '../services/invoiceIntake/pipeline.js'
 import { createError } from '../middlewares/errorHandler.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
+import { callStructuredJsonAI } from '../services/invoiceIntake/aiClient.js'
+
 
 const router: Router = Router()
 router.use(requireClerkAuth)
-const INVOICE_AI_TIMEOUT_MS = 60000
+const INVOICE_AI_TIMEOUT_MS = Number(process.env.INVOICE_AI_TIMEOUT_MS ?? 60000)
 
 // Store file in memory (max 20 MB)
 const upload = multer({
@@ -937,12 +939,18 @@ type AiAssignment = {
   subcategoryId?: string | null
 }
 
-function parseAiAssignments(raw: string): Array<AiAssignment> {
+function parseAiAssignments(raw: unknown): Array<AiAssignment> {
   try {
-    const parsed = JSON.parse(raw) as {
-      assignments?: Array<{ transactionId?: string; categoryId?: string; subcategoryId?: string | null }>
-    }
+    const parsed = typeof raw === 'string'
+      ? JSON.parse(raw) as {
+          assignments?: Array<{ transactionId?: string; categoryId?: string; subcategoryId?: string | null }>
+        }
+      : raw as {
+          assignments?: Array<{ transactionId?: string; categoryId?: string; subcategoryId?: string | null }>
+        }
+
     if (!parsed.assignments || !Array.isArray(parsed.assignments)) return []
+
     return parsed.assignments
       .filter((item) => Boolean(item?.transactionId && item?.categoryId))
       .map((item) => ({
@@ -962,7 +970,7 @@ async function classifyTransactionsWithAI(
   if (!config.ai.apiKey) return {}
   if (txs.length === 0 || availableCategories.length === 0) return {}
 
-  const baseUrl = config.ai.baseUrl.replace(/\/$/, '')
+  
   const expenseCategories = availableCategories.filter((c) => c.type === 'expense')
   const byId = new Map(expenseCategories.map((c) => [c.id, c]))
   const parentCategories = expenseCategories.filter((c) => !c.parentId)
@@ -994,41 +1002,13 @@ async function classifyTransactionsWithAI(
     subcategories: subcategoryCatalog,
   }
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.ai.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.ai.model,
-      temperature: 0,
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Voce classifica transacoes de cartao em categoria e subcategoria. Responda SOMENTE JSON no formato {"assignments":[{"transactionId":"...","categoryId":"...","subcategoryId":"...|null"}]}. categoryId deve ser uma categoria pai valida; subcategoryId deve pertencer a essa categoria pai (ou null quando nao houver).',
-        },
-        {
-          role: 'user',
-          content: JSON.stringify(promptPayload),
-        },
-      ],
-    }),
-    signal: AbortSignal.timeout(15000),
-  })
+    const aiResult = await callStructuredJsonAI(
+    'Voce classifica transacoes de cartao em categoria e subcategoria. Responda SOMENTE JSON no formato {"assignments":[{"transactionId":"...","categoryId":"...","subcategoryId":"...|null"}]}. categoryId deve ser uma categoria pai valida; subcategoryId deve pertencer a essa categoria pai (ou null quando nao houver). Use apenas IDs existentes no catalogo enviado. Se nao houver categoria adequada, omita a transacao.',
+    promptPayload,
+    30000,
+  )
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw new Error(`AI classify failed (${response.status}): ${text}`)
-  }
-
-  const json = await response.json() as {
-    choices?: Array<{ message?: { content?: string } }>
-  }
-  const content = json.choices?.[0]?.message?.content ?? ''
-  const assignments = parseAiAssignments(content)
+  const assignments = parseAiAssignments(aiResult)
 
   const parentIds = new Set(parentCategories.map((c) => c.id))
   const subById = new Map(subcategories.map((c) => [c.id, c]))
@@ -1701,6 +1681,7 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
     let skipped = 0
     const settlementTargetsToSync = new Set<number>()
     const seenImportKeys = new Set<string>()
+    const installmentMatchCounts = new Map<string, number>()
 
     const buildCanonicalImportKey = (input: {
       date: string
@@ -1718,33 +1699,37 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
       input.installmentGroupId ?? '',
     ].join('|')
 
-    // Parcels are more specific than the umbrella transaction list.
-    // Seed the dedupe set with installments so the same installment does not
-    // get inserted twice if the AI pipeline also surfaced it in transactions.
+    // Chave propositalmente sem installment/competencyMonth: a lista de
+    // transactions pode trazer a mesma parcela como compra simples, enquanto
+    // installments contém os metadados 01/12. A data + estabelecimento + valor
+    // identifica o par sem confundir parcelas diferentes do mesmo mês.
+    const buildInstallmentMatchKey = (input: {
+      date: string
+      normalizedDescription: string
+      amountMinor: bigint
+    }) => [
+      input.date,
+      input.normalizedDescription,
+      input.amountMinor.toString(),
+    ].join('|')
+
+    // Parcelas são mais específicas do que a lista geral de transações.
+    // Guardamos a quantidade para consumir apenas uma transação equivalente e
+    // preservar duas compras reais caso tenham descrição/valor/data iguais.
     for (const tx of body.installments ?? []) {
       const amountMinor = BigInt(tx.amountMinor)
-      const { fingerprint, normalizedDescription } = buildFingerprintFromRaw({
+      const { normalizedDescription } = buildFingerprintFromRaw({
         competencyMonth: tx.competencyMonth,
         amountMinor,
         rawDescription: tx.description,
       })
 
-      let installmentTotal: number | null = null
-      let installmentGroupId: string | null = null
-      if (tx.installment) {
-        const parts = tx.installment.split('/')
-        installmentTotal = parseInt(parts[1], 10) || null
-        installmentGroupId = `${fingerprint}-${installmentTotal}`
-      }
-
-      seenImportKeys.add(buildCanonicalImportKey({
+      const matchKey = buildInstallmentMatchKey({
         date: tx.date,
-        competencyMonth: tx.competencyMonth,
         normalizedDescription,
         amountMinor,
-        installment: tx.installment ?? '',
-        installmentGroupId,
-      }))
+      })
+      installmentMatchCounts.set(matchKey, (installmentMatchCounts.get(matchKey) ?? 0) + 1)
     }
 
     for (const tx of body.transactions) {
@@ -1765,6 +1750,17 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
         installmentNumber = parseInt(parts[0], 10) || null
         installmentTotal = parseInt(parts[1], 10) || null
         installmentGroupId = `${fingerprint}-${installmentTotal}`
+      }
+      const installmentMatchKey = buildInstallmentMatchKey({
+        date: tx.date,
+        normalizedDescription,
+        amountMinor,
+      })
+      const matchingInstallments = installmentMatchCounts.get(installmentMatchKey) ?? 0
+      if (matchingInstallments > 0) {
+        installmentMatchCounts.set(installmentMatchKey, matchingInstallments - 1)
+        skipped++
+        continue
       }
       const importKey = buildCanonicalImportKey({
         date: tx.date,

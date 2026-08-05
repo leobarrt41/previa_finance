@@ -886,3 +886,58 @@ DESCRIÇÃO: Foi criado e registrado localmente o commit `29123ff` como checkpoi
 TAGS: checkpoint,git,local,dev  
 PRIORIDADE: Média  
 STATUS: Concluído
+
+## [2026-07-14 19:20]
+
+ID: 20260714-1920-remove-parsers-startup
+SOURCE: previa_finance/copilot
+CATEGORIA: Tarefa
+TÍTULO: Removidos parsers legados do fluxo de start/build da API
+DESCRIÇÃO: O bootstrap local estava compilando `@previa/parser-bb`, `@previa/parser-bradesco` e `@previa/parser-itau` mesmo sem uso em runtime da API. Ajustes aplicados: remoção dos builds de parser em `start.sh`, remoção das dependências de parser em `apps/api/package.json` e atualização do lockfile (`pnpm-lock.yaml`). Build da API validado com sucesso após limpeza.
+TAGS: parser,monorepo,startup,build,cleanup
+PRIORIDADE: Alta
+STATUS: Concluído
+
+## [2026-07-14 21:05]
+
+ID: 20260714-2105-cashflow-open-installments-fix
+SOURCE: previa_finance/copilot
+CATEGORIA: Bug
+TÍTULO: CashFlow corrigido para aberto semântico e projeção de parcelas pós-vencimento
+DESCRIÇÃO: Corrigida inconsistência entre tabela de faturas e tooltip do gráfico no mês 2026-07. O backend do CashFlow passou a derivar `paidMinor` usando `effectiveOpenAmountMinor/openAmountMinor` para alinhar o laranja (saldo aberto) com o painel semântico. Em seguida, a projeção de parcelas foi ancorada no `dueMonth` da fatura (e não no `invoiceMonth`) para evitar parcela indevida já no mês corrente quando a fatura atual foi paga. No frontend, a barra amarela (`parcelas`) passou a mostrar apenas meses futuros (`competencyMonth > currentMonth`). Builds de API e WEB validados.
+TAGS: cashflow,card-invoice,effective-open,installments,dueMonth,frontend,backend,bugfix
+PRIORIDADE: Alta
+STATUS: Concluído
+
+## [2026-07-15 08:40]
+
+ID: 20260715-0840-invoice-intake-installment-hints
+SOURCE: previa_finance/copilot
+CATEGORIA: Bug
+TÍTULO: Detecção de N/T em parcelamentos ativada no pipeline ASCII
+DESCRIÇÃO: O parser de ingestão de faturas possuía lógica de enriquecimento de parcelamentos via ASCII (`mergeInstallmentHints`), mas ela não estava sendo aplicada no fluxo final. Solução: ativada chamada de merge na pipeline de ingestão e adicionada regressão para o caso Bradesco com padrão `(09/24)` quando a IA omite `current/total`. Resultado: painel de parcelamentos passa a exibir `N/T` corretamente no preview/import.
+TAGS: invoices,ascii,pipeline,installments,bradesco,regression-test,bugfix
+PRIORIDADE: Alta
+STATUS: Concluído
+
+## [2026-07-15 09:25]
+
+ID: 20260715-0925-installments-category-edit
+SOURCE: previa_finance/copilot
+CATEGORIA: Tarefa
+TÍTULO: Categorização manual de parcelamentos habilitada no upload e na edição
+DESCRIÇÃO: No `InvoiceUpload`, a seção “Parcelamentos detectados” passou a mostrar coluna de categoria com select editável e envio de `categoryId` no import. No detalhe de conta/fatura (`AccountDetail`), linhas parceladas foram incluídas na grade editável de transações. Para casos antigos onde havia componente de parcela sem `card_transaction`, o backend de `GET /accounts/:accountId/month/:month/invoice` passou a materializar automaticamente o lançamento consolidado e vincular `cardInvoiceComponents.cardTransactionId`, permitindo editar categoria posteriormente.
+TAGS: installments,categorias,invoice-upload,account-detail,card-transactions,ux,data-repair
+PRIORIDADE: Alta
+STATUS: Concluído
+
+## [2026-07-15 10:10]
+
+ID: 20260715-1010-chat-credit-card-insights
+SOURCE: previa_finance/copilot
+CATEGORIA: Bug
+TÍTULO: Previa Bot corrigido para despesas de cartão e perguntas de pagamento de parcela
+DESCRIÇÃO: O contexto financeiro do bot passou a separar e explicitar: despesas de conta, despesas de cartão por competência e despesas totais. O aberto de fatura no chat foi migrado para `effectiveOpenAmountMinor` para reduzir inconsistências. Também foi adicionada intenção direta para perguntas do tipo “quando paguei a prestação X pela fatura do cartão?”, com busca em `card_transactions` e conciliações de `card_invoice_payments` para devolver datas e valores de pagamento conciliado em vez da resposta genérica de indisponibilidade.
+TAGS: chat,previa-bot,credit-card,insights,invoice-payments,nlp,bugfix
+PRIORIDADE: Alta
+STATUS: Concluído

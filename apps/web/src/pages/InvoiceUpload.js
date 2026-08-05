@@ -13,6 +13,7 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
  * simula o preview com dados de exemplo para permitir testar o fluxo.
  */
 import { useState, useRef, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { api, formatBRL, currentMonth, } from '../services/api';
 import { buildCategoryOptions } from '../utils/categoryOptions';
 import { Card, Button, Alert, Spinner, SectionTitle, } from '../components/ui';
@@ -107,12 +108,149 @@ function TransactionPreviewRow({ tx, categoryOptions, invoiceOptions, showInvoic
     return (_jsxs("tr", { style: { borderBottom: '1px solid #1a1e2e', opacity: tx.include ? 1 : 0.4 }, children: [_jsx("td", { style: { padding: '0.45rem 0.5rem', textAlign: 'center' }, children: _jsx("input", { type: "checkbox", checked: tx.include, onChange: (e) => onChange(tx.id, { include: e.target.checked }), style: { cursor: 'pointer' } }) }), _jsx("td", { style: { padding: '0.45rem 0.5rem', fontSize: '0.8rem', color: '#9ca3af', whiteSpace: 'nowrap' }, children: tx.date }), _jsxs("td", { style: { padding: '0.45rem 0.5rem', fontSize: '0.82rem', color: '#e5e7eb', overflowWrap: 'anywhere' }, children: [tx.description, tx.installment && (_jsxs("span", { style: { marginLeft: 6, fontSize: '0.72rem', color: '#6366f1' }, children: ["parcela ", tx.installment] }))] }), _jsx("td", { style: { padding: '0.45rem 0.5rem', textAlign: 'right', fontSize: '0.85rem', color: '#f87171', fontWeight: 600, whiteSpace: 'nowrap' }, children: formatBRL(tx.amountMinor) }), _jsx("td", { style: { padding: '0.45rem 0.5rem' }, children: _jsx("input", { value: tx.competencyMonth, onChange: (e) => onChange(tx.id, { competencyMonth: e.target.value }), placeholder: "YYYY-MM", style: {
                         background: '#0f1117', border: '1px solid #2a2f45', borderRadius: 6,
                         padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', width: '100%', minWidth: 0,
-                    } }) }), _jsx("td", { style: { padding: '0.45rem 0.5rem' }, children: _jsxs("select", { value: tx.categoryId ?? '', onChange: (e) => onChange(tx.id, { categoryId: e.target.value || null }), style: {
-                        background: '#0f1117', border: `1px solid ${tx.categoryId ? '#2a2f45' : '#f87171'}`,
-                        borderRadius: 6, padding: '3px 6px', color: '#e5e7eb', fontSize: '0.78rem', width: '100%',
-                        minWidth: 0, maxWidth: 'none',
-                        fontFamily: 'monospace',
-                    }, children: [_jsx("option", { value: "", children: "\u2014 sem categoria \u2014" }), categoryOptions.map((opt) => (_jsx("option", { value: opt.id, disabled: opt.disabled, children: opt.label }, opt.id)))] }) }), _jsx("td", { style: { padding: '0.45rem 0.5rem' }, children: showInvoiceSelector ? (_jsx(InvoicePaymentSelector, { value: tx.settlesInvoiceId ?? null, options: invoiceOptions, onChange: (invoiceId) => onChange(tx.id, { settlesInvoiceId: invoiceId }), style: { width: '100%', minWidth: 0 } })) : (_jsx("span", { style: { color: '#475569', fontSize: '0.82rem' }, children: "\u2014" })) })] }));
+                    } }) }), _jsx("td", { style: { padding: '0.45rem 0.5rem' }, children: _jsx(SearchableCategorySelect, { value: tx.categoryId ?? '', options: categoryOptions, onChange: (categoryId) => onChange(tx.id, { categoryId }) }) }), _jsx("td", { style: { padding: '0.45rem 0.5rem' }, children: showInvoiceSelector ? (_jsx(InvoicePaymentSelector, { value: tx.settlesInvoiceId ?? null, options: invoiceOptions, onChange: (invoiceId) => onChange(tx.id, { settlesInvoiceId: invoiceId }), style: { width: '100%', minWidth: 0 } })) : (_jsx("span", { style: { color: '#475569', fontSize: '0.82rem' }, children: "\u2014" })) })] }));
+}
+function SearchableCategorySelect({ value, options, onChange, }) {
+    const inputRef = useRef(null);
+    const menuRef = useRef(null);
+    const selectedOption = options.find((option) => option.id === value);
+    const cleanLabel = (label) => label.replace(/^\s*└\s*/, '').trim();
+    const [query, setQuery] = useState(selectedOption ? cleanLabel(selectedOption.label) : '');
+    const [open, setOpen] = useState(false);
+    const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, width: 320 });
+    const groups = useMemo(() => {
+        const result = [];
+        let current = null;
+        for (const option of options) {
+            if (option.disabled) {
+                current = { category: option, subcategories: [] };
+                result.push(current);
+                continue;
+            }
+            if (!current) {
+                current = { category: null, subcategories: [] };
+                result.push(current);
+            }
+            current.subcategories.push(option);
+        }
+        return result;
+    }, [options]);
+    const visibleGroups = useMemo(() => {
+        const normalizedQuery = query.trim().toLocaleLowerCase('pt-BR');
+        if (!normalizedQuery)
+            return groups;
+        return groups.flatMap((group) => {
+            const categoryMatches = group.category
+                ? cleanLabel(group.category.label).toLocaleLowerCase('pt-BR').includes(normalizedQuery)
+                : false;
+            const subcategories = categoryMatches
+                ? group.subcategories
+                : group.subcategories.filter((option) => cleanLabel(option.label).toLocaleLowerCase('pt-BR').includes(normalizedQuery));
+            return categoryMatches || subcategories.length > 0 ? [{ ...group, subcategories }] : [];
+        });
+    }, [groups, query]);
+    useEffect(() => {
+        setQuery(selectedOption ? cleanLabel(selectedOption.label) : '');
+    }, [selectedOption?.id, selectedOption?.label]);
+    useEffect(() => {
+        if (!open)
+            return;
+        const updatePosition = () => {
+            const rect = inputRef.current?.getBoundingClientRect();
+            if (!rect)
+                return;
+            const width = Math.max(320, rect.width);
+            setMenuPosition({
+                top: rect.bottom + 6,
+                left: Math.min(rect.left, Math.max(8, window.innerWidth - width - 8)),
+                width,
+            });
+        };
+        const closeOnOutsideClick = (event) => {
+            const target = event.target;
+            if (!inputRef.current?.contains(target) && !menuRef.current?.contains(target))
+                setOpen(false);
+        };
+        updatePosition();
+        window.addEventListener('resize', updatePosition);
+        window.addEventListener('scroll', updatePosition, true);
+        document.addEventListener('mousedown', closeOnOutsideClick);
+        return () => {
+            window.removeEventListener('resize', updatePosition);
+            window.removeEventListener('scroll', updatePosition, true);
+            document.removeEventListener('mousedown', closeOnOutsideClick);
+        };
+    }, [open]);
+    const firstVisibleSubcategory = visibleGroups.flatMap((group) => group.subcategories)[0];
+    const isPending = !value;
+    return (_jsxs(_Fragment, { children: [_jsx("input", { ref: inputRef, value: query, onChange: (event) => {
+                    setQuery(event.target.value);
+                    setOpen(true);
+                    if (!event.target.value.trim())
+                        onChange(null);
+                }, onFocus: (event) => {
+                    event.currentTarget.select();
+                    setOpen(true);
+                }, onKeyDown: (event) => {
+                    if (event.key === 'Escape')
+                        setOpen(false);
+                    if (event.key === 'Enter' && firstVisibleSubcategory) {
+                        event.preventDefault();
+                        onChange(firstVisibleSubcategory.id);
+                        setQuery(cleanLabel(firstVisibleSubcategory.label));
+                        setOpen(false);
+                    }
+                }, placeholder: "\uD83D\uDD0E Pesquisar subcategoria...", "aria-label": "Pesquisar e selecionar subcategoria", "aria-expanded": open, title: isPending ? 'Categoria obrigatória: pesquise e selecione uma subcategoria' : selectedOption?.label, style: {
+                    background: isPending ? '#450a0a' : '#0f1117',
+                    border: `2px solid ${isPending ? '#ef4444' : '#2a2f45'}`,
+                    boxShadow: isPending ? '0 0 0 2px rgba(239, 68, 68, 0.22)' : 'none',
+                    borderRadius: 6,
+                    padding: '4px 7px',
+                    color: isPending ? '#fecaca' : '#e5e7eb',
+                    fontSize: '0.78rem',
+                    fontWeight: isPending ? 800 : 500,
+                    width: '100%',
+                    minWidth: 0,
+                    boxSizing: 'border-box',
+                    outline: 'none',
+                } }), open && createPortal(_jsxs("div", { ref: menuRef, role: "listbox", style: {
+                    position: 'fixed',
+                    zIndex: 10000,
+                    top: menuPosition.top,
+                    left: menuPosition.left,
+                    width: menuPosition.width,
+                    maxHeight: 390,
+                    overflowY: 'auto',
+                    background: '#111318',
+                    border: '1px solid #ef4444',
+                    borderRadius: 10,
+                    boxShadow: '0 18px 45px rgba(0, 0, 0, 0.65)',
+                    padding: '6px 0',
+                }, children: [visibleGroups.length === 0 && (_jsx("div", { style: { padding: '12px 14px', color: '#9ca3af', fontSize: '0.8rem' }, children: "Nenhuma subcategoria encontrada" })), visibleGroups.map((group, groupIndex) => (_jsxs("div", { children: [group.category && (_jsx("div", { style: {
+                                    padding: '9px 14px 6px',
+                                    color: '#ff3b30',
+                                    background: '#2b0b0b',
+                                    borderTop: groupIndex > 0 ? '1px solid #4c1111' : 'none',
+                                    fontSize: '0.78rem',
+                                    fontWeight: 900,
+                                    letterSpacing: '0.055em',
+                                    textTransform: 'uppercase',
+                                }, children: cleanLabel(group.category.label) })), group.subcategories.map((option) => (_jsx("button", { type: "button", role: "option", "aria-selected": option.id === value, onMouseDown: (event) => event.preventDefault(), onClick: () => {
+                                    onChange(option.id);
+                                    setQuery(cleanLabel(option.label));
+                                    setOpen(false);
+                                }, onMouseEnter: (event) => { event.currentTarget.style.background = '#312e3f'; }, onMouseLeave: (event) => { event.currentTarget.style.background = option.id === value ? '#29213a' : 'transparent'; }, style: {
+                                    display: 'block',
+                                    width: '100%',
+                                    border: 0,
+                                    background: option.id === value ? '#29213a' : 'transparent',
+                                    padding: '8px 14px 8px 28px',
+                                    color: '#f8fafc',
+                                    textAlign: 'left',
+                                    fontSize: '0.84rem',
+                                    fontWeight: option.id === value ? 800 : 500,
+                                    cursor: 'pointer',
+                                }, children: cleanLabel(option.label) }, option.id)))] }, group.category?.id ?? `uncategorized-${groupIndex}`)))] }), document.body)] }));
 }
 function DebugStageCard({ label, content }) {
     return (_jsxs("details", { style: {
@@ -151,16 +289,7 @@ function InvoiceInstallmentsPanel({ installments, categoryOptions, categoryIds, 
                                                     padding: '1px 5px',
                                                     verticalAlign: 'middle',
                                                     letterSpacing: 0.3,
-                                                }, children: "ADIANTAMENTO" }))] }), _jsx("td", { style: { padding: '0.55rem 0.5rem', textAlign: 'right', color: item.isPrepayment ? '#6b7280' : '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }, children: formatBRL(Math.round(item.amount * 100)) }), _jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#9ca3af', whiteSpace: 'nowrap' }, children: item.date ?? '—' }), _jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#cbd5e1' }, children: item.current && item.total ? `${item.current}/${item.total}` : '—' }), _jsx("td", { style: { padding: '0.45rem 0.5rem' }, children: _jsxs("select", { value: categoryIds[installmentKey(item, index)] ?? '', onChange: (event) => onCategoryChange(installmentKey(item, index), event.target.value || null), style: {
-                                                background: '#0f1117',
-                                                border: `1px solid ${categoryIds[installmentKey(item, index)] ? '#2a2f45' : '#f87171'}`,
-                                                borderRadius: 6,
-                                                padding: '3px 6px',
-                                                color: '#e5e7eb',
-                                                fontSize: '0.78rem',
-                                                width: '100%',
-                                                fontFamily: 'monospace',
-                                            }, children: [_jsx("option", { value: "", children: "\u2014 sem categoria \u2014" }), categoryOptions.map((option) => (_jsx("option", { value: option.id, disabled: option.disabled, children: option.label }, option.id)))] }) })] }, `${item.description}-${item.date ?? 'nodate'}-${index}`))) })] }) })] }));
+                                                }, children: "ADIANTAMENTO" }))] }), _jsx("td", { style: { padding: '0.55rem 0.5rem', textAlign: 'right', color: item.isPrepayment ? '#6b7280' : '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }, children: formatBRL(Math.round(item.amount * 100)) }), _jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#9ca3af', whiteSpace: 'nowrap' }, children: item.date ?? '—' }), _jsx("td", { style: { padding: '0.55rem 0.5rem', color: '#cbd5e1' }, children: item.current && item.total ? `${item.current}/${item.total}` : '—' }), _jsx("td", { style: { padding: '0.45rem 0.5rem' }, children: _jsx(SearchableCategorySelect, { value: categoryIds[installmentKey(item, index)] ?? '', options: categoryOptions, onChange: (categoryId) => onCategoryChange(installmentKey(item, index), categoryId) }) })] }, `${item.description}-${item.date ?? 'nodate'}-${index}`))) })] }) })] }));
 }
 function DebugStatusCard({ debugEnabled, hasDebug, isReprocessing }) {
     if (!debugEnabled)

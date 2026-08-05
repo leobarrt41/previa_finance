@@ -64,8 +64,16 @@ export const config = {
   },
 
   ai: {
-    apiKey: process.env.AI_API_KEY || process.env.OPENAI_API_KEY || '',
-    model: process.env.AI_MODEL || process.env.LLM_MODEL_CLASSIFIER || 'gpt-4o-mini',
+    provider: (process.env.LLM_PROVIDER || process.env.AI_PROVIDER || 'openai').toLowerCase(),
+    apiKey:
+      (process.env.LLM_PROVIDER || process.env.AI_PROVIDER || 'openai').toLowerCase() === 'gemini'
+        ? process.env.GEMINI_API_KEY || ''
+        : process.env.AI_API_KEY || process.env.OPENAI_API_KEY || '',
+    model:
+      process.env.AI_MODEL
+      || process.env.LLM_MODEL_ANALYSIS
+      || process.env.LLM_MODEL_CLASSIFIER
+      || 'gpt-4o-mini',
     baseUrl: process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
   },
 

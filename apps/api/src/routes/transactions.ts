@@ -21,6 +21,7 @@ import {
 } from '@previa/db'
 import { buildFingerprintFromRaw, normalizeDescription } from '@previa/core'
 import { getDatabase } from '../config/database.js'
+import { config } from '../config/env.js'
 import { requireClerkAuth } from '../middlewares/auth.js'
 import { createError } from '../middlewares/errorHandler.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
@@ -159,9 +160,7 @@ async function classifyTransactionsWithAI(
 ): Promise<Record<string, { categoryId: string; subcategoryId: string | null }>> {
   if (!txs.length || !availableCategories.length) return {}
 
-  const apiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY || ''
-  const model = process.env.AI_MODEL || process.env.LLM_MODEL_CLASSIFIER || 'gpt-4o-mini'
-  const baseUrl = (process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
+  const { apiKey, model, baseUrl, provider } = config.ai
   if (!apiKey) return {}
 
   const typedCategories = availableCategories.filter((c) => c.type === type)
@@ -195,40 +194,46 @@ async function classifyTransactionsWithAI(
         })),
       )
 
-      const response = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          temperature: 0,
-          response_format: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content:
-                `Voce classifica transacoes bancarias brasileiras do tipo ${type === 'expense' ? 'despesa' : 'receita'} em categoria e subcategoria. Quando houver webHint, use isso como contexto adicional. Responda SOMENTE JSON no formato {"assignments":[{"transactionId":"...","categoryId":"...","subcategoryId":"...|null"}]}. categoryId deve ser uma categoria pai valida; subcategoryId deve pertencer a essa categoria pai (ou null quando nao houver).`,
-            },
-            {
-              role: 'user',
-              content: JSON.stringify({
-                transactions: withHints,
-                categories: categoryCatalog,
-                subcategories: subcategoryCatalog,
-              }),
-            },
-          ],
-        }),
-        signal: AbortSignal.timeout(15000),
-      })
+      const systemPrompt = `Voce classifica transacoes bancarias brasileiras do tipo ${type === 'expense' ? 'despesa' : 'receita'} em categoria e subcategoria. Quando houver webHint, use isso como contexto adicional. Responda SOMENTE JSON no formato {"assignments":[{"transactionId":"...","categoryId":"...","subcategoryId":"...|null"}]}. categoryId deve ser uma categoria pai valida; subcategoryId deve pertencer a essa categoria pai (ou null quando nao houver).`
+      const userPayload = { transactions: withHints, categories: categoryCatalog, subcategories: subcategoryCatalog }
 
-      if (!response.ok) continue
+      let rawContent: string
+      if (provider === 'gemini') {
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`
+        const geminiRes = await fetch(geminiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: 'user', parts: [{ text: JSON.stringify(userPayload) }] }],
+            generationConfig: { responseMimeType: 'application/json' },
+          }),
+          signal: AbortSignal.timeout(15000),
+        })
+        if (!geminiRes.ok) continue
+        const geminiJson = await geminiRes.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
+        rawContent = geminiJson.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('').trim() ?? ''
+      } else {
+        const openaiRes = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model,
+            temperature: 0,
+            response_format: { type: 'json_object' },
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: JSON.stringify(userPayload) },
+            ],
+          }),
+          signal: AbortSignal.timeout(15000),
+        })
+        if (!openaiRes.ok) continue
+        const openaiJson = await openaiRes.json() as { choices?: Array<{ message?: { content?: string } }> }
+        rawContent = openaiJson.choices?.[0]?.message?.content ?? ''
+      }
 
-      const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
-      const content = json.choices?.[0]?.message?.content ?? ''
-      const assignments = parseAiAssignments(content)
+      const assignments = parseAiAssignments(rawContent)
 
       for (const item of assignments) {
         let categoryId = item.categoryId

@@ -170,7 +170,7 @@ export const api = {
     },
     accounts: {
         list: () => request('/api/accounts'),
-        openCardInvoices: () => request('/api/accounts/open-card-invoices'),
+        openCardInvoices: (month) => request(month ? `/api/accounts/open-card-invoices?month=${encodeURIComponent(month)}` : '/api/accounts/open-card-invoices'),
         invoiceDetails: (accountId, month) => request(`/api/accounts/${accountId}/month/${month}/invoice`),
         statementDetails: (accountId, month) => request(`/api/accounts/${accountId}/month/${month}/statement`),
         updateCardTransactionCategory: (cardTransactionId, categoryId) => request(`/api/accounts/card-transactions/${cardTransactionId}/category`, {

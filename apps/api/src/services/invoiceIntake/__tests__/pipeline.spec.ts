@@ -113,12 +113,80 @@ describe('runInvoiceAsciiIngestionPipeline', () => {
     expect(result.payload.transactions[0].competencyMonth).toBe('2026-06')
     expect(result.payload.transactions[1].competencyMonth).toBe('2026-07')
 
+    expect(result.payload.analysis?.installments).toHaveLength(2)
+    expect(result.payload.analysis?.installments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          description: 'Oticachillibeans - Parcela',
+          current: 5,
+          total: 10,
+        }),
+        expect.objectContaining({
+          description: 'Solumedi Jacarei - Parcela',
+          current: 2,
+          total: 2,
+        }),
+      ]),
+    )
+  })
+
+  it('completa current/total dos parcelamentos a partir do ASCII quando a IA omite os índices', async () => {
+    const installmentAscii = [
+      '26/07 COMPRA PARCELADA CASAS BAHIA (09/24) 191,36 Demais faturas R$ 5.618,96',
+    ].join('\n')
+
+    mockExtractAsciiStructuralTextFromPdf.mockResolvedValue({
+      asciiText: installmentAscii,
+    })
+
+    mockSanitizeInvoiceAsciiDeterministically.mockReturnValue({
+      source_lines: 1,
+      local_redactions: 0,
+      sanitized_ascii: installmentAscii,
+    })
+
+    mockApplyPiiRedactionsToAscii.mockReturnValue({
+      appliedCount: 0,
+      sanitizedAscii: installmentAscii,
+    })
+
+    mockSanitizeSensitiveText.mockReturnValue({
+      source_lines: 1,
+      local_redactions: 0,
+      sanitizedText: installmentAscii,
+    })
+
+    mockExtractFinancialInvoiceWithAI.mockResolvedValue({
+      document_type: 'fatura_cartao',
+      institution: 'Bradesco',
+      card_last4: '6014',
+      billing_period: '2026-07',
+      due_date: '2026-07-10',
+      total_amount: 382.96,
+      transactions: [],
+      installments: [
+        {
+          description: 'COMPRA PARCELADA CASAS BAHIA',
+          amount: 191.36,
+          date: '2026-07-26',
+        },
+      ],
+      fees: [],
+      payments: [],
+      warnings: [],
+    })
+
+    const result = await runInvoiceAsciiIngestionPipeline(Buffer.from('pdf'), {
+      filename: 'fatura-bradesco-julho.pdf',
+    })
+
     expect(result.payload.analysis?.installments).toHaveLength(1)
     expect(result.payload.analysis?.installments[0]).toMatchObject({
-      description: 'Oticachillibeans - Parcela',
-      amount: 0,
-      current: 5,
-      total: 10,
+      description: 'COMPRA PARCELADA CASAS BAHIA',
+      amount: 191.36,
+      current: 9,
+      total: 24,
+      date: '2026-07-26',
     })
   })
 

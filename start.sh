@@ -126,9 +126,6 @@ cleanup() {
 start_services() {
   pnpm --filter @previa/core build
   pnpm --filter @previa/db build
-  pnpm --filter @previa/parser-bb build
-  pnpm --filter @previa/parser-bradesco build
-  pnpm --filter @previa/parser-itau build
 
   set -a
   # The DB runner reads DB_* variables from .env and applies any pending SQL migrations.

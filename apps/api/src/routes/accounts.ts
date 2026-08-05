@@ -391,7 +391,7 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
   const invoiceSemanticSnapshot = await syncCardInvoiceSemanticFields(db, invoice.id)
   const invoiceForSemantic = invoiceSemanticSnapshot ? { ...invoice, ...invoiceSemanticSnapshot } : invoice
 
-  const transactionRows = await db
+  let transactionRows = await db
     .select({
       id: cardTransactions.id,
       occurredAt: cardTransactions.occurredAt,
@@ -425,6 +425,152 @@ router.get('/:accountId/month/:month/invoice', async (req: Request, res: Respons
     .from(cardInvoiceComponents)
     .where(eq(cardInvoiceComponents.cardInvoiceId, invoice.id))
     .orderBy(desc(cardInvoiceComponents.id))
+
+  const normalizeComponentDescription = (value: string | null | undefined) =>
+    (value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toUpperCase()
+
+  const existingInstallmentKeys = new Set(
+    transactionRows
+      .filter((row) => row.installmentNumber && row.installmentTotal)
+      .map((row) => [
+        normalizeComponentDescription(row.description),
+        String(row.amountMinor ?? 0n),
+        String(row.installmentNumber ?? ''),
+        String(row.installmentTotal ?? ''),
+      ].join('|')),
+  )
+
+  const normalizeComponentDate = (value: Date | string | null | undefined) => {
+    if (!value) return ''
+    const date = value instanceof Date ? value : new Date(value)
+    return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10)
+  }
+  const buildComponentBaseKey = (
+    description: string | null | undefined,
+    amountMinor: bigint | number | string | null | undefined,
+    date: Date | string | null | undefined,
+  ) => [
+    normalizeComponentDescription(description),
+    String(amountMinor ?? 0),
+    normalizeComponentDate(date),
+  ].join('|')
+
+  const plainTransactionsByBaseKey = new Map<string, Array<{ id: number }>>()
+  for (const row of transactionRows) {
+    if (row.installmentNumber || row.installmentTotal) continue
+    const baseKey = buildComponentBaseKey(row.description, row.amountMinor, row.occurredAt)
+    const candidates = plainTransactionsByBaseKey.get(baseKey) ?? []
+    candidates.push({ id: row.id })
+    plainTransactionsByBaseKey.set(baseKey, candidates)
+  }
+
+  let materializedInstallments = 0
+  for (const component of componentRows) {
+    if (component.componentScope !== 'line_item') continue
+    if (component.componentType !== 'installment_principal') continue
+    if (!component.installmentNumber || !component.installmentTotal) continue
+
+    const amountMinor = BigInt(component.amountMinor ?? 0n)
+    if (amountMinor <= 0n) continue
+
+    const key = [
+      normalizeComponentDescription(component.description),
+      String(component.amountMinor ?? 0n),
+      String(component.installmentNumber),
+      String(component.installmentTotal),
+    ].join('|')
+    if (existingInstallmentKeys.has(key)) continue
+
+    // Importações antigas podiam guardar a mesma linha como compra simples.
+    // Nesse caso enriquecemos o registro existente com os dados da parcela,
+    // em vez de materializar uma segunda card_transaction.
+    const componentBaseKey = buildComponentBaseKey(
+      component.description,
+      component.amountMinor,
+      component.sourceDate,
+    )
+    const plainCandidates = plainTransactionsByBaseKey.get(componentBaseKey) ?? []
+    const compatiblePlainTransaction = plainCandidates.shift()
+    if (compatiblePlainTransaction) {
+      await db
+        .update(cardTransactions)
+        .set({
+          movementSubtype: 'installment',
+          installmentNumber: component.installmentNumber,
+          installmentTotal: component.installmentTotal,
+        })
+        .where(eq(cardTransactions.id, compatiblePlainTransaction.id))
+
+      await db
+        .update(cardInvoiceComponents)
+        .set({ cardTransactionId: compatiblePlainTransaction.id, updatedAt: new Date() })
+        .where(eq(cardInvoiceComponents.id, component.id))
+
+      existingInstallmentKeys.add(key)
+      materializedInstallments += 1
+      continue
+    }
+
+    const occurredAt = component.sourceDate
+      ? new Date(component.sourceDate)
+      : invoice.dueDate
+        ? new Date(invoice.dueDate)
+        : new Date(`${invoice.invoiceMonth}-01T12:00:00.000Z`)
+    const competencyMonth = `${occurredAt.getUTCFullYear()}-${String(occurredAt.getUTCMonth() + 1).padStart(2, '0')}`
+
+    const inserted = await db.insert(cardTransactions).values({
+      userId: owner.id,
+      cardInvoiceId: invoice.id,
+      source: 'pdf_invoice',
+      dataState: 'consolidated',
+      movementType: 'card_purchase',
+      movementSubtype: 'installment',
+      amountMinor,
+      currencyCode: 'BRL',
+      occurredAt,
+      competencyMonth,
+      description: component.description ?? `Parcela ${component.installmentNumber}/${component.installmentTotal}`,
+      normalizedDescription: component.description ?? null,
+      installmentNumber: component.installmentNumber,
+      installmentTotal: component.installmentTotal,
+      isReconciled: false,
+    }) as { insertId?: number }
+
+    const insertedId = Number(inserted?.insertId ?? 0)
+    if (insertedId > 0) {
+      await db
+        .update(cardInvoiceComponents)
+        .set({ cardTransactionId: insertedId, updatedAt: new Date() })
+        .where(eq(cardInvoiceComponents.id, component.id))
+    }
+
+    existingInstallmentKeys.add(key)
+    materializedInstallments += 1
+  }
+
+  if (materializedInstallments > 0) {
+    transactionRows = await db
+      .select({
+        id: cardTransactions.id,
+        occurredAt: cardTransactions.occurredAt,
+        description: cardTransactions.description,
+        amountMinor: cardTransactions.amountMinor,
+        competencyMonth: cardTransactions.competencyMonth,
+        installmentNumber: cardTransactions.installmentNumber,
+        installmentTotal: cardTransactions.installmentTotal,
+        categoryId: cardTransactions.categoryId,
+        categoryName: categories.name,
+      })
+      .from(cardTransactions)
+      .leftJoin(categories, eq(cardTransactions.categoryId, categories.id))
+      .where(eq(cardTransactions.cardInvoiceId, invoice.id))
+      .orderBy(desc(cardTransactions.occurredAt), desc(cardTransactions.id))
+  }
 
   const transactionIds = transactionRows.map((row) => row.id)
   const settlementRows = transactionIds.length > 0

@@ -130,8 +130,10 @@ export function AccountDetail() {
         api.categories.list().then(setCategories).catch(() => { });
     }, []);
     useEffect(() => {
-        api.accounts.openCardInvoices().then((result) => setOpenInvoices(result.items)).catch(() => { });
-    }, []);
+        if (!activeMonth)
+            return;
+        api.accounts.openCardInvoices(activeMonth).then((result) => setOpenInvoices(result.items)).catch(() => { });
+    }, [activeMonth]);
     useEffect(() => {
         if (!account || !activeMonth) {
             setInvoiceDetails(null);
@@ -355,7 +357,7 @@ export function AccountDetail() {
                 const [updatedInvoice, updatedStatement, updatedOpenInvoices] = await Promise.all([
                     api.accounts.invoiceDetails(account.id, activeMonth),
                     api.accounts.statementDetails(account.id, activeMonth),
-                    api.accounts.openCardInvoices(),
+                    api.accounts.openCardInvoices(activeMonth),
                 ]);
                 setInvoiceDetails(updatedInvoice);
                 setStatementDetails(updatedStatement);
@@ -381,7 +383,7 @@ export function AccountDetail() {
     const invoiceComponents = invoiceDetails?.components ?? [];
     const invoiceInstallments = invoiceComponents.filter((item) => item.componentScope === 'line_item' && item.componentType === 'installment_principal');
     const invoiceFees = invoiceComponents.filter((item) => item.componentScope === 'line_item' && item.componentType !== 'installment_principal');
-    const invoiceVisibleTransactions = (invoiceDetails?.transactions ?? []).filter((tx) => !(tx.installmentNumber && tx.installmentTotal));
+    const invoiceVisibleTransactions = invoiceDetails?.transactions ?? [];
     const invoiceInstallmentProgress = useMemo(() => {
         const grouped = new Map();
         for (const item of invoiceInstallments) {

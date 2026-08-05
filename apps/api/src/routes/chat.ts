@@ -14,7 +14,7 @@
  */
 import { Router, Request, Response } from 'express'
 import { z } from 'zod'
-import { transactions, accounts, cardInvoices, cardTransactions, categories } from '@previa/db'
+import { transactions, accounts, cardInvoices, cardInvoicePayments, cardTransactions, categories } from '@previa/db'
 import { and, eq, gte, lte, inArray, sql, desc } from "drizzle-orm"
 import { getDatabase } from '../config/database.js'
 import { resolveOwnerId } from '../services/ownerStore.js'
@@ -215,6 +215,35 @@ function isTransactionsQuestion(text: string): boolean {
   return /(transa[cç][oõ]es|movimentacoes|movimentações|lancamentos|lançamentos|extrato)/i.test(text)
 }
 
+function isInstallmentPaymentDateQuestion(text: string): boolean {
+  return /(quando\s+paguei|data\s+do\s+pagamento|quando\s+foi\s+pago|paguei\s+a\s+prestacao|paguei\s+a\s+parcela)/i.test(text)
+    && /(fatura|cartao|cartao\s+de\s+credito|prestacao|parcela)/i.test(text)
+}
+
+function extractInstallmentSubject(text: string): string | null {
+  const quoted = text.match(/["'“”]([^"'“”]{3,80})["'“”]/)
+  if (quoted?.[1]) return quoted[1].trim()
+
+  const patterns = [
+    /prestac(?:ao|oes)?\s+d[oa]\s+([a-z0-9\s]{3,80}?)(?:\s+pela\s+fatura|\s+na\s+fatura|\s+do\s+cartao|\s+no\s+cartao|\?|$)/i,
+    /parcela(?:s)?\s+d[oa]\s+([a-z0-9\s]{3,80}?)(?:\s+pela\s+fatura|\s+na\s+fatura|\s+do\s+cartao|\s+no\s+cartao|\?|$)/i,
+    /d[oa]\s+([a-z0-9\s]{3,80}?)(?:\s+pela\s+fatura|\s+na\s+fatura|\s+do\s+cartao|\s+no\s+cartao|\?|$)/i,
+  ]
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern)
+    if (match?.[1]) {
+      const cleaned = match[1]
+        .replace(/\b(meu|minha|do|da|de|no|na|um|uma|as|os)\b/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+      if (cleaned.length >= 3) return cleaned
+    }
+  }
+
+  return null
+}
+
 async function buildDirectInsight(
   userId: number,
   month: string,
@@ -229,12 +258,13 @@ async function buildDirectInsight(
   const shouldHandleInvoices = isOpenInvoicesQuestion(normalized)
   const shouldHandleBudget = isBudgetQuestion(normalized) || isSummaryQuestion(normalized)
   const shouldHandleTransactions = isTransactionsQuestion(normalized)
+  const shouldHandleInstallmentPaymentDate = isInstallmentPaymentDateQuestion(normalized)
 
-  if (!shouldHandleExpenses && !shouldHandleInvoices && !shouldHandleBudget && !shouldHandleTransactions) {
+  if (!shouldHandleExpenses && !shouldHandleInvoices && !shouldHandleBudget && !shouldHandleTransactions && !shouldHandleInstallmentPaymentDate) {
     return null
   }
 
-  const [txRows, invoiceRows, bankExpenseRows, cardExpenseRows, accountRows] = await Promise.all([
+  const [txRows, invoiceRows, bankExpenseRows, cardExpenseRows, accountRows, bankTxCountRows, cardTxCountRows] = await Promise.all([
     db
       .select({ movementType: transactions.movementType, amountMinor: sql<string>`SUM(${transactions.amountMinor})` })
       .from(transactions)
@@ -251,7 +281,7 @@ async function buildDirectInsight(
         id: cardInvoices.id,
         invoiceMonth: cardInvoices.invoiceMonth,
         totalAmountMinor: cardInvoices.totalAmountMinor,
-        openAmountMinor: cardInvoices.openAmountMinor,
+        openAmountMinor: cardInvoices.effectiveOpenAmountMinor,
         status: cardInvoices.status,
         dueDate: cardInvoices.dueDate,
       })
@@ -278,6 +308,20 @@ async function buildDirectInsight(
       .from(accounts)
       .where(and(eq(accounts.userId, userId), eq(accounts.isActive, true)))
       .limit(10),
+    db
+      .select({ count: sql<string>`COUNT(*)` })
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.userId, userId),
+          gte(transactions.occurredAt, new Date(`${monthStart}T00:00:00Z`)),
+          lte(transactions.occurredAt, new Date(`${monthEnd}T23:59:59Z`)),
+        )
+      ),
+    db
+      .select({ count: sql<string>`COUNT(*)` })
+      .from(cardTransactions)
+      .where(and(eq(cardTransactions.userId, userId), eq(cardTransactions.competencyMonth, month))),
   ])
 
   let incomeMinor = 0
@@ -290,7 +334,10 @@ async function buildDirectInsight(
 
   const totalInvoiceMinor = invoiceRows.reduce((s, r) => s + toMinor(r.totalAmountMinor), 0)
   const openInvoiceMinor = invoiceRows.reduce((s, r) => s + toMinor(r.openAmountMinor), 0)
+  const cardExpenseMinor = cardExpenseRows.reduce((s, r) => s + Math.abs(toMinor(r.total)), 0)
+  const totalExpenseMinor = expenseMinor + cardExpenseMinor
   const balance = incomeMinor - expenseMinor
+  const netAfterCardMinor = incomeMinor - totalExpenseMinor
 
   const categoryIds = [...new Set([
     ...bankExpenseRows.map((r) => r.categoryId).filter(Boolean) as string[],
@@ -330,7 +377,10 @@ async function buildDirectInsight(
     `=== CONTEXTO FINANCEIRO — ${month} ===`,
     `Receitas: ${formatBRL(incomeMinor)}`,
     `Despesas (conta): ${formatBRL(expenseMinor)}`,
+    `Despesas (cartão por competência): ${formatBRL(cardExpenseMinor)}`,
+    `Despesas totais (conta + cartão): ${formatBRL(totalExpenseMinor)}`,
     `Saldo líquido conta: ${formatBRL(balance)}`,
+    `Saldo líquido após cartão: ${formatBRL(netAfterCardMinor)}`,
     `Fatura cartão total: ${formatBRL(totalInvoiceMinor)}`,
     `Fatura cartão em aberto: ${formatBRL(openInvoiceMinor)}`,
     `Maiores despesas do período: ${topExpensesLine}`,
@@ -361,17 +411,117 @@ async function buildDirectInsight(
   }
 
   if (shouldHandleTransactions) {
-    const bankTransactionsCount = txRows.length
-    const cardTransactionsCount = cardExpenseRows.length
+    const bankTransactionsCount = toMinor(bankTxCountRows[0]?.count)
+    const cardTransactionsCount = toMinor(cardTxCountRows[0]?.count)
     return {
       reply: `Sim. Consigo acessar suas transações do mês ${month}. Encontrei ${bankTransactionsCount} movimentos de conta e ${cardTransactionsCount} compras no cartão. Se quiser, eu posso detalhar receitas, despesas, faturas ou maiores gastos desse período.`,
       context,
     }
   }
 
+  if (shouldHandleInstallmentPaymentDate) {
+    const subject = extractInstallmentSubject(normalized)
+    if (!subject) {
+      return {
+        reply: `Consigo verificar, sim. Me diga o termo da compra/parcelamento (por exemplo: "terreno" ou o nome do estabelecimento) para eu localizar a data do pagamento na fatura.`,
+        context,
+      }
+    }
+
+    const likeTerm = `%${subject}%`
+
+    const installmentMatches = await db
+      .select({
+        cardInvoiceId: cardTransactions.cardInvoiceId,
+        description: cardTransactions.description,
+        installmentNumber: cardTransactions.installmentNumber,
+        installmentTotal: cardTransactions.installmentTotal,
+        amountMinor: cardTransactions.amountMinor,
+      })
+      .from(cardTransactions)
+      .where(
+        and(
+          eq(cardTransactions.userId, userId),
+          sql`LOWER(${cardTransactions.description}) LIKE ${likeTerm}`,
+        ),
+      )
+      .orderBy(desc(cardTransactions.id))
+      .limit(30)
+
+    if (installmentMatches.length === 0) {
+      return {
+        reply: `Não encontrei lançamentos de cartão com o termo "${subject}". Se quiser, me diga outro termo da descrição que aparece na fatura para eu procurar.`,
+        context,
+      }
+    }
+
+    const invoiceIds = [...new Set(installmentMatches.map((row) => Number(row.cardInvoiceId)).filter((id) => Number.isInteger(id) && id > 0))]
+    if (invoiceIds.length === 0) {
+      return {
+        reply: `Encontrei o parcelamento "${subject}", mas sem fatura vinculada para confirmar pagamento.`,
+        context,
+      }
+    }
+
+    const [invoiceRowsById, paymentRows] = await Promise.all([
+      db
+        .select({
+          id: cardInvoices.id,
+          invoiceMonth: cardInvoices.invoiceMonth,
+          dueDate: cardInvoices.dueDate,
+        })
+        .from(cardInvoices)
+        .where(and(eq(cardInvoices.userId, userId), inArray(cardInvoices.id, invoiceIds))),
+      db
+        .select({
+          cardInvoiceId: cardInvoicePayments.cardInvoiceId,
+          paymentDate: cardInvoicePayments.paymentDate,
+          allocatedAmountMinor: cardInvoicePayments.allocatedAmountMinor,
+        })
+        .from(cardInvoicePayments)
+        .where(and(eq(cardInvoicePayments.userId, userId), inArray(cardInvoicePayments.cardInvoiceId, invoiceIds)))
+        .orderBy(desc(cardInvoicePayments.paymentDate)),
+    ])
+
+    const paymentByInvoice = new Map<number, Array<{ paymentDate: Date; allocatedAmountMinor: number }>>()
+    for (const row of paymentRows) {
+      const invoiceId = Number(row.cardInvoiceId)
+      const current = paymentByInvoice.get(invoiceId) ?? []
+      current.push({
+        paymentDate: row.paymentDate,
+        allocatedAmountMinor: Math.abs(toMinor(row.allocatedAmountMinor)),
+      })
+      paymentByInvoice.set(invoiceId, current)
+    }
+
+    const invoiceById = new Map(invoiceRowsById.map((row) => [row.id, row]))
+    const responseLines: string[] = []
+    for (const invoiceId of invoiceIds.slice(0, 5)) {
+      const invoice = invoiceById.get(invoiceId)
+      if (!invoice) continue
+      const payments = paymentByInvoice.get(invoiceId) ?? []
+      if (payments.length === 0) {
+        responseLines.push(`fatura ${invoice.invoiceMonth}: sem pagamento conciliado registrado`) 
+        continue
+      }
+
+      const latest = payments[0]
+      const paidMinor = payments.reduce((sum, p) => sum + p.allocatedAmountMinor, 0)
+      const paidAt = new Date(latest.paymentDate).toISOString().slice(0, 10)
+      responseLines.push(`fatura ${invoice.invoiceMonth}: pago em ${paidAt} (${formatBRL(paidMinor)})`)
+    }
+
+    return {
+      reply: responseLines.length > 0
+        ? `Para "${subject}", encontrei estes pagamentos via fatura: ${responseLines.join('; ')}.`
+        : `Encontrei o parcelamento "${subject}", mas ainda não há pagamento conciliado da fatura para confirmar a data.`,
+      context,
+    }
+  }
+
   if (shouldHandleBudget) {
     return {
-      reply: `No mês ${month}, suas receitas foram ${formatBRL(incomeMinor)}, suas despesas foram ${formatBRL(expenseMinor)} e o saldo líquido ficou em ${formatBRL(balance)}. Se quiser, eu também posso detalhar por categoria ou por cartão.`,
+      reply: `No mês ${month}, suas receitas foram ${formatBRL(incomeMinor)}, despesas de conta ${formatBRL(expenseMinor)}, despesas de cartão ${formatBRL(cardExpenseMinor)} e despesas totais ${formatBRL(totalExpenseMinor)}. O saldo líquido da conta ficou em ${formatBRL(balance)} e após cartão ficou em ${formatBRL(netAfterCardMinor)}.`,
       context,
     }
   }
@@ -417,7 +567,7 @@ async function buildFinancialContext(userId: number, month: string): Promise<str
       id: cardInvoices.id,
       invoiceMonth: cardInvoices.invoiceMonth,
       totalAmountMinor: cardInvoices.totalAmountMinor,
-      openAmountMinor: cardInvoices.openAmountMinor,
+      openAmountMinor: cardInvoices.effectiveOpenAmountMinor,
       status: cardInvoices.status,
       dueDate: cardInvoices.dueDate,
     })
@@ -501,6 +651,9 @@ async function buildFinancialContext(userId: number, month: string): Promise<str
     expenseTotals.set(key, (expenseTotals.get(key) ?? 0) + Math.abs(toMinor(row.total)))
   }
 
+  const cardExpenseMinor = cardExpenseRows.reduce((s, r) => s + Math.abs(toMinor(r.total)), 0)
+  const totalExpenseMinor = expenseMinor + cardExpenseMinor
+
   const expenseCategoryIds = [...expenseTotals.keys()].filter((id) => id !== 'sem_categoria')
   const expenseCategoryNames: Record<string, string> = { ...catNames }
   if (expenseCategoryIds.length > 0) {
@@ -537,6 +690,8 @@ async function buildFinancialContext(userId: number, month: string): Promise<str
     `=== CONTEXTO FINANCEIRO — ${month} ===`,
     `Receitas: ${formatBRL(incomeMinor)}`,
     `Despesas (conta): ${formatBRL(expenseMinor)}`,
+    `Despesas (cartão por competência): ${formatBRL(cardExpenseMinor)}`,
+    `Despesas totais (conta + cartão): ${formatBRL(totalExpenseMinor)}`,
     `Saldo líquido conta: ${formatBRL(balance)}`,
     `Fatura cartão total: ${formatBRL(totalInvoiceMinor)}`,
     `Fatura cartão em aberto: ${formatBRL(openInvoiceMinor)}`,

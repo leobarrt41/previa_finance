@@ -434,6 +434,8 @@ router.post('/projection', async (req: Request, res: Response) => {
             dueDate: cardInvoices.dueDate,
             totalAmountMinor: cardInvoices.totalAmountMinor,
             paidAmountMinor: cardInvoices.paidAmountMinor,
+            openAmountMinor: cardInvoices.openAmountMinor,
+            effectiveOpenAmountMinor: cardInvoices.effectiveOpenAmountMinor,
           })
           .from(cardInvoices)
           .where(
@@ -550,13 +552,20 @@ router.post('/projection', async (req: Request, res: Response) => {
             const totalFromInvoice = toBigInt(ci.totalAmountMinor)
             const totalFromTransactions = sumByInvoiceId.get(String(ci.id)) ?? 0n
             const resolvedAmount = totalFromInvoice > 0n ? totalFromInvoice : totalFromTransactions
+            const semanticOpenMinor = toBigInt(ci.effectiveOpenAmountMinor ?? ci.openAmountMinor ?? 0n)
+            const paidFromSemanticOpen = semanticOpenMinor > 0n && resolvedAmount > semanticOpenMinor
+              ? resolvedAmount - semanticOpenMinor
+              : 0n
+            const paidMinor = paidFromSemanticOpen > 0n
+              ? paidFromSemanticOpen
+              : toBigInt(ci.paidAmountMinor ?? 0n)
 
           return {
             id: String(ci.id),
             competencyMonth: ci.invoiceMonth,
             dueMonth,
             amountMinor: resolvedAmount,
-            paidMinor: toBigInt(ci.paidAmountMinor ?? 0n),
+            paidMinor,
             sourceType: 'statement' as const,
           }
       })
@@ -617,6 +626,10 @@ router.post('/projection', async (req: Request, res: Response) => {
         })()
       : normalizedCardInvoices
 
+    const invoiceDueMonthById = new Map<string, string>(
+      normalizedCardInvoices.map((invoice) => [String(invoice.id), invoice.dueMonth]),
+    )
+
     const componentInstallmentInvoiceIds = new Set(dbComponentInstallments.map((row) => String(row.cardInvoiceId)))
     const selectedInstallments = useDbCardInvoices
       ? [
@@ -624,6 +637,7 @@ router.post('/projection', async (req: Request, res: Response) => {
             sourceId: `component-${row.componentId}`,
             invoiceId: String(row.cardInvoiceId),
             baseMonth: row.invoiceMonth,
+            anchorMonth: invoiceDueMonthById.get(String(row.cardInvoiceId)) ?? row.invoiceMonth,
             description: row.description ?? '',
             amountMinor: toBigInt(row.amountMinor),
             installmentNumber: row.installmentNumber ?? 0,
@@ -635,6 +649,7 @@ router.post('/projection', async (req: Request, res: Response) => {
             sourceId: `tx-${row.id}`,
             invoiceId: String(row.cardInvoiceId),
             baseMonth: row.competencyMonth,
+            anchorMonth: invoiceDueMonthById.get(String(row.cardInvoiceId)) ?? row.competencyMonth,
             description: row.description ?? '',
             amountMinor: toBigInt(row.amountMinor),
             installmentNumber: row.installmentNumber ?? 0,
@@ -649,6 +664,7 @@ router.post('/projection', async (req: Request, res: Response) => {
             sourceId: string
             invoiceId: string
             baseMonth: string
+            anchorMonth: string
             description: string
             amountMinor: bigint
             installmentNumber: number
@@ -661,6 +677,7 @@ router.post('/projection', async (req: Request, res: Response) => {
             installmentTotal: number
             amountMinor: bigint
             baseMonth: string
+            anchorMonth: string
             maxCurrent: number
             currentNumbers: Set<number>
             sourceIds: string[]
@@ -689,6 +706,7 @@ router.post('/projection', async (req: Request, res: Response) => {
               installmentTotal: total,
               amountMinor: row.amountMinor,
               baseMonth: row.baseMonth,
+              anchorMonth: row.anchorMonth,
               maxCurrent: 0,
               currentNumbers: new Set<number>(),
               sourceIds: [],
@@ -696,6 +714,7 @@ router.post('/projection', async (req: Request, res: Response) => {
 
             bucket.maxCurrent = Math.max(bucket.maxCurrent, current)
             bucket.baseMonth = bucket.baseMonth > row.baseMonth ? bucket.baseMonth : row.baseMonth
+            bucket.anchorMonth = bucket.anchorMonth > row.anchorMonth ? bucket.anchorMonth : row.anchorMonth
             bucket.currentNumbers.add(current)
             bucket.sourceIds.push(row.sourceId)
             seriesBuckets.set(bucketKey, bucket)
@@ -710,7 +729,7 @@ router.post('/projection', async (req: Request, res: Response) => {
 
             const remaining = total - current
             for (let step = 1; step <= remaining; step++) {
-              const dueMonth = addMonths(bucket.baseMonth, step)
+              const dueMonth = addMonths(bucket.anchorMonth, step)
               if (dueMonth < startMonth || dueMonth > endMonth) continue
               rows.push({
                 id: `inst-${bucket.invoiceId}-${bucket.descriptionKey}-${current}-${step}`,

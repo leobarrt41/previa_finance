@@ -538,7 +538,7 @@ export function AccountDetail() {
   const invoiceComponents = invoiceDetails?.components ?? []
   const invoiceInstallments = invoiceComponents.filter((item) => item.componentScope === 'line_item' && item.componentType === 'installment_principal')
   const invoiceFees = invoiceComponents.filter((item) => item.componentScope === 'line_item' && item.componentType !== 'installment_principal')
-  const invoiceVisibleTransactions = (invoiceDetails?.transactions ?? []).filter((tx) => !(tx.installmentNumber && tx.installmentTotal))
+  const invoiceVisibleTransactions = invoiceDetails?.transactions ?? []
   const invoiceInstallmentProgress = useMemo(() => {
     const grouped = new Map<string, { current: number; total: number }>()
 

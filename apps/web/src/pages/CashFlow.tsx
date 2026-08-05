@@ -99,6 +99,9 @@ function toChartData(
   return monthly.map((m) => {
     const pendingRecurringExpenseMinor = sumPendingRecurringExpenseMinor(recurring, m.competencyMonth)
     const statementOutflowMinor = Number(m.statementOutflowMinor ?? 0)
+    const installmentMinor = m.competencyMonth <= activeMonth
+      ? 0
+      : Number(m.installmentPaymentsMinor ?? m.cardInvoicePaymentMinor ?? 0)
     const orangeMinor = m.competencyMonth < activeMonth ? 0 : Number(m.debtOpenMinor ?? 0)
 
     return {
@@ -107,7 +110,7 @@ function toChartData(
       recebido: Number(m.totalIncomeMinor) / 100,
       pago: statementOutflowMinor / 100,
       previsto: pendingRecurringExpenseMinor / 100,
-      parcelas: Number(m.installmentPaymentsMinor ?? m.cardInvoicePaymentMinor ?? 0) / 100,
+      parcelas: installmentMinor / 100,
       cartaoProjetado: orangeMinor / 100,
     }
   })

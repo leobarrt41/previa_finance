@@ -330,33 +330,113 @@ async function buildSpendingOverview(
 }
 
 /** Chama a IA com um system prompt e user payload, retorna JSON parseado */
-async function callAI(systemPrompt: string, userPayload: unknown): Promise<Record<string, unknown>> {
-  const baseUrl = config.ai.baseUrl.replace(/\/$/, '')
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.ai.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.ai.model,
-      temperature: 0.3,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: stringifyForAI(userPayload) },
-      ],
-    }),
-    signal: AbortSignal.timeout(30000),
-  })
+/** Chama a IA com um system prompt e user payload, retorna JSON parseado */
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw new Error(`AI assess failed (${response.status}): ${text}`)
+function isAITimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return error.name === 'TimeoutError'
+    || error.name === 'AbortError'
+    || /aborted due to timeout/i.test(error.message)
+    || /operation was aborted/i.test(error.message)
+}
+
+function isRetryableAIStatus(status: number): boolean {
+  return status === 429 || status === 503
+}
+
+/** Chama a IA com um system prompt e user payload, retorna JSON parseado */
+async function callAI(systemPrompt: string, userPayload: unknown): Promise<Record<string, unknown>> {
+  const provider = config.ai.provider
+  let content = '{}'
+
+  try {
+    if (provider === 'gemini') {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.ai.model}:generateContent?key=${encodeURIComponent(config.ai.apiKey)}`
+
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: {
+              parts: [{ text: systemPrompt }],
+            },
+            contents: [
+              {
+                role: 'user',
+                parts: [{ text: stringifyForAI(userPayload) }],
+              },
+            ],
+            generationConfig: {
+              responseMimeType: 'application/json',
+            },
+          }),
+          signal: AbortSignal.timeout(60000),
+        })
+
+        if (response.ok) {
+          const json = await response.json() as {
+            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+          }
+
+          content = json.candidates?.[0]?.content?.parts
+            ?.map((part) => part.text ?? '')
+            .join('')
+            .trim() || '{}'
+          break
+        }
+
+        const text = await response.text().catch(() => '')
+
+        if (isRetryableAIStatus(response.status) && attempt < 2) {
+          const waitMs = 1000 * 2 ** attempt
+          console.warn(`Gemini assess indisponível (${response.status}). Tentativa ${attempt + 1}/3. Aguardando ${waitMs}ms.`)
+          await sleep(waitMs)
+          continue
+        }
+
+        if (isRetryableAIStatus(response.status)) {
+          throw new Error('O serviço de inteligência está temporariamente sobrecarregado. Aguarde alguns segundos e tente novamente.')
+        }
+
+        throw new Error(`AI assess failed (${response.status}): ${text}`)
+      }
+    } else {
+      const baseUrl = config.ai.baseUrl.replace(/\/$/, '')
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.ai.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: config.ai.model,
+          temperature: 0.3,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: stringifyForAI(userPayload) },
+          ],
+        }),
+        signal: AbortSignal.timeout(60000),
+      })
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '')
+        throw new Error(`AI assess failed (${response.status}): ${text}`)
+      }
+
+      const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
+      content = json.choices?.[0]?.message?.content ?? '{}'
+    }
+  } catch (error) {
+    if (isAITimeoutError(error)) {
+      throw new Error('O serviço de inteligência demorou demais para responder. Tente novamente em instantes.')
+    }
+    throw error
   }
 
-  const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
-  const content = json.choices?.[0]?.message?.content ?? '{}'
   try {
     return JSON.parse(content) as Record<string, unknown>
   } catch {
@@ -1246,6 +1326,9 @@ router.post('/debt', async (req: Request, res: Response) => {
       previousBalanceMinor: cardInvoices.previousBalanceMinor,
       openAmountMinor: cardInvoices.openAmountMinor,
       paidAmountMinor: cardInvoices.paidAmountMinor,
+      reportedPaidAmountMinor: cardInvoices.reportedPaidAmountMinor,
+      paymentsAllocatedMinor: cardInvoices.paymentsAllocatedMinor,
+      effectiveOpenAmountMinor: cardInvoices.effectiveOpenAmountMinor,
       institutionName: accounts.displayName,
       cardBrand: accounts.cardBrand,
       cardLast4: accounts.cardLast4,
@@ -1273,14 +1356,28 @@ router.post('/debt', async (req: Request, res: Response) => {
     purchasesByInvoiceId.set(Number(row.cardInvoiceId), Number(row.totalMinor))
   }
 
-  const invoiceSummaryRows = invoicesData.map((i) => ({
-    ...i,
-    totalMinor: Number(i.totalAmountMinor ?? 0),
-    previousMinor: Number(i.previousBalanceMinor ?? 0),
-    paidMinor: Number(i.paidAmountMinor ?? 0),
-    openMinor: Number(i.openAmountMinor ?? 0),
-    purchasesMinor: purchasesByInvoiceId.get(Number(i.id)) ?? 0,
-  }))
+  const invoiceSummaryRows = invoicesData.map((i) => {
+    const totalMinor = Number(i.totalAmountMinor ?? 0)
+    const paymentsAllocatedMinor = Math.max(0, Number(i.paymentsAllocatedMinor ?? 0))
+    const semanticOpenMinor = Math.max(0, Number(i.effectiveOpenAmountMinor ?? 0))
+    const hasSemanticSnapshot = paymentsAllocatedMinor > 0 || semanticOpenMinor > 0
+
+    return {
+      ...i,
+      totalMinor,
+      previousMinor: Number(i.previousBalanceMinor ?? 0),
+      reportedPaidMinor: Number(i.reportedPaidAmountMinor ?? i.paidAmountMinor ?? 0),
+      paymentsAllocatedMinor,
+      semanticOpenMinor,
+      // Nesta análise, "pago" significa somente pagamento realmente vinculado
+      // à fatura atual. O pagamento reportado no PDF pertence à fatura anterior.
+      paidMinor: paymentsAllocatedMinor,
+      openMinor: hasSemanticSnapshot
+        ? semanticOpenMinor
+        : Math.max(0, totalMinor - paymentsAllocatedMinor),
+      purchasesMinor: purchasesByInvoiceId.get(Number(i.id)) ?? 0,
+    }
+  })
 
   const liabilityPaymentRows = await db
     .select({
@@ -1497,32 +1594,6 @@ router.post('/debt', async (req: Request, res: Response) => {
   const futureInstallmentsMinor = installmentTxs
     .reduce((s, t) => s + Number(t.amountMinor), 0)
 
-  const liabilityHistoryRows = await db
-    .select({
-      competencyMonth: transactions.competencyMonth,
-      amountMinor: transactions.amountMinor,
-    })
-    .from(transactions)
-    .where(and(
-      eq(transactions.userId, owner.id),
-      eq(transactions.movementType, 'liability_payment'),
-      lte(transactions.competencyMonth, month),
-    ))
-    .orderBy(transactions.competencyMonth)
-
-  const remainingByMonth = new Map<string, number>()
-  for (const row of liabilityHistoryRows) {
-    const paymentMonth = row.competencyMonth
-    const value = spendMinor(row.amountMinor)
-    remainingByMonth.set(paymentMonth, (remainingByMonth.get(paymentMonth) ?? 0) + value)
-  }
-
-  const addMonthsLocal = (base: string, offset: number) => {
-    const [yearPart, monthPart] = base.split('-').map(Number)
-    const d = new Date(Date.UTC(yearPart, monthPart - 1 + offset, 1))
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
-  }
-
   const invoiceDueMonth = (invoiceDate: Date | string | null | undefined) => {
     if (!invoiceDate) return month
     if (invoiceDate instanceof Date) {
@@ -1535,32 +1606,9 @@ router.post('/debt', async (req: Request, res: Response) => {
     .sort((a, b) => invoiceDueMonth(a.dueDate).localeCompare(invoiceDueMonth(b.dueDate)))
     .map((invoice) => {
       const dueMonth = invoiceDueMonth(invoice.dueDate)
-      const totalMinor = invoice.totalMinor
-      let effectivePaidMinor = invoice.paidMinor
-      const paymentMonths = [...remainingByMonth.keys()].sort()
-      const latestPaymentMonth = addMonthsLocal(dueMonth, 2)
-
-      if (effectivePaidMinor < totalMinor) {
-        for (const paymentMonth of paymentMonths) {
-          if (paymentMonth < dueMonth) continue
-          if (paymentMonth > latestPaymentMonth || paymentMonth > month) break
-          const available = remainingByMonth.get(paymentMonth) ?? 0
-          if (available <= 0) continue
-          const remaining = totalMinor - effectivePaidMinor
-          if (remaining <= 0) break
-          const allocation = available < remaining ? available : remaining
-          effectivePaidMinor += allocation
-          remainingByMonth.set(paymentMonth, available - allocation)
-          if (effectivePaidMinor >= totalMinor) break
-        }
-      }
-
-      const effectiveOpenMinor = effectivePaidMinor >= totalMinor ? 0 : totalMinor - effectivePaidMinor
       return {
         ...invoice,
         dueMonth,
-        paidMinor: effectivePaidMinor,
-        openMinor: effectiveOpenMinor,
       }
     })
 
@@ -1600,12 +1648,14 @@ router.post('/debt', async (req: Request, res: Response) => {
   const openDebtMinor = selectedMonthEffectiveOpenDebtMinor + pendingCashflowExpenseMinor
   const totalDebtExposureMinor = openDebtMinor + futureInstallmentsMinor
 
-  const currentMonthInvoiceBreakdown = invoiceSummaryRows
+  const currentMonthInvoiceBreakdown = effectiveInvoiceRows
     .filter((invoice) => invoice.invoiceMonth === month)
     .map((invoice) => ({
       card: invoice.institutionName,
       previousMinor: Number(invoice.previousMinor ?? 0),
       previousBRL: minorToBRL(Number(invoice.previousMinor ?? 0)),
+      paidPreviousMinor: Number(invoice.reportedPaidMinor ?? 0),
+      paidPreviousBRL: minorToBRL(Number(invoice.reportedPaidMinor ?? 0)),
       paidMinor: Number(invoice.paidMinor ?? 0),
       paidBRL: minorToBRL(Number(invoice.paidMinor ?? 0)),
       purchasesMinor: Number(invoice.purchasesMinor ?? 0),
@@ -1649,6 +1699,8 @@ Regras:
 - Sempre cite explicitamente todas as faturas da competência selecionada; não omita nenhuma linha do Banco do Brasil, Itaú ou qualquer outro cartão presente em \`currentMonthInvoiceBreakdown\`, mas não classifique como "em aberto" aquilo que tiver \`openMinor = 0\`.
 - Para a leitura de dívidas, considere também o gasto do mês no extrato e as projeções pendentes do Fluxo de caixa que ainda não foram marcadas como pagas.
 - Pagamentos alocados à fatura anterior aparecem em \`paidAllocatedToPreviousInvoiceMinor\` e não devem ser somados como pagamento do mês atual.
+- \`paidPreviousMinor\` é somente o pagamento informado no cabeçalho para a fatura anterior; nunca use esse campo para concluir que a fatura atual foi paga.
+- A fatura atual só está quitada quando \`paidMinor\` cobrir o total e \`openMinor\` for zero. Sem pagamento alocado, ela permanece aberta.
 - O campo \`paidThisMonthMinor\` já representa apenas o que saiu no extrato no mês selecionado; não some novamente pagamentos históricos das faturas.
 - Cite valores e datas reais em todos os campos
 - Responda em português brasileiro`
